@@ -1,0 +1,1 @@
+{"cpanelresult":{"apiversion":2,"func":"addaddondomain","module":"AddonDomain","data":[{"result":0,"reason":"The domain \"domain4.example\" already exists."}],"event":{"result":1}}}

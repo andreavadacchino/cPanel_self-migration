@@ -1,0 +1,120 @@
+name: Release Intake
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-intake-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN_CPANEL || github.token }}
+  GITHUB_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN_CPANEL || github.token }}
+
+jobs:
+  open-release-pr:
+    name: open-release-pr
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.RELEASE_BOT_TOKEN_CPANEL || github.token }}
+
+      - name: Validate tag and open PR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # SECURITY: source the release policy from the TRUSTED base (origin/main),
+          # NEVER from the checked-out tag tree. On a `push: tags` event the default
+          # checkout is the tag = dev HEAD (the to-be-released, untrusted code), so
+          # sourcing its release-policy.sh would let a tampered policy govern this
+          # write-credentialed job's own tag validation and delete_remote_tag side
+          # effects. Mirrors release-guard, which sources from the base sha.
+          git fetch --force origin main
+          POLICY="$(mktemp)"
+          if git cat-file -e "origin/main:.github/scripts/release-policy.sh" 2>/dev/null; then
+            git show "origin/main:.github/scripts/release-policy.sh" > "${POLICY}"
+          else
+            # Bootstrap: main has no policy yet (the very first release, before the
+            # bootstrap PR installs it). The only policy in existence is the tag's,
+            # and the tag tree IS the code under release, so fall back to it with a
+            # notice rather than failing the first release.
+            echo "::notice::Release policy absent on origin/main; bootstrap release, using the tag's policy."
+            cp .github/scripts/release-policy.sh "${POLICY}"
+          fi
+          # shellcheck source=/dev/null
+          source "${POLICY}"
+
+          TAG="${GITHUB_REF_NAME}"
+
+          if ! is_release_tag "${TAG}"; then
+            echo "::error::Invalid release tag '${TAG}'. Allowed formats are vX.Y.Z and vX.Y.Z-rc1/-beta1."
+            delete_remote_tag "${TAG}"
+            exit 1
+          fi
+
+          git fetch --force origin dev "refs/tags/${TAG}:refs/tags/${TAG}"
+
+          TAG_SHA="$(git rev-list -n 1 "${TAG}")"
+          DEV_SHA="$(git rev-parse origin/dev)"
+
+          # Legacy / idempotent short-circuit: if the tag already sits on main,
+          # this is the direct-release escape hatch (release.yml's gate releases
+          # it) and intake must not open a spurious PR.
+          if tag_commit_on_main "${TAG_SHA}"; then
+            notice "Tag ${TAG} already on main; intake is a no-op (direct-release path)."
+            exit 0
+          fi
+
+          # The tag must point at HEAD of dev. There is no manifest to bump, so
+          # the tag never needs to move during intake; post-merge re-applies the
+          # authoritative tag onto the squash commit at merge time.
+          if [[ "${TAG_SHA}" != "${DEV_SHA}" ]]; then
+            echo "::error::Tag ${TAG} must point to HEAD of dev (${DEV_SHA}), but points to ${TAG_SHA}."
+            delete_remote_tag "${TAG}"
+            exit 1
+          fi
+
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            die "Release ${TAG} already exists."
+          fi
+
+          OPEN_PR="$(gh pr list --base main --head dev --state open --json number --jq '.[0].number // ""')"
+          if [[ -n "${OPEN_PR}" ]]; then
+            PR_BODY="$(gh pr view "${OPEN_PR}" --json body --jq '.body')"
+            export PR_BODY
+
+            if PR_TAG="$(extract_pr_marker release-tag)" && PR_SOURCE_SHA="$(extract_pr_marker release-source-sha)"; then
+              if [[ "${PR_TAG}" == "${TAG}" && "${PR_SOURCE_SHA}" == "${TAG_SHA}" && "${DEV_SHA}" == "${TAG_SHA}" ]]; then
+                notice "Release PR #${OPEN_PR} for ${TAG} already exists."
+                exit 0
+              fi
+            fi
+
+            die "An open dev -> main PR already exists (#${OPEN_PR}). Close or merge it before pushing a new release tag."
+          fi
+
+          BODY="$(cat <<EOF
+          Automated release PR for \`${TAG}\`.
+
+          <!-- release-tag: ${TAG} -->
+          <!-- release-source-sha: ${TAG_SHA} -->
+          EOF
+          )"
+
+          gh pr create \
+            --base main \
+            --head dev \
+            --title "Release ${TAG}" \
+            --body "${BODY}"

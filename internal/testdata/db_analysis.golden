@@ -1,0 +1,31 @@
+# Database analysis
+# Host    : srcacct@203.0.113.10:22
+# Date    : 2026-06-05 13:00:00 +0200
+# Source  : Mysql::list_databases / list_users (read-only)
+# Prefix  : srcacct_ -> destacct_
+================================================
+
+DATABASE: srcacct_wp395  [SHARED]
+    - source     : srcacct_wp395 (user srcacct_wp395, 12.0 MB)
+    - destination: destacct_wp395 (user destacct_wp395)
+    - password   : reused from wp-config
+    - wp-config  : /home/srcacct/site2.example/wp-config.php
+    - wp-config  : /home/srcacct/site2.example/test/wp-config.php
+
+DATABASE: srcacct_wp590  [ORPHAN]
+    - source     : srcacct_wp590 (user srcacct_wp590, 928.0 KB)
+    - destination: destacct_wp590 (user destacct_wp590)
+    - password   : to be generated
+    - wp-config  : (none — orphan database)
+
+DATABASE: srcacct_wp694  [LINKED]
+    - source     : srcacct_wp694 (user srcacct_u1, 22.3 MB)
+    - destination: destacct_wp694 (user destacct_u1)
+    - password   : reused from wp-config
+    - wp-config  : /home/srcacct/addon1.example/wp-config.php
+
+================================================
+TOTAL DATABASES : 3  (35.2 MB on disk)
+  - LINKED      : 2  (referenced by a site)
+  - SHARED      : 1  (referenced by >1 install)
+  - ORPHAN      : 1  (no wp-config; password may be recovered)

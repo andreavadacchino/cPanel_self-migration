@@ -1,0 +1,61 @@
+{
+   "apiversion" : 3,
+   "func" : "domains_data",
+   "module" : "DomainInfo",
+   "result" : {
+      "data" : {
+         "main_domain" : {
+            "documentroot" : "/home/srcacct/public_html",
+            "domain" : "main.example",
+            "homedir" : "/home/srcacct",
+            "servername" : "main.example",
+            "type" : "main_domain"
+         },
+         "addon_domains" : [
+            {
+               "documentroot" : "/home/srcacct/addon1.example",
+               "domain" : "addon1.example",
+               "homedir" : "/home/srcacct",
+               "servername" : "addon1.example.main.example",
+               "type" : "addon_domain"
+            },
+            {
+               "documentroot" : "/home/srcacct/site2.example",
+               "domain" : "site2.example",
+               "homedir" : "/home/srcacct",
+               "servername" : "site2.example.main.example",
+               "type" : "addon_domain"
+            },
+            {
+               "documentroot" : "/home/srcacct/domain3.example",
+               "domain" : "domain3.example",
+               "homedir" : "/home/srcacct",
+               "servername" : "domain3.example.main.example",
+               "type" : "addon_domain"
+            },
+            {
+               "documentroot" : "/home/srcacct/domain4.example",
+               "domain" : "domain4.example",
+               "homedir" : "/home/srcacct",
+               "servername" : "domain4.example.main.example",
+               "type" : "addon_domain"
+            }
+         ],
+         "sub_domains" : [
+            {
+               "documentroot" : "/home/srcacct/sub1.example",
+               "domain" : "sub1.example",
+               "homedir" : "/home/srcacct",
+               "servername" : "sub1.example",
+               "type" : "sub_domain"
+            }
+         ],
+         "parked_domains" : []
+      },
+      "errors" : null,
+      "messages" : null,
+      "metadata" : {},
+      "status" : 1,
+      "warnings" : null
+   }
+}

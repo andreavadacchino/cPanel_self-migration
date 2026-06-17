@@ -1,0 +1,101 @@
+name: Ultimate Security Analysis (Go)
+
+on:
+  push:
+    branches: [ "main", "dev" ]
+  pull_request:
+    branches: [ "main", "dev" ]
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      ########################################
+      # CHECKOUT
+      ########################################
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          # Analysis + SARIF upload only; no step uses the git remote, so don't
+          # leave the token in .git/config.
+          persist-credentials: false
+
+      ########################################
+      # GO 1.25 — MAIN TOOLCHAIN
+      ########################################
+      - name: Set up Go (from go.mod)
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Show Go version
+        run: go version
+
+      ########################################
+      # STATICCHECK — RUNS NATIVELY ON GO 1.25
+      ########################################
+      - name: Install Staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+
+      - name: Run Staticcheck
+        run: staticcheck ./... || true
+
+      ########################################
+      # GOVULNCHECK — NATIVE
+      ########################################
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+      ########################################
+      # GOSEC — runs under the project's Go (from go.mod, currently 1.25).
+      # gosec must be a version that supports the project's Go: support for Go
+      # 1.25 landed in gosec v2.25.0, so the old v2.20.0 (built for Go ≤1.22)
+      # could not type-check this code — combined with -no-fail/|| true it would
+      # silently emit an empty SARIF. Keep gosec current with the Go toolchain.
+      ########################################
+      - name: Install GoSec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+
+      - name: Run GoSec
+        run: |
+          echo "Running GoSec..."
+          gosec -no-fail -fmt sarif -out gosec.sarif ./... || true
+          echo "Files in workspace:"
+          ls -al
+
+      ########################################
+      # VERIFY GOSEC SARIF EXISTS
+      ########################################
+      - name: Check GoSec SARIF file
+        run: |
+          echo "Checking SARIF validity..."
+          head -n 5 gosec.sarif
+          if [ ! -f gosec.sarif ]; then
+            echo "ERROR: gosec.sarif NOT FOUND"
+            exit 1
+          fi
+
+      ########################################
+      # UPLOAD SARIF
+      ########################################
+      - name: Upload GoSec SARIF
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
+        with:
+          sarif_file: gosec.sarif
+
+      # NOTE: CodeQL now runs in its own workflow (.github/workflows/codeql.yml),
+      # so it is not duplicated here.

@@ -1,0 +1,36 @@
+# Web files analysis
+# Host    : srcacct@203.0.113.10:22
+# Date    : 2026-06-05 13:00:00 +0200
+# Source  : document roots (DomainInfo::domains_data), read-only
+# Excludes: cgi-bin, .ftpquota (.well-known is user content)
+================================================
+
+DOMAIN: addon1.example  [READY]
+    - src docroot : /home/srcacct/addon1.example
+    - dest docroot: /home/destacct/public_html/addon1.example
+    - content     : 25638 files, 768.0 MB
+
+DOMAIN: locked.example  [UNREADABLE]
+    - src docroot : /home/srcacct/locked.example
+    - dest docroot: /home/destacct/public_html/locked.example
+
+DOMAIN: main.example  [READY]
+    - src docroot : /home/srcacct/public_html
+    - dest docroot: /home/destacct/public_html/main.example
+    - content     : 4 files, 22.6 KB
+
+DOMAIN: newsite.example  [NO-DEST]
+    - src docroot : /home/srcacct/newsite.example
+    - dest docroot: (none — destination domain missing)
+
+DOMAIN: sub1.example  [EMPTY]
+    - src docroot : /home/srcacct/sub1.example
+    - dest docroot: /home/destacct/public_html/sub1.example
+
+================================================
+TOTAL DOCROOTS  : 5
+  - READY       : 2  (25642 files, 768.0 MB)
+  - EMPTY       : 1  (skipped, destination left untouched)
+  - ABSENT      : 0  (no docroot on disk)
+  - UNREADABLE  : 1  (docroot exists but permission denied — fix permissions; NOT migrated)
+  - NO-DEST     : 1  (destination domain missing)

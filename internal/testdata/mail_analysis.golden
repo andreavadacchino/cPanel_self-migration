@@ -1,0 +1,47 @@
+# Mail analysis
+# Host    : srcacct@203.0.113.10:22
+# Date    : 2026-06-04 20:58:54 +0200
+# Source  : ~/mail + ~/etc (cPanel)
+================================================
+
+DOMAIN: domain1.example  (1 mailbox)
+    - info@domain1.example             [ORPHAN] [password: no-shadow]
+
+DOMAIN: domain2.example  (0 mailbox)
+
+DOMAIN: addon1.example  (2 mailbox)
+    - info@addon1.example              [ACTIVE] [password: SHA-512]
+    - invoice@addon1.example           [ACTIVE] [password: SHA-512]
+
+DOMAIN: sub1.example  (1 mailbox)
+    - no-reply@sub1.example            [ACTIVE] [password: SHA-512]
+
+DOMAIN: domain3.example  (1 mailbox)
+    - info@domain3.example             [ACTIVE] [password: SHA-512]
+
+DOMAIN: domain4.example  (7 mailbox)
+    - github@domain4.example           [ACTIVE] [password: SHA-512]
+    - homelab@domain4.example          [ACTIVE] [password: SHA-512]
+    - info@domain4.example             [ACTIVE] [password: SHA-512]
+    - noreply@domain4.example          [ACTIVE] [password: SHA-512]
+    - support@domain4.example          [ACTIVE] [password: SHA-512]
+    - user1@domain4.example            [ACTIVE] [password: SHA-512]
+    - user2@domain4.example            [ACTIVE] [password: SHA-512]
+
+DOMAIN: main.example  (10 mailbox)
+    - admin@main.example               [ACTIVE] [password: SHA-512]
+    - info@main.example                [ACTIVE] [password: SHA-512]
+    - sales@main.example               [ACTIVE] [password: SHA-512]
+    - user3@main.example               [ACTIVE] [password: SHA-512]
+    - user4@main.example               [ORPHAN] [password: not-listed]
+    - user5@main.example               [ORPHAN] [password: not-listed]
+    - user6@main.example               [ORPHAN] [password: not-listed]
+    - user7@main.example               [ORPHAN] [password: not-listed]
+    - user8@main.example               [ORPHAN] [password: not-listed]
+    - user9@main.example               [ORPHAN] [password: not-listed]
+
+================================================
+TOTAL DOMAINS   : 7
+TOTAL MAILBOXES : 22
+  - ACTIVE      : 15
+  - ORPHAN      : 7  (mail dir on disk, no account)

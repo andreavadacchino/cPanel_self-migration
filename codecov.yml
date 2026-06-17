@@ -1,0 +1,16 @@
+# Codecov is an ADVISORY signal for this integration-heavy CLI, not a hard release
+# gate. The hard gates are the required GitHub Actions checks (test, Go race
+# detector, security, Analyze (Go) / CodeQL, release-guard) enforced by the branch
+# ruleset on main. Tuned so additive logging / error-handling branches that are not
+# unit-tested do not fail a release PR:
+#   - patch:   informational (reports the diff coverage, never fails the check);
+#   - project: tolerates a small (<=1%) drop in overall coverage.
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        informational: true

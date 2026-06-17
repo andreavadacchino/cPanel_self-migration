@@ -1,0 +1,213 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Serialize runs for the same tag. The intake-time run (gate skips) and the
+# post-merge re-tag run are far apart in time, so this never queues in practice;
+# it makes a manual "re-run all jobs" deterministic instead of racing GoReleaser.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # Gate: only cut a release when the tag is on main (i.e. it was re-applied to
+  # the squash commit by post-merge-release after the dev->main PR merged). The
+  # developer's intake tag, pushed on a dev commit, is NOT yet on main, so this
+  # gate skips it and prevents a premature release. A tag pushed directly onto a
+  # commit already on main (legacy escape hatch) passes the gate immediately.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      on_main: ${{ steps.check.outputs.on_main }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check tag is on main
+        id: check
+        run: |
+          set -euo pipefail
+          git fetch --force origin main
+          TAG_SHA="$(git rev-list -n 1 "${GITHUB_REF#refs/tags/}")"
+          if git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "on_main=true" >> "$GITHUB_OUTPUT"
+            echo "Tag is on main; proceeding with release."
+          else
+            echo "on_main=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Tag is not on main yet; skipping release (intake tag). The release fires after the squash-merge re-applies the tag onto main."
+          fi
+
+  release:
+    needs: gate
+    if: needs.gate.outputs.on_main == 'true'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write       # Per creare release GitHub
+      id-token: write       # Necessario per OIDC / attestazioni
+      attestations: write   # Necessario per actions/attest-build-provenance
+      actions: read         # Necessario per leggere metadata del run
+
+    steps:
+      ########################################
+      # CHECKOUT (fetch-depth 0 per changelog e GoReleaser)
+      ########################################
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          # GoReleaser and `gh` authenticate via GITHUB_TOKEN in env (not .git/config),
+          # and no step pushes to the remote, so the persisted credential isn't needed.
+          persist-credentials: false
+
+      ########################################
+      # VALIDAZIONE TAG
+      ########################################
+      - name: Validate SemVer tag
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "Current tag: $TAG"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "❌ Tag '$TAG' is not a valid SemVer (expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc1/beta1)"
+            exit 1
+          fi
+          echo "✔ Tag '$TAG' is valid SemVer"
+
+      ########################################
+      # SETUP GO
+      ########################################
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Show Go version
+        run: go version
+
+      ########################################
+      # VERIFICA MODULI
+      ########################################
+      - name: Verify Go modules
+        run: go mod verify
+
+      ########################################
+      # INSTALL SYFT (per SBOM CycloneDX via GoReleaser)
+      ########################################
+      - name: Install Syft (for SBOM generation)
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          syft-version: v1.19.0
+
+      ########################################
+      # VALIDATE THE SIGNING KEY *BEFORE* PUBLISHING
+      # GoReleaser publishes the release (incl. SHA256SUMS) before the signing step
+      # below; if signing then failed, the tag would go live without SHA256SUMS.sig
+      # and install.sh hard-fails on the missing file, blocking every install. Fail
+      # here, before anything is published, if the signing secret is missing or does
+      # not match the pinned public key.
+      ########################################
+      - name: Validate release signing key before publishing
+        env:
+          CPANEL_KEY_RELEASE: ${{ secrets.CPANEL_KEY_RELEASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CPANEL_KEY_RELEASE:-}" ]; then
+            echo "::error::CPANEL_KEY_RELEASE is empty; refusing to publish a release that cannot be signed." >&2
+            exit 1
+          fi
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          printf '%s\n' "$CPANEL_KEY_RELEASE" > "$KEY_FILE"
+          # Derive the public key from the signing secret and compare its base64 body
+          # to the pinned key install.sh ships, so a missing/wrong/corrupt secret fails
+          # HERE, before GoReleaser publishes — otherwise the tag would go live without a
+          # usable SHA256SUMS.sig and block every install. We compare base64 bodies (not
+          # whole PEM files): install.sh stores the key shell-quoted
+          # (PUBKEY_PEM='-----BEGIN...'), so a naive PEM extraction is not openssl-
+          # readable; the dash-less awk patterns also keep this line from looking like a
+          # PEM block.
+          derived="$(openssl pkey -in "$KEY_FILE" -pubout 2>/dev/null | awk '/BEGIN PUBLIC KEY/{f=1;next} /END PUBLIC KEY/{f=0} f{print}' | tr -d '\r\n ')" || true
+          pinned="$(awk '/BEGIN PUBLIC KEY/{f=1;next} /END PUBLIC KEY/{f=0} f{print}' install.sh | tr -d '\r\n ')"
+          if [ -z "$derived" ]; then
+            echo "::error::could not derive a public key from CPANEL_KEY_RELEASE (corrupt or wrong-format signing secret)." >&2
+            exit 1
+          fi
+          if [ -z "$pinned" ]; then
+            echo "::error::could not read the pinned public key from install.sh." >&2
+            exit 1
+          fi
+          if [ "$derived" != "$pinned" ]; then
+            echo "::error::CPANEL_KEY_RELEASE does not match the pinned public key; refusing to publish." >&2
+            exit 1
+          fi
+          echo "CPANEL_RELEASE_PUBKEY_B64=$derived" >> "$GITHUB_ENV"
+          echo "Release signing key validated against the pinned public key."
+
+      ########################################
+      # GORELEASER
+      ########################################
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7
+        with:
+          # Pin the GoReleaser TOOL to v2.x (matches `version: 2` in .goreleaser.yml):
+          # 'latest' could pull a future v3 with breaking changes mid-release. '~> v2'
+          # is GoReleaser's recommended pin — deterministic at the major level while
+          # still getting v2 bug/security patches. For strict byte-determinism, set an
+          # exact tag (e.g. v2.5.0) instead, accepting manual bumps.
+          version: '~> v2'
+          workdir: ${{ github.workspace }}
+          args: release --clean --config .github/.goreleaser.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      ########################################
+      # SIGN SHA256SUMS (ECDSA P-256) + upload as a release asset
+      ########################################
+      - name: Sign and publish SHA256SUMS signature
+        env:
+          CPANEL_KEY_RELEASE: ${{ secrets.CPANEL_KEY_RELEASE }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -f build/SHA256SUMS
+
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE"' EXIT
+          printf '%s\n' "$CPANEL_KEY_RELEASE" > "$KEY_FILE"
+
+          # Sign the checksum file with the project's ECDSA P-256 private key.
+          openssl dgst -sha256 -sign "$KEY_FILE" -out build/SHA256SUMS.sig build/SHA256SUMS
+
+          # Defense in depth: verify the signature against the public key derived
+          # and validated before publishing, so the validation and signing steps
+          # share one source of truth.
+          if [ -z "${CPANEL_RELEASE_PUBKEY_B64:-}" ]; then
+            echo "::error::validated release public key is missing." >&2
+            exit 1
+          fi
+          printf '%s\n' \
+            '-----BEGIN PUBLIC KEY-----' \
+            "$CPANEL_RELEASE_PUBKEY_B64" \
+            '-----END PUBLIC KEY-----' > pinned_pub.pem
+          openssl dgst -sha256 -verify pinned_pub.pem -signature build/SHA256SUMS.sig build/SHA256SUMS
+
+          # Upload the signature to the release GoReleaser just created.
+          gh release upload "${GITHUB_REF#refs/tags/}" build/SHA256SUMS.sig --clobber
+
+      ########################################
+      # ATTESTAZIONE PROVENIENZA BUILD
+      ########################################
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32
+        with:
+          subject-path: build/cpanel-self-migration_*

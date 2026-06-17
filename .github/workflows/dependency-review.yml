@@ -1,0 +1,45 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [ main, dev ]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          # No later step uses the git remote (dependency-review is API-based via
+          # GITHUB_TOKEN), so don't leave the token in .git/config.
+          persist-credentials: false
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # pinned from actions/dependency-review-action@v5.0.0
+        with:
+          # Blocca solo severity critical (zero-touch per gli altri)
+          fail-on-severity: critical
+
+          # Permetti solo licenze approvate
+          # Note: golang.org/x/* include il file PATENTS, rilevato come LicenseRef-scancode-google-patent-license-golang.
+          allow-licenses: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, LicenseRef-scancode-google-patent-license-golang
+
+          # Blocca dipendenze con licenze problematiche
+          # deny-licenses: GPL-2.0, GPL-3.0, AGPL-3.0
+
+          # Commenta PR con dettagli vulnerabilità
+          comment-summary-in-pr: always
+
+          # Output formato per debugging
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          head-ref: ${{ github.event.pull_request.head.sha }}

@@ -1,0 +1,12 @@
+# Compiled binary
+/cpanel-self-migration
+
+# Real config with credentials — never commit
+/configs/host.yaml
+
+# Generated artifacts
+*.log
+/logs/
+
+# Local diagnostic / audit reports — not part of the source
+/diagnostics/

@@ -1,0 +1,84 @@
+# ==== HOST CONFIGURATION ====
+# Copy this file to "host.yaml" and fill in the real values.
+#   cp host_template.yaml host.yaml
+# host.yaml is gitignored — never commit real credentials.
+#
+# The SOURCE host is ALWAYS read-only. All writes target the DESTINATION.
+# ============================
+
+# ---- SOURCE server (analyzed first; never written to) ----
+src:
+  ip: "192.168.1.100"
+  port: 22
+  ssh_user: "your_cpanel_user"   # the cPanel ACCOUNT user (user-level SSH; root/WHM NOT needed)
+  ssh_pass: "your_password"
+  timeout: "10s"        # max time to establish the connection
+
+# ---- DESTINATION server (all writes go here) ----
+dest:
+  ip: "192.168.1.200"
+  port: 22
+  ssh_user: "your_cpanel_user"   # the cPanel ACCOUNT user (user-level SSH; root/WHM NOT needed)
+  ssh_pass: "your_password"
+  timeout: "10s"
+# Fill in EVERY dest field, or remove the whole `dest:` block to run a
+# source-only analysis. A partially-filled dest (e.g. a forgotten ssh_pass) is
+# rejected with a clear error, not silently skipped.
+
+# ---- OPTIONAL: database CREDENTIALS (--db flow) ----
+#
+# WHAT THIS IS FOR: providing database CREDENTIALS (user / password) by hand.
+# It is NOT how databases are selected for migration — the tool finds and
+# migrates every database on its own, no matter how many (1 or 50). What it
+# sometimes cannot find on its own is the PASSWORD of a database (needed to dump
+# its DATA, not just its schema). This section is where you supply those.
+#
+# WHEN YOU NEED IT: only when automatic credential discovery fails for a
+# database. Normally the tool reads each password automatically from the
+# Softaculous registry, the site config files (WordPress, Joomla, Drupal,
+# Magento, Moodle, Nextcloud, … 25 apps), or a name search — so you leave this
+# out. You add an entry only for the leftovers, e.g.:
+#   - an ORPHAN database whose site/config was deleted (no password anywhere);
+#   - a custom app whose config format the tool does not recognize;
+#   - a case where you want to FORCE a specific user/password.
+#
+# HOW TO FILL IT (one list entry per database — add as many as you need):
+#   - name:     REQUIRED. The SOURCE database name, exactly as on the source
+#               (with the source account prefix, e.g. "srcuser_shop"). This is
+#               the key that ties the credentials to the right database.
+#   - user:     OPTIONAL. The MySQL user for that database. Leave empty to keep
+#               the user the tool already detected.
+#   - password: OPTIONAL. The database password, reused on the destination.
+#               Leave empty to keep the auto-detected one. Set it for an orphan
+#               DB whose password is otherwise unknown.
+# Empty/omitted fields fall back to whatever the tool discovered automatically;
+# values you put here OVERRIDE the discovered ones.
+#
+# NOTE: names are the SOURCE names. The tool still rewrites the prefix to the
+# destination account automatically (e.g. srcuser_shop -> destuser_shop, and
+# user srcuser_bob -> destuser_bob). You do NOT write destination names here.
+#
+# EXAMPLE — an account with several databases, only some needing manual help:
+#
+# databases:
+#   - name: "srcuser_shop"           # orphan DB: supply its password so DATA is dumped
+#     user: "srcuser_shop"
+#     password: "Sh0p!pass#2024"
+#   - name: "srcuser_oldblog"        # only the password is missing; user auto-detected
+#     password: "0ldbl0g-secret"
+#   - name: "srcuser_crm"            # force a specific user + password
+#     user: "srcuser_crmadmin"
+#     password: "Crm@dminPwd!"
+#   - name: "srcuser_intranet"       # add as many entries as databases that need it
+#     password: "intr@net2024"
+#
+# (Databases NOT listed here are still migrated — their credentials are just
+# discovered automatically.)
+#
+# NOTE (stored EVENTs): a migrated database's scheduled MySQL EVENTs are copied,
+# but they only RUN if the destination server has the global `event_scheduler`
+# turned ON — which a non-root cPanel user cannot set. If you rely on events, ask
+# the destination host to enable it (SET GLOBAL event_scheduler = ON; or
+# event_scheduler=ON in my.cnf). The tool prints a reminder when it migrates any.
+# Stored procedures/functions, triggers and views are migrated and verified
+# automatically — no action needed.
