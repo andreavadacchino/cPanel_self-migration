@@ -489,6 +489,9 @@ func (c *Client) runWithInlineEnv(ctx context.Context, cmd string, env map[strin
 	}
 	var pre bytes.Buffer
 	for k, v := range env {
+		// Same guard as WithEnv: k is spliced unquoted into `export <k>=...`, so an
+		// invalid name would be command injection (a call-site bug; see mustValidEnvName).
+		mustValidEnvName("runWithInlineEnv", k)
 		fmt.Fprintf(&pre, "export %s='%s'\n", k, SingleQuoteEscape(v))
 	}
 	pre.Write(body)

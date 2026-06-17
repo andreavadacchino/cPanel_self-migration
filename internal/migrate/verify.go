@@ -304,22 +304,22 @@ func verify(ctx context.Context, pool *sshx.Pool, pd migrationData, log *logx.Lo
 		// body on both hosts and roll the PER-MESSAGE comparison up to a mailbox-level
 		// verdict (keyed by stable folder-aware identity, so a flag change or a new/->cur/
 		// move is NOT a false diff). --deep runs the same per-message hashing but reports
-		// each diverging message; the default rolls them to one verdict. Restricted to
-		// mv.kind == vConsistent:
-		// equal per-folder counts mean the destination has no benign EXTRA messages, so the
-		// aggregate compares like-for-like (a replaced/swapped message of equal count still
-		// flips it). A DEST AHEAD mailbox is deliberately excluded — its extra dest-only
-		// messages would make the whole-set aggregate differ for a benign reason; the rare
-		// DEST-AHEAD-with-corrupted-source-body case stays --deep's job (its DiffMessageDigests
-		// compares only source-present identities). --deep also localizes WHICH message.
+		// each diverging message; the default rolls them to one verdict.
+		//
+		// Runs for vConsistent AND vDestAhead. The roll-up (CountDigestDivergence) keys by
+		// SOURCE-PRESENT identity and IGNORES dest-only extra messages, so a DEST AHEAD
+		// mailbox's benign surplus never trips it — only a corrupted/replaced/lost SOURCE
+		// body does, which then outranks the soft DEST AHEAD verdict (see
+		// classifyMailVerifyImpact). Without this, a DEST AHEAD mailbox whose one source
+		// message was corrupted on the destination passed clean at the default tier.
 		// Unhashable content (sha256sum missing, an unreadable/ambiguous body, or a mailbox
 		// above the content-check cap) is a SOFT note (metadata still verified), never a
 		// green "content verified" nor a hard fail — the tier policy the default DB/web
 		// verify use.
 		var mailContentNote string
 		fingerprintDiff := false
-		if !deep && mv.kind == vConsistent {
-			if differ, note := verifyMailContentDigest(ctx, pool, m.Domain, m.User, destDomain, mv.totalCount); differ {
+		if !deep && (mv.kind == vConsistent || mv.kind == vDestAhead) {
+			if differ, note := verifyMailContentDigest(ctx, pool, m.Domain, m.User, destDomain, mv.totalCount, mailboxMsgTotal(destF)); differ {
 				content = contentDiverged
 				contentBadThis = true
 				fingerprintDiff = true
@@ -388,6 +388,21 @@ func verify(ctx context.Context, pool *sshx.Pool, pd migrationData, log *logx.Lo
 			continue
 		}
 
+		// DEST AHEAD at the DEFAULT tier: the dest-only surplus is benign, but the body
+		// check still compared the SOURCE-PRESENT messages (CountDigestDivergence ignores
+		// the surplus) and they diverge — real loss. Promote to CONTENT rather than the soft
+		// DEST AHEAD (already counted hard by classifyMailVerifyImpact). --deep reaches the
+		// same finding through its per-message path in the folder-diff block below.
+		if mv.kind == vDestAhead && fingerprintDiff {
+			rep.LogScreenFile(
+				itemStr(log, "~", email, "%s — source-present message bodies differ; the destination also holds extra mail (run --deep-verify to localize)", log.Red("CONTENT")),
+				report.VerifyDiffLine(email, "CONTENT", strconv.Itoa(mv.totalCount), mv.inboxUV, "", "", "source-present message bodies differ; destination also holds extra dest-only mail (run --deep-verify to localize)"))
+			for _, fd := range mv.folderDiffs {
+				rep.FileOnlyf("      %s", fd)
+			}
+			continue
+		}
+
 		// Colour by whether re-running --apply can fix it: yellow = fixable
 		// (INCOMPLETE/UIDVALIDITY), red = won't change (DEST AHEAD).
 		label := log.Red(mv.label)
@@ -407,6 +422,8 @@ func verify(ctx context.Context, pool *sshx.Pool, pd migrationData, log *logx.Lo
 			reportContentDiffs(rep, cMissing, cChanged)
 		} else if content == contentUnverified {
 			rep.FileOnlyf("      content: deep check could not read one side (unverified)")
+		} else if mailContentNote != "" {
+			rep.FileOnlyf("      content: source-present bodies not byte-verified — %s", mailContentNote)
 		}
 	}
 
@@ -489,19 +506,24 @@ func verify(ctx context.Context, pool *sshx.Pool, pd migrationData, log *logx.Lo
 const defaultMailContentMsgCap = 200_000
 
 // verifyMailContentDigest is the DEFAULT-tier body gate for one mailbox whose per-folder
-// counts already match. It hashes every message body on both hosts (keyed by stable
-// folder-aware identity, so a flag change or a new/->cur/ move is NOT a false diff) and
-// rolls the per-message comparison up to a mailbox verdict. differ is true on a genuine
-// body divergence (a HARD CONTENT diff). When the content cannot be hashed (the mailbox is above the message
-// cap, sha256sum is missing on the host, or a body is unreadable/ambiguous) it returns
-// differ=false with a non-empty note: a SOFT "bodies not byte-verified" signal (the
-// per-folder metadata is still verified). GetFolderStats already ran and hard-failed on a
-// real read/transport error before this point, so a digest fetch failure here is a
-// content-layer hiccup (most likely sha256sum missing), reported as the soft note rather
-// than failing the default run.
-func verifyMailContentDigest(ctx context.Context, pool *sshx.Pool, srcDomain, user, destDomain string, totalCount int) (differ bool, note string) {
-	if totalCount > defaultMailContentMsgCap {
-		return false, fmt.Sprintf("mailbox has %d messages, above the default content-check cap (%d)", totalCount, defaultMailContentMsgCap)
+// counts already match (vConsistent) or that is DEST AHEAD (the source-present subset is
+// compared, dest-only extras ignored). It hashes every message body on both hosts (keyed
+// by stable folder-aware identity, so a flag change or a new/->cur/ move is NOT a false
+// diff) and rolls the per-message comparison up to a mailbox verdict. differ is true on a
+// genuine body divergence (a HARD CONTENT diff). When the content cannot be hashed (the
+// mailbox is above the message cap, sha256sum is missing on the host, or a body is
+// unreadable/ambiguous) it returns differ=false with a non-empty note: a SOFT "bodies not
+// byte-verified" signal (the per-folder metadata is still verified). GetFolderStats already
+// ran and hard-failed on a real read/transport error before this point, so a digest fetch
+// failure here is a content-layer hiccup (most likely sha256sum missing), reported as the
+// soft note rather than failing the default run.
+//
+// The cap is checked against max(srcCount, destCount): GetMessageDigests hashes EVERY
+// message on each host, so a DEST AHEAD mailbox with a small source but a huge destination
+// (e.g. a live archive) must be bounded by the dest side too, not just the source count.
+func verifyMailContentDigest(ctx context.Context, pool *sshx.Pool, srcDomain, user, destDomain string, srcCount, destCount int) (differ bool, note string) {
+	if n := max(srcCount, destCount); n > defaultMailContentMsgCap {
+		return false, fmt.Sprintf("mailbox has %d messages (src %d / dest %d), above the default content-check cap (%d)", n, srcCount, destCount, defaultMailContentMsgCap)
 	}
 	sd, e1 := maildir.GetMessageDigests(ctx, pool.Src, srcDomain, user)
 	dd, e2 := maildir.GetMessageDigests(ctx, pool.Dest, destDomain, user, maildir.GuardRoot())
@@ -559,6 +581,17 @@ type mailboxVerdict struct {
 	inboxUV     string
 	folderDiffs []string // "<folder>: <label> — SRC(...) DEST(...)" per divergent folder
 	diffNames   []string // the divergent folder labels, for the brief screen line
+}
+
+// mailboxMsgTotal sums the message counts across all of a mailbox's folders. Used to
+// bound the default body fingerprint by the LARGER of the two sides (a DEST AHEAD mailbox
+// can have far more messages on the destination than the source).
+func mailboxMsgTotal(folders map[string]maildir.FolderStats) int {
+	n := 0
+	for _, f := range folders {
+		n += f.Count
+	}
+	return n
 }
 
 // classifyMailbox compares src vs dest folder maps and rolls the per-folder

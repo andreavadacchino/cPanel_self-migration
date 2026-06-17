@@ -80,7 +80,9 @@ func CreateDatabase(ctx context.Context, c Runner, name string) error {
 
 // CreateDBUser creates a MySQL user with the given password
 // (Mysql::create_user, args name + password). The name must already carry the
-// destination account prefix.
+// destination account prefix. The password is passed via env (ARG_<i>) and
+// expanded into the remote `uapi` process argv — briefly visible in
+// /proc/<pid>/cmdline; see uapiArgsScript for the bounded residual exposure.
 func CreateDBUser(ctx context.Context, c Runner, name, password string) error {
 	_, err := RunUAPI[anyData](ctx, c, "Mysql", "create_user",
 		map[string]string{"name": name, "password": password})

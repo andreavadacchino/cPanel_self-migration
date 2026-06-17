@@ -38,7 +38,13 @@ type EnsureResult struct {
 //
 // The decision (exists? what to do?) is made here, but the actual file edit and
 // the add_pop call run on the destination host via a single remote snippet.
-// Parameters travel as environment variables (DOM/USER/HASH), never inlined.
+// Parameters travel as environment variables (DOM/USER/HASH), so they are never
+// spliced into the SSH command line and the awk shadow-rewrite reads the hash via
+// ENVIRON (not argv). The Email::add_pop fallback, however, must pass
+// password_hash=$HASH to the `uapi` CLI, which has no stdin/--input mechanism, so
+// for that one child process the hash is expanded into uapi's argv (visible in
+// /proc/<pid>/cmdline only for the call's duration). See the residual-exposure note
+// in uapiArgsScript (api.go) and docs/USAGE.md.
 func EnsureAccount(ctx context.Context, c Runner, dom, user, hash string) (EnsureResult, error) {
 	out, err := c.RunScript(ctx, ensureAccountScript, map[string]string{
 		"DOM":  dom,
@@ -81,7 +87,12 @@ func parseEnsureResult(out, user, dom string) (EnsureResult, error) {
 }
 
 // ensureAccountScript runs on the destination. It reads DOM/USER/HASH from the
-// environment (set via the SSH session) so the hash is never on a command line.
+// environment (set via the SSH session) so the hash is never spliced into the SSH
+// command line. The shadow-rewrite awk reads the hash via ENVIRON["HASH"] (not a
+// `-v h=` arg), keeping it out of awk's argv. The Email::add_pop create fallback
+// still passes password_hash=$HASH to the `uapi` CLI (which has no stdin input), so
+// for that one child the hash is in uapi's argv for the call's duration — see the
+// residual-exposure note in uapiArgsScript (api.go).
 //
 // A SINGLE awk decides and does the work, matching the mailbox by EXACT string
 // equality on the shadow's first field ($1==u) — never via a grep regex. A local
@@ -105,7 +116,7 @@ SH="$HOME/etc/$DOM/shadow"
 if [ -f "$SH" ]; then
     umask 077
     tmp="$SH.migtmp.$$"
-    awk -F: -v OFS=: -v u="$USER" -v h="$HASH" '$1==u{$2=h; f=1} {print} END{exit f?0:9}' "$SH" > "$tmp"
+    awk -F: -v OFS=: -v u="$USER" '$1==u{$2=ENVIRON["HASH"]; f=1} {print} END{exit f?0:9}' "$SH" > "$tmp"
     rc=$?
     if [ "$rc" = 0 ]; then
         chmod --reference="$SH" "$tmp" 2>/dev/null || true

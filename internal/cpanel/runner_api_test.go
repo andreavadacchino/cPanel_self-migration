@@ -587,6 +587,61 @@ func TestCheckAddonResponseEdges(t *testing.T) {
 	}
 }
 
+// TestCheckAddonResponseEventResult (M2): cpanelresult.event.result is now honored.
+// An explicit event.result=0 means the api2 call failed at the dispatch layer, so a
+// data[0].result that reads as 1 must NOT be trusted (previously a FALSE SUCCESS);
+// an absent event.result must NOT cause a false failure of an otherwise-good result.
+func TestCheckAddonResponseEventResult(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		wantErr   bool
+		wantInErr string // substring expected in the error (when wantErr)
+	}{
+		{
+			name:      "incoherent event=0 data=1 fails (was false success)",
+			body:      `{"cpanelresult":{"data":[{"result":"1","reason":"ok"}],"event":{"result":"0","reason":"permission denied"}}}`,
+			wantErr:   true,
+			wantInErr: "permission denied",
+		},
+		{
+			name:      "event=0 with empty data fails using event.reason",
+			body:      `{"cpanelresult":{"data":[],"event":{"result":"0","reason":"bad token"}}}`,
+			wantErr:   true,
+			wantInErr: "bad token",
+		},
+		{
+			name:    "event=0 numeric unquoted also fails",
+			body:    `{"cpanelresult":{"data":[{"result":1}],"event":{"result":0}}}`,
+			wantErr: true,
+		},
+		{
+			name:    "event=1 data=1 succeeds",
+			body:    `{"cpanelresult":{"data":[{"result":"1"}],"event":{"result":"1"}}}`,
+			wantErr: false,
+		},
+		{
+			name:    "absent event with data=1 still succeeds (no false failure)",
+			body:    `{"cpanelresult":{"data":[{"result":"1"}]}}`,
+			wantErr: false,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := checkAddonResponse("d.it", []byte(c.body))
+			if c.wantErr && err == nil {
+				t.Fatalf("want error, got nil")
+			}
+			if !c.wantErr && err != nil {
+				t.Fatalf("want success, got %v", err)
+			}
+			if c.wantErr && c.wantInErr != "" && !strings.Contains(err.Error(), c.wantInErr) {
+				t.Errorf("error %q should contain %q", err, c.wantInErr)
+			}
+		})
+	}
+}
+
 func TestEnsureAccount(t *testing.T) {
 	f := &fakeRunner{out: []byte("CREATED\n")}
 	res, err := EnsureAccount(bg, f, "d.it", "info", "$6$hash")

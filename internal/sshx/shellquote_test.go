@@ -1,6 +1,7 @@
 package sshx
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"testing"
@@ -73,4 +74,62 @@ func TestWithEnvExpandsSafelyInBash(t *testing.T) {
 	if string(out) != nasty {
 		t.Errorf("expanded value =\n  %q\nwant\n  %q (the value must survive verbatim)", string(out), nasty)
 	}
+}
+
+// TestValidEnvName (M13): the POSIX env-name shape used to guard shell splicing.
+func TestValidEnvName(t *testing.T) {
+	for _, n := range []string{"MYSQL_PWD", "DOM", "ARG_0", "_x", "a1_B2"} {
+		if !validEnvName(n) {
+			t.Errorf("validEnvName(%q) = false, want true", n)
+		}
+	}
+	for _, n := range []string{"", "1abc", "a b", "x;rm", "a-b", "a=b", "a$b", "DOM\n", "../x"} {
+		if validEnvName(n) {
+			t.Errorf("validEnvName(%q) = true, want false", n)
+		}
+	}
+}
+
+// TestWithEnvValidName: a well-formed key is spliced as an export assignment.
+func TestWithEnvValidName(t *testing.T) {
+	got := WithEnv("cmd", map[string]string{"DOM": "d.it"})
+	if !strings.Contains(got, "export DOM='d.it'; ") {
+		t.Errorf("WithEnv = %q", got)
+	}
+}
+
+// TestWithEnvPanicsOnInvalidName (M13): a malformed key would be command injection if
+// spliced into `export <key>=...`, so it must panic (a call-site bug, never data).
+func TestWithEnvPanicsOnInvalidName(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("WithEnv did not panic on an invalid env name")
+		}
+	}()
+	_ = WithEnv("bash -s", map[string]string{"x; rm -rf ~": "v"})
+}
+
+// TestSecretStdinProloguePanicsOnInvalidName (M13): same guard on the stdin-prologue
+// builder (`read -r <key>; export <key>`).
+func TestSecretStdinProloguePanicsOnInvalidName(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("secretStdinPrologue did not panic on an invalid env name")
+		}
+	}()
+	_ = secretStdinPrologue("cmd", []string{"BAD NAME"})
+}
+
+// TestRunWithInlineEnvPanicsOnInvalidName (M13): the buffered RunScript fallback
+// (used when the server rejects Setenv) also splices env keys into `export <k>=...`,
+// so it must apply the same name guard. The panic fires before any session work.
+func TestRunWithInlineEnvPanicsOnInvalidName(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("runWithInlineEnv did not panic on an invalid env name")
+		}
+	}()
+	c := &Client{}
+	_, _ = c.runWithInlineEnv(context.Background(), "bash -s",
+		map[string]string{"x; rm -rf ~": "v"}, strings.NewReader("echo hi\n"))
 }

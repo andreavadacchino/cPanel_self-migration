@@ -182,3 +182,32 @@ func TestRunUAPIRawDebugOffEmitsNoBody(t *testing.T) {
 		t.Fatalf("raw body emitted while toggle was off:\n%s", logged)
 	}
 }
+
+// TestRunUAPIErrorPathRedactsEchoedSecret (M1): on a FAILURE response (status != 1)
+// the debug log must REDACT the raw body — some cPanel builds echo request input back
+// into the response, so a create_user/add_pop failure could carry the password/hash.
+// The raw body is no longer dumped verbatim; the diagnostic shape stays.
+func TestRunUAPIErrorPathRedactsEchoedSecret(t *testing.T) {
+	var buf bytes.Buffer
+	restore := logx.SwapDebugOutput(&buf)
+	defer restore()
+	logx.SetDebug(true)
+	defer logx.SetDebug(false)
+
+	const secret = "ECHOED-PASSWORD-do-not-log"
+	body := `{"result":{"status":0,"errors":["create_user failed"],"data":{"password":"` + secret + `"}}}`
+	f := &fakeRunner{out: []byte(body)}
+	if _, err := RunUAPI[anyData](bg, f, "Mysql", "create_user", map[string]string{"name": "u", "password": secret}); err == nil {
+		t.Fatal("expected an error for status != 1")
+	}
+	logged := buf.String()
+	if strings.Contains(logged, secret) {
+		t.Fatalf("echoed password leaked into the debug log:\n%s", logged)
+	}
+	if !strings.Contains(logged, "non-success") {
+		t.Fatalf("expected the non-success debug line, got:\n%s", logged)
+	}
+	if !strings.Contains(logged, redactedPlaceholder) {
+		t.Fatalf("expected the password value replaced by the redaction placeholder, got:\n%s", logged)
+	}
+}

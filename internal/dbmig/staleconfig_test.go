@@ -72,7 +72,7 @@ func TestSourceCredsStillReachable(t *testing.T) {
 	write("bkdir/wp-content/aiowps_backups/backup.wp-config.php", "<?php\ndefine('DB_NAME', 'srcacct_wp');\n")
 
 	// The source name survives ONLY in a backup-NAMED file outside a backup dir: grep
-	// matches it, but isBackupConfigPath filters it Go-side.
+	// matches it, but isNonLiveConfigPath filters it Go-side.
 	bkname := filepath.Join(home, "bkname")
 	write("bkname/wp-config.php", "<?php\ndefine('DB_NAME', 'destacct_wp');\n")
 	write("bkname/wp-config-backup.php", "<?php\ndefine('DB_NAME', 'srcacct_wp');\n")
@@ -192,10 +192,10 @@ func TestSourceCredsStillReachablePartialResultUsedDespiteUnreadableDir(t *testi
 	}
 }
 
-// TestIsBackupConfigPath locks the backup-copy classifier: a stale source DB name
-// surviving only in a backup/old copy is not a cutover gap, so these must be filtered
-// out (true); a live config name must not (false).
-func TestIsBackupConfigPath(t *testing.T) {
+// TestIsNonLiveConfigPath locks the non-live-file classifier: a stale source DB name
+// surviving only in a backup/old copy, a numbered rotation, or a PHP error log is not a
+// cutover gap, so these must be filtered out (true); a live config name must not (false).
+func TestIsNonLiveConfigPath(t *testing.T) {
 	cases := []struct {
 		p    string
 		want bool
@@ -205,9 +205,18 @@ func TestIsBackupConfigPath(t *testing.T) {
 		{"/home/u/public_html/site/wp-config-backup.php", true},                           // backup-named
 		{"/home/u/public_html/site/backup.wp-config.php", true},                           // backup-named
 		{"/home/u/public_html/site/wp-config.php.bak", true},                              // .bak suffix
+		{"/home/u/public_html/site/wp-config.php.bak2", true},                             // .bak + rotation number
+		{"/home/u/public_html/site/wp-config.php.bak.1", true},                            // .bak. infix + number
+		{"/home/u/public_html/site/wp-config.old.3~", true},                               // .old + number + editor "~"
 		{"/home/u/public_html/site/wp-config.bak.php", true},                              // .bak. infix
 		{"/home/u/public_html/site/wp-config.php.old", true},                              // .old suffix
+		{"/home/u/public_html/site/wp-config.php.swp", true},                              // vim swap
 		{"/home/u/public_html/site/wp-config.php~", true},                                 // editor backup
+		{"/home/u/public_html/site/wp-admin/error_log", true},                             // cPanel PHP error log
+		{"/home/u/public_html/site/php_errorlog", true},                                   // alt PHP error log name
+		{"/home/u/public_html/site/wp-content/debug.log", true},                           // WP_DEBUG_LOG
+		{"/home/u/public_html/site/error_log.php", false},                                 // LIVE .php w/ "error_log" substring — must scrutinize
+		{"/home/u/public_html/site/my_error_log_viewer.php", false},                       // LIVE .php w/ "error_log" substring
 		{"/home/u/public_html/site/wp-config.php", false},                                 // the live config
 		{"/home/u/public_html/site/config/database.php", false},                           // a live split config
 		{"/home/u/public_html/site/wp-content/db.inc.php", false},                         // a live include
@@ -215,8 +224,8 @@ func TestIsBackupConfigPath(t *testing.T) {
 		{"", false},
 	}
 	for _, c := range cases {
-		if got := isBackupConfigPath(c.p); got != c.want {
-			t.Errorf("isBackupConfigPath(%q) = %v, want %v", c.p, got, c.want)
+		if got := isNonLiveConfigPath(c.p); got != c.want {
+			t.Errorf("isNonLiveConfigPath(%q) = %v, want %v", c.p, got, c.want)
 		}
 	}
 }

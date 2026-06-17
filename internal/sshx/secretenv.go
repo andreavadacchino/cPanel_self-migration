@@ -52,6 +52,9 @@ func splitSecretEnv(env map[string]string) (public, secret map[string]string) {
 func secretStdinPrologue(cmd string, keys []string) string {
 	var b strings.Builder
 	for _, k := range keys {
+		// k is spliced unquoted into `read -r <k>; export <k>`, so it must be a valid
+		// env var name; an invalid name is a call-site bug (see mustValidEnvName).
+		mustValidEnvName("secretStdinPrologue", k)
 		fmt.Fprintf(&b, "IFS= read -r %s; export %s; ", k, k)
 	}
 	b.WriteString(cmd)

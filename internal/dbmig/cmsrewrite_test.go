@@ -314,6 +314,79 @@ return [
 	}
 }
 
+// A7: when the db 'connection' block has NO 'default', the bounded walk fails to
+// resolve the target block, so rewriteMagento must leave the config byte-for-byte
+// unchanged — it must NOT reach forward and clobber an unrelated
+// 'cache'=>'frontend'=>'default' block. The old unbounded walk latched and rewrote
+// that sibling, and the read-after-write reparse then agreed with itself (false OK).
+func TestRewriteMagentoConnectionWithoutDefaultLeavesSiblingIntact(t *testing.T) {
+	cfg := `<?php
+return [
+    'db' => [
+        'connection' => [
+            'indexer' => [
+                'host' => 'localhost',
+                'dbname' => 'indexer_db',
+            ],
+        ],
+    ],
+    'cache' => [
+        'frontend' => [
+            'default' => [
+                'dbname' => 'CACHE_DB',
+                'username' => 'cache_u',
+                'password' => 'CACHE_SECRET',
+            ],
+        ],
+    ],
+];
+`
+	out := rewriteMagento(cfg, "new_db", "new_user", "new_pass")
+	if out != cfg {
+		t.Errorf("rewriteMagento must leave the config unchanged when 'connection'->'default' is absent:\n%s", out)
+	}
+	if strings.Contains(out, "new_db") || strings.Contains(out, "new_user") || strings.Contains(out, "new_pass") {
+		t.Errorf("rewriteMagento injected db creds into the unrelated cache block:\n%s", out)
+	}
+	if !strings.Contains(out, `'dbname' => 'CACHE_DB'`) || !strings.Contains(out, `'password' => 'CACHE_SECRET'`) {
+		t.Errorf("rewriteMagento corrupted the unrelated cache block:\n%s", out)
+	}
+}
+
+// A7 deeper-latch: rewriteMagento must edit the DIRECT-child 'default' of
+// 'connection', not a decoy 'default' nested deeper under a sibling sub-array
+// ('indexer'). The read-after-write reparse must then read the rewritten REAL creds.
+func TestRewriteMagentoDeeperNestedDecoyNotEdited(t *testing.T) {
+	cfg := `<?php
+return [
+    'db' => [
+        'connection' => [
+            'indexer' => [
+                'default' => [
+                    'dbname' => 'DECOY_DB',
+                    'username' => 'decoy_u',
+                    'password' => 'DECOY_PW',
+                ],
+            ],
+            'default' => [
+                'dbname' => 'old_db',
+                'username' => 'old_user',
+                'password' => 'old_pass',
+            ],
+        ],
+    ],
+];
+`
+	out := rewriteMagento(cfg, "new_db", "new_user", "new_pass")
+	if !strings.Contains(out, `'dbname' => 'DECOY_DB'`) || !strings.Contains(out, `'password' => 'DECOY_PW'`) {
+		t.Errorf("rewriteMagento edited the decoy 'indexer'->'default' block:\n%s", out)
+	}
+	got := parseMagentoEnv(out)
+	if got.DBName != "new_db" || got.DBUser != "new_user" || got.DBPassword != "new_pass" {
+		t.Errorf("read-after-write must read the rewritten direct-child default: %+v\n%s", got, out)
+	}
+}
+
 // TestRewriteMagentoPreservesTailAfterBlock: the bounded rewrite must keep every
 // byte after the 'default' block verbatim — the closing brackets, the sibling
 // 'table_prefix', and a whole later section — while updating the in-block creds.

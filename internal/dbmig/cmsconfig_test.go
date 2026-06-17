@@ -814,3 +814,183 @@ return array(
 		t.Errorf("omitted password must not leak the later AMQP secret (array() form): %q", c.DBPassword)
 	}
 }
+
+// A7: the INTERMEDIATE key walk must be bounded to the parent block. Here the db
+// 'connection' block exists but has NO 'default' sub-key; a later, unrelated
+// 'cache'=>'frontend'=>'default' block carries real-looking creds. The old walk
+// searched for 'default' across the REST OF THE FILE and latched the cache block,
+// reading CACHE_DB/CACHE_SECRET as the database. Bounding 'default' to the
+// 'connection' block makes the lookup fail closed (no creds) instead. DISCRIMINATES
+// the fix.
+func TestParseMagentoEnvConnectionWithoutDefaultDoesNotLatchSibling(t *testing.T) {
+	cfg := `<?php
+return [
+  'db' => [
+    'connection' => [
+      'indexer' => [
+        'host' => 'localhost',
+        'dbname' => 'indexer_db',
+      ],
+    ],
+  ],
+  'cache' => [
+    'frontend' => [
+      'default' => [
+        'dbname' => 'CACHE_DB',
+        'username' => 'cache_u',
+        'password' => 'CACHE_SECRET',
+      ],
+    ],
+  ],
+];`
+	c, _ := parseCMSConfig("/home/u/app/etc/env.php", cfg)
+	if c.DBName == "CACHE_DB" || c.DBUser == "cache_u" || c.DBPassword == "CACHE_SECRET" {
+		t.Errorf("'default' lookup latched the unrelated cache.frontend.default block: %+v", c)
+	}
+}
+
+// A7 TYPO3 analog: the 'Connections' block lacks 'Default'; a later MAIL section
+// nests a 'Default' array. The 'Default' lookup must stay inside 'Connections'.
+func TestParseTYPO3ConnectionsWithoutDefaultDoesNotLatchSibling(t *testing.T) {
+	cfg := `<?php
+return [
+  'DB' => [
+    'Connections' => [
+      'Replica' => [
+        'dbname' => 'replica_db',
+      ],
+    ],
+  ],
+  'MAIL' => [
+    'transport_smtp' => [
+      'Default' => [
+        'dbname' => 'MAIL_DB',
+        'user' => 'mail_u',
+        'password' => 'MAIL_SECRET',
+      ],
+    ],
+  ],
+];`
+	c, _ := parseCMSConfig("config/system/settings.php", cfg)
+	if c.DBName == "MAIL_DB" || c.DBUser == "mail_u" || c.DBPassword == "MAIL_SECRET" {
+		t.Errorf("'Default' lookup latched the unrelated MAIL.transport_smtp.Default block: %+v", c)
+	}
+}
+
+// A7 no-regression: a VALID Magento with a real 'connection'=>'default' AND a later
+// sibling 'cache'=>'frontend'=>'default' must still read the REAL db connection
+// (the leftmost 'default' inside the bounded 'connection' block), never the cache one.
+func TestParseMagentoEnvSiblingDefaultPresentReadsRealDbConnection(t *testing.T) {
+	cfg := `<?php
+return [
+  'db' => [
+    'connection' => [
+      'default' => [
+        'host' => 'localhost',
+        'dbname' => 'REAL_DB',
+        'username' => 'real_u',
+        'password' => 'REAL_PW',
+      ],
+    ],
+  ],
+  'cache' => [
+    'frontend' => [
+      'default' => [
+        'dbname' => 'CACHE_DB',
+        'password' => 'CACHE_SECRET',
+      ],
+    ],
+  ],
+];`
+	c, kind := parseCMSConfig("/home/u/app/etc/env.php", cfg)
+	if kind != KindMagento {
+		t.Fatalf("expected KindMagento, got %q", kind)
+	}
+	if c.DBName != "REAL_DB" || c.DBUser != "real_u" || c.DBPassword != "REAL_PW" {
+		t.Errorf("must read the real db connection.default, not the cache sibling: %+v", c)
+	}
+}
+
+// A7 deeper-latch: a same-named key ('default') nested DEEPER inside a sibling
+// sub-array ('indexer') appears BEFORE the real direct-child 'default'. The
+// intermediate-key walk must select the DIRECT child of 'connection', not the
+// decoy nested under 'indexer'. A leftmost-anywhere match would read DECOY_DB.
+func TestParseMagentoEnvDeeperNestedDecoyDoesNotLatch(t *testing.T) {
+	cfg := `<?php
+return [
+  'db' => [
+    'connection' => [
+      'indexer' => [
+        'default' => [
+          'dbname' => 'DECOY_DB',
+          'username' => 'decoy_u',
+          'password' => 'DECOY_PW',
+        ],
+      ],
+      'default' => [
+        'dbname' => 'REAL_DB',
+        'username' => 'real_u',
+        'password' => 'REAL_PW',
+      ],
+    ],
+  ],
+];`
+	c, kind := parseCMSConfig("/home/u/app/etc/env.php", cfg)
+	if kind != KindMagento {
+		t.Fatalf("expected KindMagento, got %q", kind)
+	}
+	if c.DBName != "REAL_DB" || c.DBUser != "real_u" || c.DBPassword != "REAL_PW" {
+		t.Errorf("must read the direct-child 'default', not the decoy nested under 'indexer': %+v", c)
+	}
+}
+
+// A7 deeper-latch, no direct child: 'connection' has ONLY a decoy 'default' nested
+// inside a sibling sub-array, no direct-child 'default'. The walk must fail closed
+// (read nothing), never the decoy.
+func TestParseMagentoEnvOnlyDeeperDecoyFailsClosed(t *testing.T) {
+	cfg := `<?php
+return [
+  'db' => [
+    'connection' => [
+      'indexer' => [
+        'default' => [
+          'dbname' => 'DECOY_DB',
+          'username' => 'decoy_u',
+          'password' => 'DECOY_PW',
+        ],
+      ],
+    ],
+  ],
+];`
+	c, _ := parseCMSConfig("/home/u/app/etc/env.php", cfg)
+	if c.DBName == "DECOY_DB" || c.DBUser == "decoy_u" || c.DBPassword == "DECOY_PW" {
+		t.Errorf("absent direct-child 'default' must fail closed, not read the deeper decoy: %+v", c)
+	}
+}
+
+// A7 deeper-latch TYPO3 analog.
+func TestParseTYPO3DeeperNestedDecoyDoesNotLatch(t *testing.T) {
+	cfg := `<?php
+return [
+  'DB' => [
+    'Connections' => [
+      'Replica' => [
+        'Default' => [
+          'dbname' => 'DECOY_DB',
+          'user' => 'decoy_u',
+          'password' => 'DECOY_PW',
+        ],
+      ],
+      'Default' => [
+        'dbname' => 'REAL_DB',
+        'user' => 'real_u',
+        'password' => 'REAL_PW',
+      ],
+    ],
+  ],
+];`
+	c, _ := parseCMSConfig("config/system/settings.php", cfg)
+	if c.DBName != "REAL_DB" || c.DBUser != "real_u" || c.DBPassword != "REAL_PW" {
+		t.Errorf("TYPO3 must read the direct-child 'Default', not the decoy under 'Replica': %+v", c)
+	}
+}

@@ -235,9 +235,10 @@ func TestVerifyDeepCatchesBodyCorruption(t *testing.T) {
 // per-folder verdict is the soft DEST AHEAD) but whose one source message is ALSO
 // corrupted on the destination must hard-fail. Source has message A; destination has
 // A with a corrupted body PLUS an extra destination-only message B; UIDVALIDITY is
-// equal. Non-deep verify returns 0 (corruption invisible to counts; the surplus is
-// benign); deep verify must return 1, report DEST AHEAD, report the one corrupted
-// message, and NOT report the destination-only B as missing.
+// equal. BOTH tiers must now catch it (M5): the DEFAULT body fingerprint compares only
+// the source-present messages (ignoring the benign surplus) and promotes the corrupted
+// source body to CONTENT; deep additionally reports DEST AHEAD + the one corrupted
+// message. Neither tier reports the destination-only B as missing.
 func TestVerifyDeepCatchesCorruptedMessageWhenDestAhead(t *testing.T) {
 	sshtest.RequireTools(t, "bash", "find", "sha256sum", "cut", "basename", "head", "awk", "wc")
 	srcHome := t.TempDir()
@@ -257,9 +258,17 @@ func TestVerifyDeepCatchesCorruptedMessageWhenDestAhead(t *testing.T) {
 		Mailboxes:     []model.Mailbox{{Domain: "d.it", User: "u", Hash: "x"}},
 	}
 
-	// Non-deep: counts see only the surplus (DEST AHEAD), which is benign -> 0.
-	if rd, err := verify(context.Background(), pool, pd, logx.NewTo(io.Discard, 0), discardReporter(t), false); err != nil || rd != 0 {
-		t.Fatalf("non-deep verify: realDiff=%d err=%v, want 0 (surplus is benign, corruption invisible)", rd, err)
+	// Non-deep (M5): the default body fingerprint compares only the SOURCE-PRESENT
+	// messages — it ignores the benign surplus but catches the corrupted source body and
+	// promotes it to CONTENT (a hard diff). The destination-only B is NOT flagged.
+	repND, bufND := bufReporter(t)
+	if rd, err := verify(context.Background(), pool, pd, logx.NewTo(io.Discard, 0), repND, false); err != nil || rd != 1 {
+		t.Fatalf("non-deep verify: realDiff=%d err=%v, want 1 (default fingerprint catches the corrupted source body under DEST AHEAD)", rd, err)
+	}
+	if ndOut := bufND.String(); !strings.Contains(ndOut, "CONTENT") {
+		t.Errorf("non-deep report should promote the corrupted DEST AHEAD mailbox to CONTENT:\n%s", ndOut)
+	} else if strings.Contains(ndOut, "2.M2.host") {
+		t.Errorf("the destination-only message B must NOT be reported at the default tier:\n%s", ndOut)
 	}
 
 	// Deep: the corrupted source-present body is real loss even though the mailbox is
@@ -281,6 +290,43 @@ func TestVerifyDeepCatchesCorruptedMessageWhenDestAhead(t *testing.T) {
 	}
 	if strings.Contains(out, "2.M2.host") {
 		t.Errorf("the destination-only message B must NOT be reported as missing:\n%s", out)
+	}
+}
+
+// TestVerifyDefaultBenignDestAheadStaysClean guards the M5 change against false
+// positives: a DEST AHEAD mailbox whose SOURCE-PRESENT bodies all match (only extra
+// dest-only mail) must stay a benign DEST AHEAD at the default tier (realDiff 0, no
+// CONTENT), even though the body fingerprint now runs for DEST AHEAD mailboxes too.
+func TestVerifyDefaultBenignDestAheadStaysClean(t *testing.T) {
+	sshtest.RequireTools(t, "bash", "find", "sha256sum", "cut", "basename", "head", "awk", "wc")
+	srcHome := t.TempDir()
+	dstHome := t.TempDir()
+	// Source: 1 message. Destination: same message 1 (identical body) + extra message 2.
+	mkBox(t, srcHome, "d.it", "u", 1, "V1")
+	mkBox(t, dstHome, "d.it", "u", 2, "V1")
+
+	pool := &sshx.Pool{Src: sshtest.DialExec(t, sshtest.NewExecServer(t, srcHome)), Dest: sshtest.DialExec(t, sshtest.NewExecServer(t, dstHome))}
+	defer pool.Src.Close()
+	defer pool.Dest.Close()
+
+	pd := migrationData{
+		DestDomainSet: map[string]bool{"d.it": true},
+		Mailboxes:     []model.Mailbox{{Domain: "d.it", User: "u", Hash: "x"}},
+	}
+	rep, buf := bufReporter(t)
+	rd, err := verify(context.Background(), pool, pd, logx.NewTo(io.Discard, 0), rep, false)
+	if err != nil {
+		t.Fatalf("non-deep verify: %v", err)
+	}
+	if rd != 0 {
+		t.Errorf("benign DEST AHEAD realDiff = %d, want 0 (extra mail only, source bodies match)", rd)
+	}
+	out := buf.String()
+	if strings.Contains(out, "CONTENT") {
+		t.Errorf("benign DEST AHEAD must not be promoted to CONTENT:\n%s", out)
+	}
+	if !strings.Contains(out, "DEST AHEAD") {
+		t.Errorf("benign surplus should still report DEST AHEAD:\n%s", out)
 	}
 }
 
@@ -801,13 +847,24 @@ func TestVerifyDefaultBodyFingerprintFaithfulMirror(t *testing.T) {
 
 // TestVerifyMailContentDigestOverCapIsSoftNote: a mailbox above the message cap is not
 // hashed (no SSH round-trip) and returns a soft content-unverified note, never a hard
-// fail nor a false "content verified".
+// fail nor a false "content verified". The cap is checked against max(src, dest), so a
+// small-source / huge-destination DEST AHEAD mailbox is bounded by the dest side too.
 func TestVerifyMailContentDigestOverCapIsSoftNote(t *testing.T) {
-	differ, note := verifyMailContentDigest(context.Background(), &sshx.Pool{}, "d.it", "u", "d.it", defaultMailContentMsgCap+1)
+	// Source over the cap.
+	differ, note := verifyMailContentDigest(context.Background(), &sshx.Pool{}, "d.it", "u", "d.it", defaultMailContentMsgCap+1, 0)
 	if differ || note == "" {
-		t.Fatalf("over-cap: differ=%v note=%q, want differ=false and a non-empty note", differ, note)
+		t.Fatalf("src over-cap: differ=%v note=%q, want differ=false and a non-empty note", differ, note)
 	}
 	if !strings.Contains(note, "cap") {
-		t.Fatalf("over-cap note should mention the cap: %q", note)
+		t.Fatalf("src over-cap note should mention the cap: %q", note)
+	}
+	// Destination over the cap with a tiny source (the small-source/huge-dest case): the
+	// dest-side bound must still skip the hash with a soft note (no unbounded dest hashing).
+	differ, note = verifyMailContentDigest(context.Background(), &sshx.Pool{}, "d.it", "u", "d.it", 1, defaultMailContentMsgCap+1)
+	if differ || note == "" {
+		t.Fatalf("dest over-cap: differ=%v note=%q, want differ=false and a non-empty note", differ, note)
+	}
+	if !strings.Contains(note, "cap") {
+		t.Fatalf("dest over-cap note should mention the cap: %q", note)
 	}
 }

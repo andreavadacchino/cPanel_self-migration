@@ -159,8 +159,8 @@ func phpArrayKey(key, content string) string {
 }
 
 // blockAfter scopes a credential lookup to a specific nested sub-array. It walks
-// the given array keys in sequence (each searched only in the remainder left by
-// the previous) and returns the BODY of the LAST key's array — the text between
+// the given array keys in sequence (each searched only WITHIN the block the
+// previous key opened) and returns the BODY of the LAST key's array — the text between
 // its `[`/`array(` opener and the matching `]`/`)` closer. Bounding BOTH ends is
 // what stops a first-match key lookup (phpArrayKey) from picking up an UNRELATED
 // component's 'password'/'username'/'host' — a cache, AMQP/queue, mail, or
@@ -180,35 +180,87 @@ func blockAfter(content string, keys ...string) string {
 	return content[start:end]
 }
 
-// arrayBlockBounds walks keys to the LAST key's array opener and returns the byte
-// span [start,end) of that array's BODY in content: start just past the opener,
-// end at the matching closer. ok is false if any key is missing or the array is
-// unterminated. The walk and the bracket scan run on a comment-stripped copy
-// (wpconfig.StripComments, which preserves byte offsets) so a commented-out decoy
-// key is never selected and a bracket inside a comment never miscounts nesting;
-// because offsets are preserved, the returned span also indexes the ORIGINAL
-// content, which the in-place rewriter (rewriteMagento) relies on.
+// arrayBlockBounds walks keys to the LAST key's array and returns the byte span
+// [start,end) of that array's BODY in content: start just past the opener, end at
+// the matching closer. The FIRST key is matched leftmost anywhere (the walk starts
+// mid-tree: the outer wrapper key — e.g. Magento 'db' — is intentionally not
+// listed). Every SUBSEQUENT key must be a DIRECT child (depth 0) of the block the
+// previous key opened, and each level is bounded at BOTH ends via matchingArrayClose.
+// So an intermediate key can latch neither a same-named SIBLING block after the
+// current block's close (e.g. a later 'cache'=>'default' when 'connection' omits
+// 'default') NOR a same-named block nested DEEPER inside a sibling sub-array (e.g.
+// 'connection'=>['indexer'=>['default'=>...], 'default'=>...] must pick the direct
+// child, not indexer's). ok is false if any key is missing as a direct child of its
+// parent block or any array is unterminated (fail-closed). The walk and the bracket
+// scan run on a comment-stripped copy (wpconfig.StripComments, which preserves byte
+// offsets) so a commented-out decoy key is never selected and a bracket inside a
+// comment never miscounts nesting; because offsets are preserved, the returned span
+// also indexes the ORIGINAL content, which the in-place rewriter (rewriteMagento)
+// relies on.
 func arrayBlockBounds(content string, keys ...string) (start, end int, ok bool) {
 	stripped := wpconfig.StripComments(content)
-	pos := 0
-	for _, k := range keys {
-		re := regexp.MustCompile(`['"]` + regexp.QuoteMeta(k) + `['"]\s*=>\s*(?:\[|array\s*\()`)
-		loc := re.FindStringIndex(stripped[pos:])
-		if loc == nil {
+	lo, hi := 0, len(stripped)
+	for i, k := range keys {
+		var bodyStart int
+		if i == 0 {
+			re := regexp.MustCompile(`['"]` + regexp.QuoteMeta(k) + `['"]\s*=>\s*(?:\[|array\s*\()`)
+			loc := re.FindStringIndex(stripped[lo:hi])
+			if loc == nil {
+				return 0, 0, false
+			}
+			bodyStart = lo + loc[1] // just past this key's `[` or `(` opener
+		} else {
+			bs, found := childArrayKeyOpen(stripped, lo, hi, k)
+			if !found {
+				return 0, 0, false
+			}
+			bodyStart = bs
+		}
+		opener := stripped[bodyStart-1] // '[' or '('
+		closer := byte(']')
+		if opener == '(' {
+			closer = ')'
+		}
+		bodyEnd := matchingArrayClose(stripped, bodyStart, opener, closer)
+		if bodyEnd < 0 {
 			return 0, 0, false
 		}
-		pos += loc[1] // just past this key's `[` or `(` opener
+		// Bound the NEXT key's direct-child search to THIS block's body.
+		lo, hi = bodyStart, bodyEnd
 	}
-	opener := stripped[pos-1] // '[' or '('
-	closer := byte(']')
-	if opener == '(' {
-		closer = ')'
+	return lo, hi, true
+}
+
+// childArrayKeyOpen finds `'key' => [`/`array(` whose key token sits at the TOP
+// level (depth 0) of s[lo:hi] — i.e. a DIRECT child of the current block — and
+// returns the index just past its opener. A same-named key nested inside a sibling
+// sub-array (depth > 0) is skipped, so the walk cannot latch a decoy block deeper in
+// the window; a same-named key with a SCALAR value (no `[`/`array(` after `=>`) is
+// also skipped. Bracket counting is string-aware: a `[`/`(`/`]`/`)` inside a quoted
+// value does not change depth (the whole literal is skipped before its brackets are
+// seen). Returns ok=false if no direct-child array match exists (fail-closed). s must
+// be comment-stripped (matching arrayBlockBounds).
+func childArrayKeyOpen(s string, lo, hi int, key string) (bodyStart int, ok bool) {
+	re := regexp.MustCompile(`^['"]` + regexp.QuoteMeta(key) + `['"]\s*=>\s*(?:\[|array\s*\()`)
+	depth := 0
+	for i := lo; i < hi; i++ {
+		switch s[i] {
+		case '[', '(':
+			depth++
+		case ']', ')':
+			if depth > 0 {
+				depth--
+			}
+		case '\'', '"':
+			if depth == 0 {
+				if loc := re.FindStringIndex(s[i:hi]); loc != nil {
+					return i + loc[1], true
+				}
+			}
+			i = skipPHPStringLiteral(s, i) // skip the whole literal (and any brackets within)
+		}
 	}
-	end = matchingArrayClose(stripped, pos, opener, closer)
-	if end < 0 {
-		return 0, 0, false
-	}
-	return pos, end, true
+	return 0, false
 }
 
 // matchingArrayClose returns the index in s of the closer that balances an array

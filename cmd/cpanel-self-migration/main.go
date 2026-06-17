@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
@@ -66,10 +67,17 @@ func main() {
 		os.Exit(2)
 	}
 
-	path, err := resolveConfigPath(*cfgPath)
+	path, altConfigs, err := resolveConfigPath(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
+	}
+	// Always announce WHICH config is in effect — a stale installed host.yaml silently
+	// shadowing the intended one would otherwise migrate the wrong accounts unnoticed.
+	fmt.Fprintf(os.Stderr, "Config: %s\n", path)
+	if len(altConfigs) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: multiple host.yaml found; using %s (ignoring %s). Pass --config to choose explicitly.\n",
+			path, strings.Join(altConfigs, ", "))
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -159,11 +167,16 @@ func handleSignals(cancel context.CancelFunc) {
 }
 
 // resolveConfigPath finds host.yaml when --config is not given. It looks, in
-// order, under configs/ and then the bare directory, relative to both the
-// binary's directory and the current working directory.
-func resolveConfigPath(explicit string) (string, error) {
+// order, under configs/ and then the bare directory, relative to both the binary's
+// directory and the current working directory, and returns the FIRST match plus any
+// OTHER distinct files that also matched. The caller announces the chosen path and
+// warns when alternates exist: a stale installed config silently shadowing the
+// intended one is a real foot-gun (it would migrate the wrong accounts). Matches
+// that resolve to the SAME file via different bases (e.g. the binary dir IS the cwd)
+// are de-duplicated by inode (os.SameFile), so they never look ambiguous.
+func resolveConfigPath(explicit string) (path string, alternates []string, err error) {
 	if explicit != "" {
-		return explicit, nil
+		return explicit, nil, nil
 	}
 
 	var bases []string
@@ -172,18 +185,36 @@ func resolveConfigPath(explicit string) (string, error) {
 	}
 	bases = append(bases, ".") // current working directory
 
+	var found []string
+	var infos []os.FileInfo
 	for _, base := range bases {
 		for _, rel := range []string{
 			filepath.Join("configs", "host.yaml"),
 			"host.yaml",
 		} {
 			cand := filepath.Join(base, rel)
-			if _, err := os.Stat(cand); err == nil {
-				return cand, nil
+			fi, statErr := os.Stat(cand)
+			if statErr != nil {
+				continue
 			}
+			dup := false
+			for _, prev := range infos {
+				if os.SameFile(prev, fi) {
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
+			infos = append(infos, fi)
+			found = append(found, cand)
 		}
 	}
-	return "", fmt.Errorf("host.yaml not found (use --config); copy configs/host_template.yaml to configs/host.yaml")
+	if len(found) == 0 {
+		return "", nil, fmt.Errorf("host.yaml not found (use --config); copy configs/host_template.yaml to configs/host.yaml")
+	}
+	return found[0], found[1:], nil
 }
 
 func usage() {

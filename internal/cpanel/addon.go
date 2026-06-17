@@ -80,15 +80,44 @@ func checkAddonResponse(domain string, out []byte) error {
 	if r.CPanelResult.Error != "" {
 		return fmt.Errorf("addon %s: %s", domain, r.CPanelResult.Error)
 	}
+	// The api2 envelope carries TWO success flags: cpanelresult.event.result (did the
+	// api2 CALL/dispatch itself succeed) and data[0].result (did addaddondomain
+	// succeed). Check event.result FIRST: an EXPLICIT 0 means the call failed at the
+	// api2 layer (auth, unknown module/func, a wrapper rejecting the request), so a
+	// data[0].result that happens to read as 1 must NOT be trusted as success — the
+	// incoherent (event=0, data=1) shape was previously a FALSE SUCCESS. event.reason
+	// carries the api2-layer error (falls back to the data reason / a generic note).
+	// An ABSENT event.result (empty) is NOT treated as a failure signal: some variant
+	// responses omit it, and data[0].result is then the authoritative function flag —
+	// this keeps the check from false-failing a real success that has no event block.
+	if r.CPanelResult.Event.Result.String() == "0" {
+		reason := firstNonEmpty(r.CPanelResult.Event.Reason, dataReason(r), "api2 event reported failure")
+		return fmt.Errorf("addon %s: api2 event.result=0 (reason: %s)", domain, reason)
+	}
 	if len(r.CPanelResult.Data) > 0 && r.CPanelResult.Data[0].Result.String() == "1" {
-		logx.Debug("checkAddonResponse %s: addon created successfully (result=1)", domain)
+		logx.Debug("checkAddonResponse %s: addon created successfully (event ok, data result=1)", domain)
 		return nil
 	}
-	reason := ""
+	return fmt.Errorf("addon %s: api2 result not 1 (reason: %s)", domain,
+		firstNonEmpty(dataReason(r), r.CPanelResult.Event.Reason))
+}
+
+// dataReason returns the first data row's reason, or "" if there is none.
+func dataReason(r api2Response) string {
 	if len(r.CPanelResult.Data) > 0 {
-		reason = r.CPanelResult.Data[0].Reason
+		return r.CPanelResult.Data[0].Reason
 	}
-	return fmt.Errorf("addon %s: api2 result not 1 (reason: %s)", domain, reason)
+	return ""
+}
+
+// firstNonEmpty returns the first non-empty string, or "".
+func firstNonEmpty(ss ...string) string {
+	for _, s := range ss {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // AddSubdomain creates a subdomain via uapi SubDomain::addsubdomain. The label

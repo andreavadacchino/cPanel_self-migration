@@ -2,9 +2,31 @@ package sshx
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
+
+// envNameRe is the POSIX portable environment-variable name shape. Every env key in
+// this codebase is a compile-time literal (e.g. "MYSQL_PWD", "DOM", "ARG_0"), never
+// derived from data, so a key that fails this is a PROGRAMMING ERROR at a call site,
+// not a runtime/data condition — hence the validators below panic rather than return
+// an error. The check matters because a key is spliced UNQUOTED into a shell `export
+// <name>=...` / `read -r <name>` (WithEnv, secretStdinPrologue); a malformed name
+// (e.g. "x; rm -rf ~") would otherwise be command injection.
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// validEnvName reports whether name is a well-formed POSIX environment-variable name.
+func validEnvName(name string) bool { return envNameRe.MatchString(name) }
+
+// mustValidEnvName panics if name is not a well-formed env var name. Used by the
+// shell-building helpers, where an invalid name is a call-site bug and must never be
+// emitted into a command string.
+func mustValidEnvName(where, name string) {
+	if !validEnvName(name) {
+		panic(fmt.Sprintf("sshx.%s: invalid environment variable name %q (must match [A-Za-z_][A-Za-z0-9_]*)", where, name))
+	}
+}
 
 // WithEnv prepends `export VAR='value'; ` assignments (single-quote escaped) to a
 // command, so each value reaches the remote command WITHOUT interpolation into the
@@ -24,6 +46,10 @@ import (
 // SECRET value (MYSQL_PWD) is deliberately NOT routed through here on the bridge
 // fallback — it would land in argv; the streaming bridge delivers it via stdin
 // instead (see secretEnvKeys / secretStdinPrologue).
+//
+// Each KEY is splice-unquoted into `export <key>=...`, so it must be a valid env var
+// name; an invalid name is a call-site bug and panics (see mustValidEnvName). VALUES
+// are single-quote escaped and may contain anything.
 func WithEnv(cmd string, env map[string]string) string {
 	if len(env) == 0 {
 		return cmd
@@ -35,6 +61,7 @@ func WithEnv(cmd string, env map[string]string) string {
 	sort.Strings(keys)
 	var b strings.Builder
 	for _, k := range keys {
+		mustValidEnvName("WithEnv", k)
 		fmt.Fprintf(&b, "export %s='%s'; ", k, SingleQuoteEscape(env[k]))
 	}
 	b.WriteString(cmd)

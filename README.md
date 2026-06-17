@@ -1,7 +1,11 @@
 <div align="center">
 
-# cPanel_self-migration
-Simple cPanel-to-cPanel hosting migration tool
+# cPanel Self-Migration
+
+### Move an entire cPanel account to a new host yourself, in one command.
+
+**Email, websites, and databases, plus the domains they need.**
+**No root. No WHM. The old host is never touched.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/Go-1.25+-success.svg?logo=go)](https://go.dev/)
@@ -11,96 +15,214 @@ Simple cPanel-to-cPanel hosting migration tool
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/tis24dev/cPanel_self-migration/codeql.yml?label=CodeQL&logo=github)](https://github.com/tis24dev/cPanel_self-migration/actions/workflows/codeql.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-success?logo=dependabot)](https://github.com/tis24dev/cPanel_self-migration/network/updates)
 [![cPanel](https://img.shields.io/badge/cPanel-to--cPanel-FF6C2C.svg?logo=cpanel&logoColor=white)](https://cpanel.net/)
-[![💖 Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
-[![☕ Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee)](https://github.com/sponsors/tis24dev)
-[![💸 Donate](https://img.shields.io/badge/Donate-PayPal-blue?logo=paypal)](https://paypal.me/DNoventa)
+
+[Quick start](#quick-start) · [Why](#why) · [Safety](#safety--trust) · [Docs](docs/USAGE.md)
+
 </div>
 
+---
 
-Migrates a cPanel account — **email mailboxes, website files, and MySQL
-databases**, plus the domains they need — between two cPanel accounts using only
-user-level SSH (no root/WHM). **The SOURCE host is always read-only; all writes
-target the DESTINATION.** This machine acts as a bridge: SRC → (Go pipe) → DEST.
+## Why
 
-## Installation
+Moving away from a cPanel host should not require root access, WHM access, a paid
+migration ticket, or a weekend of manual `rsync`, mailbox repair, SQL dumps, and
+DNS guesswork.
+
+cPanel Self-Migration gives account owners, freelancers, and small hosting teams a
+repeatable way to move an account with only normal cPanel SSH credentials. It
+previews first, writes only to the destination, and verifies the result after the
+copy.
+
+| Built for | What it means |
+|-----------|---------------|
+| **Account owners** | Move your own cPanel account without waiting on support. |
+| **Agencies** | Repeat the same migration process across many small client accounts. |
+| **Host changes** | Copy mail, sites, databases, and missing domains into a new cPanel account. |
+| **Low-risk cutovers** | Dry-run first, apply later, verify before DNS cutover. |
+
+## What it migrates
+
+| Area | What is handled |
+|------|-----------------|
+| **Email** | Mailboxes, folders, messages, password hashes, UIDs, and UIDVALIDITY. |
+| **Websites** | Full docroots streamed from source to destination. |
+| **Databases** | MySQL data, users, grants, and supported CMS config rewrites. |
+| **Domains** | Missing addon domains and subdomains created on the destination. |
+
+Run everything together, or migrate only one area with `--mail`, `--file`, or
+`--db`.
+
+## Built for safe migrations
+
+- **Source is read-only.** The old host is analyzed and copied from; all writes go
+  to the new host.
+- **Dry-run by default.** Running `cpanel-self-migration` with no flags previews
+  the move and writes nothing.
+- **Designed for retries.** If a transfer is interrupted, run it again. Matching
+  data is skipped and unfinished work continues.
+- **Verified after copy.** Mailbox state, file trees, and database contents are
+  checked after migration. Use `--deep-verify` for content-hash verification.
+- **No server agent.** The tool runs from your machine and connects over SSH to
+  each cPanel account.
+
+## Quick start
+
+**1. Install**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tis24dev/cPanel_self-migration/main/install.sh | bash
 ```
 
-🔒 **No root/sudo required.** Installs the latest **signed** release (ECDSA P-256 + SHA256 verified) under your user prefix (`~/.local` by default), and symlinks it into `~/.local/bin`; re-runs replace the binary but never touch your `configs/host.yaml`. (For a system-wide install: `PREFIX=/usr/local sudo bash install.sh`.) Setup & usage: **[docs/USAGE.md](docs/USAGE.md)**.
+The installer downloads the latest signed release under `~/.local` and adds it to
+your `PATH`.
 
-## Design highlights
+**2. Configure**
 
-- **Robustness**: cPanel JSON parsed with `encoding/json` + typed structs.
-  Password hashes (`$6$…`) and other params are passed as SSH session
-  environment variables, never interpolated into a command line.
-- **Native SSH**: `golang.org/x/crypto/ssh`. Passwords live only in memory
-  (never visible in `ps`). One reused connection per host. Host keys follow
-  `accept-new` (unknown → trusted and recorded; changed → rejected).
-- **Tests**: an extensive unit/golden test suite covering batching, domain
-  mapping, account idempotency, JSON parsing, the plan/analysis renderers
-  (golden, byte-for-byte against committed reference output), and a real local
-  `tar`-bridge round-trip.
-- **Maildir transfer = streaming tarball**: `tar -c` on the read-only source is
-  piped through this process into `tar -x` on the destination — one continuous
-  stream, no per-file round-trips, idempotent. Message files extract with
-  `--keep-newer-files` (already-delivered mail is never clobbered); the Dovecot
-  control files extract with `--overwrite` so the source's `dovecot-uidlist`
-  always lands. Split into ≤500 MB batches with per-batch retries; `dovecot.index*`
-  excluded, `dovecot-uidlist` preserved (UIDs/UIDVALIDITY survive).
+Create `configs/host.yaml` with your source and destination cPanel SSH accounts:
 
-## Usage
+```yaml
+src:                       # SOURCE, read-only
+  ip: "192.0.2.10"
+  port: 22
+  ssh_user: "your_cpanel_user"
+  ssh_pass: "********"
+  timeout: "10s"
 
-**Build from source:**
-
-```sh
-cp configs/host_template.yaml configs/host.yaml   # fill in real SRC/DEST credentials
-make build                                         # -> ./cpanel-self-migration
-
-./cpanel-self-migration                # dry-run: analyze + compare SRC/DEST (mail + files + databases)
-./cpanel-self-migration --apply        # migrate everything: domains + mailboxes + website files + databases
-./cpanel-self-migration --apply --db   # migrate only one kind (any of --mail / --file / --db; combine freely)
-./cpanel-self-migration --apply --full --verify-checksums  # mail-only knobs: force re-sync / strict skip
-./cpanel-self-migration --apply --deep-verify  # verify by CONTENT hash (sha256 per file/message, exact DB row counts) — slower, catches same-size corruption
-./cpanel-self-migration --apply-mirror --mail  # MIRROR mail: dest = exact copy of src (dest-only mail -> <user>-bak; NOT after MX switch)
-./cpanel-self-migration --config /path/to/host.yaml
-./cpanel-self-migration --version      # print the build version
+dest:                      # DESTINATION, receives all writes
+  ip: "198.51.100.20"
+  port: 22
+  ssh_user: "your_cpanel_user"
+  ssh_pass: "********"
+  timeout: "10s"
 ```
 
-`host.yaml` is loaded from `configs/host.yaml` by default (next to the binary
-or in the current directory); override with `--config`.
+Keep this file private:
 
-Default mode is **dry-run** and writes nothing to either server.
+```sh
+chmod 600 configs/host.yaml
+```
 
-📖 Full command guide (dry-run, `--apply`, `--apply-mirror`, `--full`,
-`--verify-checksums`, interruption, exit codes, cutover procedure):
-**[docs/USAGE.md](docs/USAGE.md)**.
+**3. Preview**
 
-## Phases
+See what would move without changing either account:
+
+```sh
+cpanel-self-migration
+```
+
+**4. Apply**
+
+When the preview looks right, migrate to the destination:
+
+```sh
+cpanel-self-migration --apply
+```
+
+For byte-level verification, run:
+
+```sh
+cpanel-self-migration --apply --deep-verify
+```
+
+## Safety & trust
+
+The tool is built around a simple rule: the source account is never the write
+target. The migration is a one-way flow from source to destination.
+
+- **Signed releases.** Release artifacts are signed with ECDSA P-256 + SHA256 and
+  ship with a CycloneDX SBOM.
+- **Secret-aware logging.** Normal logs avoid secret values, and debug response
+  logging redacts secret-shaped fields.
+- **Host-key protection.** Unknown SSH host keys are accepted once and recorded;
+  changed keys are rejected.
+- **CI coverage.** The project runs unit tests, integration tests, race tests,
+  CodeQL, govulncheck, GoSec, and dependency review in GitHub Actions.
+
+## Common workflows
+
+```sh
+cpanel-self-migration --apply --mail
+cpanel-self-migration --apply --file
+cpanel-self-migration --apply --db
+cpanel-self-migration --apply --deep-verify
+cpanel-self-migration --apply-mirror --mail
+cpanel-self-migration --config /path/to/host.yaml
+cpanel-self-migration --version
+```
+
+Full flag reference: **[docs/COMMAND.md](docs/COMMAND.md)**.
+Cutover procedure and exit codes: **[docs/USAGE.md](docs/USAGE.md)**.
+
+---
+
+<details>
+<summary><b>What happens, step by step</b></summary>
+
+<br>
 
 1. **Connect** to source and destination.
-2. **Analyze & compare (read-only)** the selected data SRC ↔ DEST — mailboxes
-   (`~/mail`), website docroots, and MySQL databases — classifying each item as
-   IDENTICAL / DIFFERS / TO MIGRATE → `logs/*_analysis.log`.
-3. **--apply: create domains** — SRC domains missing on DEST are created as
-   addon/subdomains via a temporary API token that is always revoked.
-4. **--apply: migrate mailboxes** — idempotent account create/update preserving
+2. **Analyze and compare** the selected data source-to-destination, classifying
+   mailboxes, website docroots, and MySQL databases as
+   IDENTICAL / DIFFERS / TO MIGRATE into `logs/*_analysis.log`.
+3. **`--apply`: create domains.** SRC domains missing on DEST are created as
+   addon / subdomains via a temporary API token that is always revoked.
+4. **`--apply`: migrate mailboxes.** Idempotent account create/update preserving
    the password hash; fast-skip when count + UIDVALIDITY already match; maildir
    tar-streamed in batches. (`--apply-mirror` instead renames the dest mailbox
    aside to `<user>-bak` and re-copies in full, for an exact source mirror.)
-5. **--apply: copy website files** — each docroot mirrored to DEST via the tar
+5. **`--apply`: copy website files.** Each docroot mirrored to DEST via the tar
    bridge (the destination docroot is emptied first, within a safety guard; an
    empty source backs the destination up aside instead of wiping it).
-6. **--apply: migrate databases** — dumped and loaded via `mysqldump | mysql`,
+6. **`--apply`: migrate databases.** Dumped and loaded via `mysqldump | mysql`,
    remapping the account prefix, then each site's config is rewritten to the new DB.
-7. **--apply: verify** each flow (mailbox count + UIDVALIDITY, docroot file count
-   + bytes, database table/object counts) → `logs/migration_report.log`.
+7. **`--apply`: verify** each flow (mailbox count + UIDVALIDITY, docroot file count
+   + bytes, database table/object counts) into `logs/migration_report.log`.
 
-Only the steps for the selected flows (`--mail` / `--file` / `--db`; all if none)
-run. Full step list and order: **[docs/USAGE.md](docs/USAGE.md)**.
+Only the selected flows run. With none of `--mail`, `--file`, or `--db`, all flows
+run.
 
-## Layout
+</details>
+
+<details>
+<summary><b>Under the hood</b></summary>
+
+<br>
+
+- **Native SSH.** Built on `golang.org/x/crypto/ssh`; no daemon or agent is
+  installed on either server.
+- **Streaming transfers.** Web and mail data move through tar streams instead of
+  per-file round trips.
+- **cPanel-aware operations.** Domains, mail accounts, MySQL users, and API tokens
+  are handled through cPanel user-level interfaces.
+- **CMS config rewrite.** Supported site configs are rewritten to destination DB
+  names, users, and passwords after database migration.
+- **Reports.** Analysis and migration reports are written under `logs/`.
+
+</details>
+
+<details>
+<summary><b>Build and test</b></summary>
+
+<br>
+
+Build from source:
+
+```sh
+cp configs/host_template.yaml configs/host.yaml
+make build
+```
+
+Run the local test suite:
+
+```sh
+make test
+make test-race
+```
+
+The tests include pure Go unit tests, golden report tests, and in-process SSH
+integration tests. No live cPanel host is required.
+
+Project layout:
 
 ```text
 configs/            host.yaml (gitignored) + host_template.yaml
@@ -121,44 +243,33 @@ internal/migrate    orchestration of the migration phases
 internal/version    build metadata (injected via ldflags at release)
 ```
 
-## CI / CD (`.github/`)
+</details>
 
-GitHub Actions workflows:
+<details>
+<summary><b>CI/CD and releases</b></summary>
 
-- **codecov.yml** — tests + coverage upload (push to `main`/`dev` and PRs).
-- **race.yml** — `go test -race` on every push/PR.
-- **security-ultimate.yml** — Staticcheck, govulncheck, and GoSec (SARIF); also
-  runs weekly.
-- **codeql.yml** — GitHub CodeQL analysis for Go (push/PR on `main`/`dev` +
-  weekly).
-- **dependency-review.yml** — license/vulnerability gate on dependency PRs.
-- **dependabot.yml** + **dependabot-automerge.yml** — weekly gomod/actions
-  updates, auto-approve+merge for patch/minor, manual review for major.
-- **release-intake.yml** / **release-guard.yml** / **post-merge-release.yml** —
-  governed release flow: pushing a `vX.Y.Z` tag on `dev` HEAD opens a `dev→main`
-  release PR; `release-guard` validates it; on squash-merge `post-merge-release`
-  realigns `dev` onto the squash commit (lease-protected) and re-applies the tag
-  there, which triggers `release.yml`. Needs a `RELEASE_BOT_TOKEN_CPANEL` PAT secret.
-- **release.yml** + **.goreleaser.yml** — on a `vX.Y.Z` tag that is on `main`
-  (gated): build, archives, SHA256SUMS, CycloneDX SBOM, GitHub release, and
-  build-provenance attestation.
-- **autotag.yml** — semantic auto-tagging from commit messages (disabled by
-  default; remove `if: false` to enable).
+<br>
 
-## Tests
+The repository uses GitHub Actions for tests, coverage, race testing, CodeQL,
+govulncheck, GoSec, dependency review, Dependabot, and the governed release flow.
+Releases are built with GoReleaser and published with checksums, SBOM, signature,
+and provenance metadata.
 
-```sh
-make test        # unit + golden + in-process integration (no network, no cPanel)
-make test-race   # the same suite under the race detector
-```
+</details>
 
-`make test` runs everything: pure-Go unit and golden tests plus **integration
-tests** that drive the real SSH transport and the real remote shell commands
-(`tar`/`find`/`mysqldump`/`awk`) against an **in-process SSH server** in a temp
-`HOME` — no live cPanel host is needed. Those tests skip automatically where
-`bash`, `tar`, or `mysql` is unavailable. CI runs the same suite (codecov for
-coverage, a separate workflow under `-race`).
+---
 
-A golden test compares the `mail_analysis.log` output byte-for-byte against a
-committed reference artifact (timestamp line normalized), guarding the
-read/parse/render path against regressions.
+## Documentation
+
+- **[docs/USAGE.md](docs/USAGE.md)**: full setup, modes, cutover procedure, exit codes
+- **[docs/COMMAND.md](docs/COMMAND.md)**: complete flag reference
+
+## 💖 Support
+
+If this tool saved you a migration headache, consider supporting its development:
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee)](https://github.com/sponsors/tis24dev)
+[![Donate](https://img.shields.io/badge/Donate-PayPal-blue?logo=paypal)](https://paypal.me/DNoventa)
+
+Released under the [MIT License](https://opensource.org/licenses/MIT).

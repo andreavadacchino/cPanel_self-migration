@@ -353,3 +353,55 @@ func TestEnsureAccountScriptReportsFailureWhenShadowMvFails(t *testing.T) {
 	// And the orphan temp file is cleaned up.
 	assertOnlyShadow(t, shPath)
 }
+
+// TestEnsureAccountScriptKeepsHashOutOfAwkArgv (A2): the shadow-rewrite awk must
+// read the password hash from ENVIRON, never from a `-v h=` argument, so the hash
+// is not visible in awk's /proc/<pid>/cmdline. A stub awk records its argv and then
+// execs the real awk: the captured argv must NOT contain the hash, yet the rewrite
+// must still succeed (proving ENVIRON delivered the value).
+func TestEnsureAccountScriptKeepsHashOutOfAwkArgv(t *testing.T) {
+	requireBashAwk(t)
+	realAwk, err := exec.LookPath("awk")
+	if err != nil {
+		t.Skip("awk not found")
+	}
+	home := t.TempDir()
+	dom := "domain4.example"
+	shPath := writeShadow(t, home, dom, "homelab:$6$OLD$old:19000:0:99999:7:::\n")
+
+	capture := filepath.Join(t.TempDir(), "awk_argv")
+	stubDir := t.TempDir()
+	stub := "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done >> \"" + capture + "\"\nexec " + realAwk + " \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "awk"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	const hash = "$6$SECRETSALT$SECRETHASHvalue1234567890"
+	out := runEnsureScript(t, home, map[string]string{
+		"DOM": dom, "USER": "homelab", "HASH": hash,
+	}, stubDir)
+	if !strings.Contains(out, "UPDATED") {
+		t.Fatalf("rewrite must still succeed via ENVIRON, got %q", out)
+	}
+	if got, _ := os.ReadFile(shPath); !strings.Contains(string(got), hash) {
+		t.Errorf("ENVIRON hash was not written into the shadow:\n%s", got)
+	}
+	argv, _ := os.ReadFile(capture)
+	if len(argv) == 0 {
+		t.Fatal("stub awk captured no argv (was it invoked?)")
+	}
+	if strings.Contains(string(argv), hash) {
+		t.Errorf("password hash leaked into awk argv:\n%s", argv)
+	}
+}
+
+// TestEnsureAccountScriptAwkUsesEnvironNotArgv (A2): static guard that the script
+// reads the hash via ENVIRON and never via a `-v h=` awk argument.
+func TestEnsureAccountScriptAwkUsesEnvironNotArgv(t *testing.T) {
+	if !strings.Contains(ensureAccountScript, `ENVIRON["HASH"]`) {
+		t.Error(`shadow-rewrite awk must read the hash via ENVIRON["HASH"]`)
+	}
+	if strings.Contains(ensureAccountScript, "-v h=") {
+		t.Error(`awk must not receive the hash as a "-v h=" argument (argv leak)`)
+	}
+}

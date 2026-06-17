@@ -29,6 +29,7 @@ root/WHM).
 15. [Interruption (Ctrl-C)](#15-interruption-ctrl-c)
 16. [Exit codes](#16-exit-codes)
 17. [Recommended cutover procedure](#17-recommended-cutover-procedure)
+18. [Security notes (secret handling)](#18-security-notes-secret-handling)
 
 ---
 
@@ -712,3 +713,41 @@ after the MX has been switched to the new server).
 > **before** step 5 (e.g. to clear a DEST AHEAD or a botched mailbox), **never
 > after** the MX switch — once the new server is receiving live mail, a mirror
 > run would move that mail aside to `-bak`.
+
+## 18. Security notes (secret handling)
+
+The tool handles two kinds of secret on the destination host: **MySQL user
+passwords** (created/aligned so the rewritten CMS config can connect) and
+**mailbox password hashes** (replicated so existing mail clients keep working).
+How they are transported is designed to keep them out of places other local users
+could read:
+
+- **Over SSH** — every secret travels out-of-band: as an SSH **environment
+  variable**, or (if the server rejects `Setenv`) as a single-quote-escaped
+  `export` line read from the script's **stdin**. Either way it is never on the
+  remote command line / argv.
+- **`mysqldump` / `mysql`** — the DB password is passed via `MYSQL_PWD` (the
+  client reads it from the environment), so it is never on those tools' argv.
+- **Shadow-file rewrite** — the mailbox hash is read by `awk` from `ENVIRON`, not
+  from a `-v` argument, so it is never on `awk`'s argv. The rewritten shadow temp
+  file is created `umask 077` (owner-only).
+- **Addon-domain creation** — uses a short-lived, immediately-revoked API token
+  read by `curl` from `--config -` (stdin), so the token is never on `curl`'s argv.
+
+**Residual exposure (by design, bounded).** A few writes must go through the
+`uapi` command-line tool — `Mysql::create_user` / `Mysql::set_password` (MySQL
+password) and the `Email::add_pop` create fallback (mailbox `password_hash`). The
+`uapi` CLI accepts parameters **only on its command line** (it has no stdin /
+`--input` mode), so for the duration of each such call the value is visible in
+`/proc/<uapi-pid>/cmdline` on the destination host. This is bounded by:
+
+- the **short window** (one UAPI call), and
+- **`/proc` isolation** — a standard cPanel host runs `hidepid`/CageFS, so a
+  co-tenant account cannot see another account's processes at all; the entry is
+  readable only by the same account (which already owns these credentials) and by
+  `root` (the host administrator).
+
+There is no argv-free way to pass a parameter through the `uapi` CLI. If you are
+migrating onto a host **without** `/proc` isolation **and** with untrusted local
+co-tenants, treat these credentials as potentially observable during the apply
+window and rotate the affected MySQL password afterward.

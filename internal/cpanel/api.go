@@ -4,8 +4,19 @@
 // The tool runs on a third (bridge) machine, so the cPanel binaries (`uapi`,
 // and the api2 `curl` to 127.0.0.1:2083) must execute ON the cPanel host. Each
 // call is therefore shipped as a small remote shell snippet over SSH; responses
-// are parsed with encoding/json into typed structs, and arguments are passed as
-// environment variables instead of being interpolated into a command line.
+// are parsed with encoding/json into typed structs.
+//
+// Argument VALUES travel as environment variables (ARG_<i>), so they are never
+// spliced into the SSH command string itself. Note, however, that the `uapi` CLI
+// takes its parameters on the command line and has no stdin/--input mechanism, so
+// the generated snippet does `uapi … key="$ARG_i"`: the shell expands the value
+// into the argv of the spawned `uapi` PROCESS, where a secret (a MySQL password, a
+// mailbox password_hash) is visible in /proc/<pid>/cmdline for the call's duration.
+// This is bounded by /proc isolation (cPanel hosts typically run hidepid/CageFS, so
+// co-tenants cannot see the process) and by the short call window; there is no
+// argv-free alternative while using the uapi CLI. The token-authenticated api2
+// `curl` path (addon.go) avoids it by reading the token from `curl --config -`
+// (stdin). See uapiArgsScript and docs/USAGE.md for the residual-exposure note.
 package cpanel
 
 import (
@@ -27,8 +38,17 @@ type Runner interface {
 
 // uapiArgsScript builds a tiny bash snippet that invokes `uapi` with the given
 // module/function and arg keys, reading each arg VALUE from an environment
-// variable (ARG_<i>) so nothing sensitive is interpolated into the command.
+// variable (ARG_<i>) so the value is never spliced into the SSH command string.
 // The arg KEYS are fixed identifiers (k=v form), safe to inline.
+//
+// RESIDUAL EXPOSURE: the `uapi` CLI accepts parameters only on its command line
+// (it has no stdin/--input mode), so `key="$ARG_i"` is expanded by the remote
+// shell into the argv of the spawned `uapi` process. A secret argument (a MySQL
+// password from create_user/set_password) is therefore visible in
+// /proc/<uapi-pid>/cmdline for the brief duration of that call. There is no
+// argv-free way to pass it through the uapi CLI; the exposure is bounded by /proc
+// isolation (hidepid/CageFS on a typical cPanel host) and the short call window.
+// See the package doc and docs/USAGE.md.
 func uapiArgsScript(module, fn string, args map[string]string) (string, map[string]string) {
 	env := map[string]string{}
 	var b strings.Builder
@@ -88,12 +108,18 @@ func parseUAPI[T any](module, fn string, out []byte) (T, error) {
 	}
 	if env.Result.Status != 1 {
 		msgs := errStrings(env.Result.Errors)
-		// On failure the response carries no token (Tokens::create_full_access only
-		// returns one on status==1), so a bounded raw snippet here is safe — and it is
-		// the only way to diagnose an exotic cPanel build that reports the failure in
-		// `messages`, or in an `errors` shape errStrings cannot decode. Debug-only.
+		// Debug-only. The RAW body is REDACTED (redactJSONForDebug) before logging: a
+		// failure response carries no token (Tokens::create_full_access returns one only on
+		// status==1), but some cPanel builds echo request INPUT back into the body, so a
+		// create_user/add_pop failure could carry the password/hash under a data field —
+		// redaction strips sensitive KEYS (and withholds a non-JSON body) while keeping the
+		// diagnostic shape. NOTE the residual: redaction is KEY-based, so a secret a build
+		// interpolates INSIDE an errors/messages STRING is NOT detected — and those strings
+		// are also logged here (errors=%v / messages=%v) and returned in the error below.
+		// In practice cPanel error text describes the problem rather than echoing the
+		// submitted value, but treat the errors/messages strings as un-redacted.
 		logx.Debug("%s::%s: UAPI non-success status=%d errors=%v messages=%v raw=%s",
-			module, fn, env.Result.Status, msgs, errStrings(env.Result.Messages), logx.Snippet(out, 300))
+			module, fn, env.Result.Status, msgs, errStrings(env.Result.Messages), redactJSONForDebug(out))
 		return zero, fmt.Errorf("%s::%s: status=%d errors=%v", module, fn, env.Result.Status, msgs)
 	}
 	return env.Result.Data, nil
