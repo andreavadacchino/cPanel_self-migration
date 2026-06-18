@@ -350,7 +350,13 @@ func gatherOpCount(doMail, doFile, doDB bool) int {
 // never gathered (i.e. neither web files nor databases are in scope: pd has nil
 // docroot slices), so a mail-only apply does not do useless reads. The same
 // validation policy as gatherData is applied to the SOURCE domain names.
-func refreshDocroots(ctx context.Context, p *sshx.Pool, pd *migrationData, log *logx.Logger) error {
+// refreshDocroots re-reads the source and destination docroots after domain
+// creation so the web/db phases see newly-created destination docroots. onlyDomain
+// (the --domain filter, "" when unset) is re-applied to the freshly-read SOURCE
+// docroots: a full re-read would otherwise silently UNDO the early scope filter
+// and widen the web phase (which empties the dest docroot) back to every domain.
+// DestDocroots stays full (collision detection needs the whole picture).
+func refreshDocroots(ctx context.Context, p *sshx.Pool, pd *migrationData, log *logx.Logger, onlyDomain string) error {
 	if pd.SrcDocroots == nil && pd.DestDocroots == nil {
 		return nil // docroots not in scope (mail-only) — nothing to refresh
 	}
@@ -364,6 +370,9 @@ func refreshDocroots(ctx context.Context, p *sshx.Pool, pd *migrationData, log *
 	}
 	pd.SrcDocroots = filterValid(log, "docroot domain", srcDocroots,
 		func(e cpanel.DomainDataEntry) string { return e.Domain }, validate.Domain)
+	if onlyDomain != "" {
+		pd.SrcDocroots = filterDocrootsToDomain(pd.SrcDocroots, onlyDomain)
+	}
 	pd.DestDocroots = destDocroots
 	return nil
 }

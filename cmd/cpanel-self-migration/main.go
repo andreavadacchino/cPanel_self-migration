@@ -17,6 +17,7 @@ import (
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
 	"github.com/tis24dev/cPanel_self-migration/internal/logx"
 	"github.com/tis24dev/cPanel_self-migration/internal/migrate"
+	"github.com/tis24dev/cPanel_self-migration/internal/validate"
 	"github.com/tis24dev/cPanel_self-migration/internal/version"
 )
 
@@ -27,6 +28,8 @@ func main() {
 		mailFlag    = flag.Bool("mail", false, "migrate mail (mailboxes) only; default (no --mail/--file/--db) does ALL")
 		fileFlag    = flag.Bool("file", false, "migrate website files (docroots) only; default does ALL")
 		dbFlag      = flag.Bool("db", false, "migrate databases (MySQL) only; default does ALL")
+		onlyDomain  = flag.String("domain", "", "narrow to a single domain (docroot + mail); composes with --mail/--file; never databases")
+		onlyMailbox = flag.String("mailbox", "", "narrow to a single mailbox local@domain (implies mail only)")
 		full        = flag.Bool("full", false, "with --apply, force re-sync of every mailbox even if consistent")
 		forceSync   = flag.Bool("force-sync", false, "alias of --full")
 		applyMirror = flag.Bool("apply-mirror", false, "like --apply, but MIRROR each mailbox: rename the destination mailbox aside (<user>-bak) and re-copy ALL messages from the source, so mail that exists only on the dest is removed from the live mailbox. Files/databases behave as under --apply.")
@@ -66,6 +69,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error: --apply and --apply-mirror are mutually exclusive")
 		os.Exit(2)
 	}
+	if err := validateScopeFilters(*onlyDomain, *onlyMailbox, *mailFlag, *fileFlag, *dbFlag); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(2)
+	}
 
 	path, altConfigs, err := resolveConfigPath(*cfgPath)
 	if err != nil {
@@ -97,12 +104,25 @@ func main() {
 	defer cancel()
 	go handleSignals(cancel)
 
-	// Selection: --mail / --file / --db choose what to migrate. With NONE set, do
-	// all (the default). Setting several explicitly is valid; setting all three is
-	// equivalent to none.
+	// Selection: --mail / --file / --db choose WHAT to migrate; --domain / --mailbox
+	// narrow WHICH domain or mailbox. With no kind flag set the default is "all",
+	// with two exceptions: --mailbox is mail-only, and --domain defaults to
+	// docroot+mail and NEVER databases (cPanel databases are account-wide and only
+	// loosely tied to a domain). validateScopeFilters has already rejected the
+	// illegal combinations (e.g. --domain --db, --mailbox --file).
 	doMail, doFile, doDB := *mailFlag, *fileFlag, *dbFlag
-	if !doMail && !doFile && !doDB {
-		doMail, doFile, doDB = true, true, true
+	switch {
+	case *onlyMailbox != "":
+		doMail, doFile, doDB = true, false, false
+	case *onlyDomain != "":
+		if !doMail && !doFile {
+			doMail, doFile = true, true
+		}
+		doDB = false
+	default:
+		if !doMail && !doFile && !doDB {
+			doMail, doFile, doDB = true, true, true
+		}
 	}
 
 	// --apply-mirror only changes the mail flow; warn (but proceed) if mail is not
@@ -129,6 +149,8 @@ func main() {
 		DoMail:          doMail,
 		DoFile:          doFile,
 		DoDB:            doDB,
+		OnlyDomain:      *onlyDomain,
+		OnlyMailbox:     *onlyMailbox,
 		OutputDir:       outDir,
 	}
 
@@ -217,10 +239,46 @@ func resolveConfigPath(explicit string) (path string, alternates []string, err e
 	return found[0], found[1:], nil
 }
 
+// validateScopeFilters checks the --domain/--mailbox narrowing flags and their
+// interaction with the kind flags (--mail/--file/--db). It returns a user-facing
+// error (nil when the combination is valid). --mailbox is mail-only and already
+// names its own domain; --domain composes with --mail/--file but NEVER with
+// databases (cPanel databases are account-wide and only loosely tied to a domain
+// by the wp-config path).
+func validateScopeFilters(onlyDomain, onlyMailbox string, mailFlag, fileFlag, dbFlag bool) error {
+	if onlyMailbox != "" {
+		if onlyDomain != "" {
+			return fmt.Errorf("--mailbox and --domain are mutually exclusive (a mailbox already names its domain)")
+		}
+		if fileFlag || dbFlag {
+			return fmt.Errorf("--mailbox is mail-only; do not combine it with --file/--db")
+		}
+		local, domain, ok := migrate.SplitMailbox(onlyMailbox)
+		if !ok {
+			return fmt.Errorf("invalid --mailbox %q: must be local@domain", onlyMailbox)
+		}
+		if err := validate.MailboxUser(local); err != nil {
+			return fmt.Errorf("invalid --mailbox %q: %v", onlyMailbox, err)
+		}
+		if err := validate.Domain(domain); err != nil {
+			return fmt.Errorf("invalid --mailbox %q: %v", onlyMailbox, err)
+		}
+	}
+	if onlyDomain != "" {
+		if dbFlag {
+			return fmt.Errorf("--domain does not support databases (cPanel databases are account-wide); drop --db, or migrate databases without --domain")
+		}
+		if err := validate.Domain(onlyDomain); err != nil {
+			return fmt.Errorf("invalid --domain %q: %v", onlyDomain, err)
+		}
+	}
+	return nil
+}
+
 func usage() {
 	fmt.Fprintf(os.Stderr, `cpanel-self-migration — cPanel email + website-file + database migration tool
 
-Usage: %s [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--full] [--verify-checksums] [--config PATH] [--log-level LEVEL]
+Usage: %s [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--domain DOMAIN] [--mailbox ADDR] [--full] [--verify-checksums] [--deep-verify] [--config PATH] [--log-level LEVEL]
 
   (default) dry-run  : analyze + compare SOURCE/DEST, no changes
   --apply            : create missing domains + migrate the selected data
@@ -232,6 +290,12 @@ Usage: %s [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--full] [
   --file             : migrate WEBSITE FILES only (docroots / public_html)
   --db               : migrate DATABASES only (MySQL: data + users + grants)
                        (with none of --mail/--file/--db, ALL are migrated)
+  --domain DOMAIN    : narrow to a single domain — its docroot + mailboxes;
+                       composes with --mail/--file (e.g. --domain X --mail).
+                       Databases are NOT in --domain scope (--domain --db is
+                       rejected: cPanel databases are account-wide)
+  --mailbox ADDR     : narrow to a single mailbox (local@domain); copies +
+                       verifies only that mailbox (implies mail only)
   --full             : with --apply, force re-sync of every mailbox
   --verify-checksums : with --apply, compare the exact message-ID set when
                        count+UIDVALIDITY match, before skipping a mailbox

@@ -34,7 +34,7 @@ func applyDomains(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd *m
 	}
 	overrides := dbOverrides(cfg)
 	docrootsInScope := pd.SrcDocroots != nil || pd.DestDocroots != nil
-	if err := refreshDocroots(ctx, pool, pd, log); err != nil {
+	if err := refreshDocroots(ctx, pool, pd, log, opts.OnlyDomain); err != nil {
 		return domRep.StepError(err)
 	}
 	uses := updateSelectedDomainCoverage(pd, opts, overrides)
@@ -134,7 +134,7 @@ func applyDomains(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd *m
 	reportCreatedDomains(attemptedOK, created, *pd, domRep)
 
 	if docrootsInScope {
-		if err := refreshDocroots(ctx, pool, pd, log); err != nil {
+		if err := refreshDocroots(ctx, pool, pd, log, opts.OnlyDomain); err != nil {
 			return domRep.StepError(err)
 		}
 	} else if len(addons) > 0 {

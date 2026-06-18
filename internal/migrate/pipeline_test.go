@@ -34,21 +34,87 @@ func TestBuildPipelineStepCounts(t *testing.T) {
 	}
 }
 
-func TestScopeLabel(t *testing.T) {
+func TestResolveScopeFlags(t *testing.T) {
 	cases := []struct {
-		doMail, doFile, doDB bool
-		want                 string
+		name              string
+		in                Options // DoMail/DoFile/DoDB + OnlyDomain/OnlyMailbox
+		wMail, wFile, wDB bool
 	}{
-		{true, true, true, "mail + web files + databases"},
-		{true, false, false, "mail only"},
-		{false, true, false, "web files only"},
-		{false, false, true, "databases only"},
-		{true, false, true, "mail + databases"},
-		{false, true, true, "web files + databases"},
+		{"none => all", Options{}, true, true, true},
+		{"mail only", Options{DoMail: true}, true, false, false},
+		{"file only", Options{DoFile: true}, false, true, false},
+		{"db only", Options{DoDB: true}, false, false, true},
+		// --mailbox is mail-only even if a caller set stray file/db flags.
+		{"mailbox forces mail-only", Options{OnlyMailbox: "a@d", DoFile: true, DoDB: true}, true, false, false},
+		{"mailbox with nothing set", Options{OnlyMailbox: "a@d"}, true, false, false},
+		// --domain never includes DB and defaults to docroot+mail.
+		{"domain bare => docroot+mail", Options{OnlyDomain: "d"}, true, true, false},
+		{"domain drops stray db", Options{OnlyDomain: "d", DoDB: true}, true, true, false},
+		{"domain + mail only", Options{OnlyDomain: "d", DoMail: true}, true, false, false},
+		{"domain + file only", Options{OnlyDomain: "d", DoFile: true}, false, true, false},
+		{"domain + mail + stray db", Options{OnlyDomain: "d", DoMail: true, DoDB: true}, true, false, false},
 	}
 	for _, c := range cases {
-		if got := scopeLabel(c.doMail, c.doFile, c.doDB); got != c.want {
-			t.Errorf("scopeLabel(%v,%v,%v) = %q, want %q", c.doMail, c.doFile, c.doDB, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			m, f, d := resolveScopeFlags(c.in)
+			if m != c.wMail || f != c.wFile || d != c.wDB {
+				t.Errorf("resolveScopeFlags(%+v) = (%v,%v,%v), want (%v,%v,%v)", c.in, m, f, d, c.wMail, c.wFile, c.wDB)
+			}
+		})
+	}
+}
+
+func TestScopeLabel(t *testing.T) {
+	cases := []struct {
+		doMail, doFile, doDB    bool
+		onlyDomain, onlyMailbox string
+		want                    string
+	}{
+		{true, true, true, "", "", "mail + web files + databases"},
+		{true, false, false, "", "", "mail only"},
+		{false, true, false, "", "", "web files only"},
+		{false, false, true, "", "", "databases only"},
+		{true, false, true, "", "", "mail + databases"},
+		{false, true, true, "", "", "web files + databases"},
+		// --domain suffix appended to the base scope.
+		{true, false, false, "tissolution.it", "", "mail only (domain: tissolution.it)"},
+		{true, true, false, "tissolution.it", "", "mail + web files (domain: tissolution.it)"},
+		// --mailbox is mail-only with its own suffix.
+		{true, false, false, "", "info@tissolution.it", "mail only (mailbox: info@tissolution.it)"},
+	}
+	for _, c := range cases {
+		if got := scopeLabel(c.doMail, c.doFile, c.doDB, c.onlyDomain, c.onlyMailbox); got != c.want {
+			t.Errorf("scopeLabel(%v,%v,%v,%q,%q) = %q, want %q", c.doMail, c.doFile, c.doDB, c.onlyDomain, c.onlyMailbox, got, c.want)
+		}
+	}
+}
+
+func TestApplyCommand(t *testing.T) {
+	cases := []struct {
+		doMail, doFile, doDB    bool
+		onlyDomain, onlyMailbox string
+		want                    string
+	}{
+		// All selected (the default): a bare --apply is faithful.
+		{true, true, true, "", "", "--apply"},
+		// Narrowed kinds must be echoed, else --apply alone widens to ALL.
+		{true, false, false, "", "", "--apply --mail"},
+		{false, true, false, "", "", "--apply --file"},
+		{false, false, true, "", "", "--apply --db"},
+		{true, false, true, "", "", "--apply --mail --db"},
+		{false, true, true, "", "", "--apply --file --db"},
+		{true, true, false, "", "", "--apply --mail --file"},
+		// --domain default is docroot+mail: bare --apply --domain X (no kind flag).
+		{true, true, false, "tissolution.it", "", "--apply --domain tissolution.it"},
+		// Narrower than the default: emit the single kind flag.
+		{true, false, false, "tissolution.it", "", "--apply --mail --domain tissolution.it"},
+		{false, true, false, "tissolution.it", "", "--apply --file --domain tissolution.it"},
+		// --mailbox is self-describing and mail-only.
+		{true, false, false, "", "info@tissolution.it", "--apply --mailbox info@tissolution.it"},
+	}
+	for _, c := range cases {
+		if got := applyCommand(c.doMail, c.doFile, c.doDB, c.onlyDomain, c.onlyMailbox); got != c.want {
+			t.Errorf("applyCommand(%v,%v,%v,%q,%q) = %q, want %q", c.doMail, c.doFile, c.doDB, c.onlyDomain, c.onlyMailbox, got, c.want)
 		}
 	}
 }

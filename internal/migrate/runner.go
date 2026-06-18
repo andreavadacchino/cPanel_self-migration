@@ -49,11 +49,18 @@ type Options struct {
 	// migrate/verify); File covers the web-file flow (analyze/compare/copy/
 	// verify); DB covers the database flow (analyze/compare/migrate/verify).
 	// Domain creation runs when any is set.
-	DoMail    bool
-	DoFile    bool
-	DoDB      bool
-	OutputDir string // where artifacts (logs) are written
-	Now       time.Time
+	DoMail bool
+	DoFile bool
+	DoDB   bool
+	// OnlyDomain, when non-empty, narrows the run to a single source domain: its
+	// docroot and mailboxes (composed with DoMail/DoFile). Databases are NEVER in
+	// --domain scope. Validated against the source inventory at run time.
+	OnlyDomain string
+	// OnlyMailbox, when non-empty (local@domain), narrows the run to exactly one
+	// ACTIVE mailbox; it is inherently mail-only.
+	OnlyMailbox string
+	OutputDir   string // where artifacts (logs) are written
+	Now         time.Time
 }
 
 // timeFormat is the timestamp layout used in the log artifacts.
@@ -185,15 +192,29 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	destConfigured := cfg.DestConfigured()
 	destRef := hostRef{User: cfg.Dest.SSHUser, IP: cfg.Dest.IP, Port: cfg.Dest.Port}
 
-	// Default selection (defensive): if no flag is set, do all. main.go normally
-	// resolves this, but a programmatic caller might not.
-	doMail, doFile, doDB := opts.DoMail, opts.DoFile, opts.DoDB
-	if !doMail && !doFile && !doDB {
-		doMail, doFile, doDB = true, true, true
-		opts.DoMail, opts.DoFile, opts.DoDB = true, true, true
+	// Reject illegal scope combinations FAIL-FAST before any resolution. Options is
+	// exported, so a programmatic caller could otherwise have an invalid mix silently
+	// normalized by resolveScopeFlags (e.g. OnlyDomain+DoDB -> mail+file), quietly
+	// changing what gets migrated. The CLI never trips this (main.go already passes a
+	// resolved, valid Options), so it only protects non-CLI callers.
+	if err := validateScopeCombos(opts); err != nil {
+		return err
 	}
+	// Resolve WHAT to migrate (defensive: mirrors main.go's CLI resolution so a
+	// programmatic caller and buildPipeline's step count stay consistent). Kept in a
+	// pure helper so the coercion is unit-testable.
+	doMail, doFile, doDB := resolveScopeFlags(opts)
+	opts.DoMail, opts.DoFile, opts.DoDB = doMail, doFile, doDB
 	if opts.Apply && !destConfigured {
 		return fmt.Errorf("apply mode requires a configured destination; fill dest in host.yaml or run without --apply for source-only analysis")
+	}
+	// The --domain/--mailbox filters narrow a MIGRATION (compare against, and write
+	// to, a destination). Source-only analysis (no dest configured) covers the whole
+	// account; honoring the filter there is not implemented and the source-only path
+	// would otherwise skip target validation and emit a banner that disagrees with
+	// the account-wide artifacts. Reject up front instead of analyzing the wrong scope.
+	if (opts.OnlyDomain != "" || opts.OnlyMailbox != "") && !destConfigured {
+		return fmt.Errorf("--domain/--mailbox requires a configured destination (these filters scope a migration; source-only analysis covers the whole account)")
 	}
 
 	// The pipeline is built dynamically from the selection: only the active
@@ -206,7 +227,7 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	if opts.Apply {
 		mode = "APPLY (writes to destination)"
 	}
-	scope := scopeLabel(doMail, doFile, doDB)
+	scope := scopeLabel(doMail, doFile, doDB, opts.OnlyDomain, opts.OnlyMailbox)
 	log.Plain("cpanel-self-migration — mode: %s — scope: %s", mode, scope)
 	log.Plain("  SOURCE: %s   (read-only)", srcRef)
 	if destConfigured {
@@ -305,13 +326,25 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	if err != nil {
 		return err
 	}
+	// Narrow the working-set to --domain / --mailbox (if set) BEFORE coverage,
+	// domain-create planning, summaries, and compare/apply all read it. This one
+	// call cascades to every phase; it validates the target exists on the source
+	// and never touches databases. No-op when neither filter is set.
+	if err := applyScopeFilter(&pd, opts, doMail, doFile, log); err != nil {
+		return err
+	}
 	scopeOpts := Options{DoMail: doMail, DoFile: doFile, DoDB: doDB}
 	overrides := dbOverrides(cfg)
 	uses := updateSelectedDomainCoverage(&pd, scopeOpts, overrides)
 	addons, subs := plannedDomainCreates(pd, uses)
-	preflightAddonLabelCollisions(&pd, addons, subs)
+	// Capture the survivors. preflightAddonLabelCollisions moves addon-label
+	// collisions into pd.BlockedDomains; without reassigning, the len(addons)-based
+	// summary below would count such an addon BOTH as "to create" (it is still in
+	// addons) AND as "blocked" (now in BlockedDomains). Reassigning keeps them
+	// consistent — a collision-blocked addon is counted once, as blocked.
+	addons = preflightAddonLabelCollisions(&pd, addons, subs)
 	updateDomainTypeIssuesForUses(&pd, uses)
-	logDataSummary(log, pd, doMail, doFile, doDB)
+	logDataSummary(log, pd, doMail, doFile, doDB, len(addons), len(subs))
 
 	// ---- STEP: compare domains + mailboxes SRC vs DEST (read-only) — mail scope
 	// only. compareDryRun reports BOTH the domain plan (present / to create) and the
@@ -348,7 +381,7 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	if !opts.Apply {
 		log.Plain("")
 		log.Plain("DRY-RUN complete: no changes were made to either server.")
-		log.Plain("Re-run with --apply to perform the migration (%s).", scope)
+		log.Plain("Re-run with %s to perform the migration (%s).", applyCommand(doMail, doFile, doDB, opts.OnlyDomain, opts.OnlyMailbox), scope)
 		return nil
 	}
 
@@ -406,8 +439,51 @@ func buildPipeline(opts Options, destConfigured bool) pipeline {
 	return pipeline{total: n}
 }
 
-// scopeLabel renders the selection for the banner.
-func scopeLabel(doMail, doFile, doDB bool) string {
+// validateScopeCombos rejects illegal --domain/--mailbox combinations on Options,
+// mirroring the CLI's validateScopeFilters but at the (exported) Run boundary so a
+// programmatic caller fails fast instead of having an invalid mix silently coerced.
+// It checks ONLY the combination legality; syntax (mailbox local@domain, domain
+// chars) and target existence are validated by main.go and applyScopeFilter.
+func validateScopeCombos(opts Options) error {
+	if opts.OnlyMailbox != "" {
+		if opts.OnlyDomain != "" {
+			return fmt.Errorf("--mailbox and --domain are mutually exclusive (a mailbox already names its domain)")
+		}
+		if opts.DoFile || opts.DoDB {
+			return fmt.Errorf("--mailbox is mail-only; do not combine it with --file/--db")
+		}
+	}
+	if opts.OnlyDomain != "" && opts.DoDB {
+		return fmt.Errorf("--domain does not support databases (cPanel databases are account-wide); drop --db")
+	}
+	return nil
+}
+
+// resolveScopeFlags resolves WHAT to migrate from opts, applying the same rules as
+// the CLI: "no kind flag set => all three", --mailbox is mail-only, and --domain
+// never includes databases (defaulting to docroot+mail when no kind flag is set).
+// Pure and unit-testable; Run uses it so a programmatic caller is coerced the same
+// way the CLI is.
+func resolveScopeFlags(opts Options) (doMail, doFile, doDB bool) {
+	doMail, doFile, doDB = opts.DoMail, opts.DoFile, opts.DoDB
+	if !doMail && !doFile && !doDB {
+		doMail, doFile, doDB = true, true, true
+	}
+	switch {
+	case opts.OnlyMailbox != "":
+		return true, false, false
+	case opts.OnlyDomain != "":
+		doDB = false
+		if !doMail && !doFile {
+			doMail, doFile = true, true
+		}
+	}
+	return doMail, doFile, doDB
+}
+
+// scopeLabel renders the selection for the banner, plus the active --domain /
+// --mailbox filter (if any), as a parenthetical suffix.
+func scopeLabel(doMail, doFile, doDB bool, onlyDomain, onlyMailbox string) string {
 	var parts []string
 	if doMail {
 		parts = append(parts, "mail")
@@ -418,14 +494,62 @@ func scopeLabel(doMail, doFile, doDB bool) string {
 	if doDB {
 		parts = append(parts, "databases")
 	}
+	var base string
 	switch len(parts) {
 	case 0:
-		return "nothing"
+		base = "nothing"
 	case 1:
-		return parts[0] + " only"
+		base = parts[0] + " only"
 	default:
-		return strings.Join(parts, " + ")
+		base = strings.Join(parts, " + ")
 	}
+	switch {
+	case onlyMailbox != "":
+		return base + " (mailbox: " + onlyMailbox + ")"
+	case onlyDomain != "":
+		return base + " (domain: " + onlyDomain + ")"
+	}
+	return base
+}
+
+// applyCommand renders the flags to re-run the CURRENT selection under --apply.
+// The kind flags (--mail/--file/--db) are independent of --apply, so a bare
+// "--apply" re-run would reset the selection to ALL (the default when none is
+// set); the dry-run hint must echo the active flags to preserve a narrowed run
+// (e.g. "--apply --mail"). It also echoes the --domain / --mailbox filter:
+//   - --mailbox is mail-only and self-describing, so "--apply --mailbox a@d".
+//   - --domain defaults to docroot+mail, so a kind flag is emitted only when the
+//     run is narrower than that default (exactly one of mail/file); --db is never
+//     emitted under --domain. e.g. "--apply --domain X", "--apply --mail --domain X".
+func applyCommand(doMail, doFile, doDB bool, onlyDomain, onlyMailbox string) string {
+	if onlyMailbox != "" {
+		return "--apply --mailbox " + onlyMailbox
+	}
+	if onlyDomain != "" {
+		cmd := "--apply"
+		if doMail != doFile { // narrower than the docroot+mail default
+			if doMail {
+				cmd += " --mail"
+			} else {
+				cmd += " --file"
+			}
+		}
+		return cmd + " --domain " + onlyDomain
+	}
+	if doMail && doFile && doDB {
+		return "--apply"
+	}
+	cmd := "--apply"
+	if doMail {
+		cmd += " --mail"
+	}
+	if doFile {
+		cmd += " --file"
+	}
+	if doDB {
+		cmd += " --db"
+	}
+	return cmd
 }
 
 // gatherWhat tailors the "reading domains…" detail line to the scope.
@@ -447,29 +571,27 @@ func gatherWhat(doMail, doFile, doDB bool) string {
 }
 
 // logDataSummary prints the domain breakdown gathered up front plus, per scope,
-// the mailbox / docroot / database counts.
-func logDataSummary(log *logx.Logger, pd migrationData, doMail, doFile, doDB bool) {
-	var present, missingAddon, missingSub, blocked int
+// the mailbox / docroot / database counts. plannedAddons/plannedSubs are the
+// ACTUAL creation plan (from plannedDomainCreates) so the "to create" counts
+// reflect what the selected scope / --domain / --mailbox filter will really
+// create, not every source domain absent from the destination.
+func logDataSummary(log *logx.Logger, pd migrationData, doMail, doFile, doDB bool, plannedAddons, plannedSubs int) {
+	var present, blocked int
 	for _, d := range pd.SrcDomains {
 		if _, ok := domainBlocked(pd, d.Name); ok {
 			blocked++
 			continue
 		}
-		switch model.ActionFor(d.Type, domainname.Has(pd.DestDomainSet, d.Name)) {
-		case model.AlreadyPresent:
+		if model.ActionFor(d.Type, domainname.Has(pd.DestDomainSet, d.Name)) == model.AlreadyPresent {
 			present++
-		case model.CreateAddon:
-			missingAddon++
-		case model.CreateSub:
-			missingSub++
 		}
 	}
 	if blocked > 0 {
 		log.Info("source domains: %d (%d already on destination, %d addon + %d sub to create, %d blocked)",
-			len(pd.SrcDomains), present, missingAddon, missingSub, blocked)
+			len(pd.SrcDomains), present, plannedAddons, plannedSubs, blocked)
 	} else {
 		log.Info("source domains: %d (%d already on destination, %d addon + %d sub to create)",
-			len(pd.SrcDomains), present, missingAddon, missingSub)
+			len(pd.SrcDomains), present, plannedAddons, plannedSubs)
 	}
 	if doMail {
 		log.Info("active mailboxes to migrate: %d", len(pd.Mailboxes))

@@ -2,12 +2,14 @@ package webfiles
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/sshtest"
@@ -496,18 +498,31 @@ func bridgeLocalExpectDestFail(t *testing.T, home, srcCmd, fileList, dstCmd stri
 	if err := sc.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if _, cerr := io.Copy(dstIn, srcOut); cerr != nil {
+	// The destination is EXPECTED to refuse and close its stdin early; the io.Copy
+	// feeding that stdin (and the src tar upstream) then legitimately see a broken
+	// pipe (EPIPE) — that IS the refusal under test, not a helper failure, and which
+	// side observes it first is a race. Tolerate the broken pipe, drain any unread
+	// source output so sc.Wait can never block on a full pipe, and assert ONLY that
+	// the DESTINATION command itself exited non-zero (refused). The caller separately
+	// checks nothing was written through the symlink.
+	if _, cerr := io.Copy(dstIn, srcOut); cerr != nil && !isBrokenPipe(cerr) {
 		t.Fatalf("io.Copy src->dst: %v (src stderr: %s)", cerr, srcErr.String())
 	}
 	_ = dstIn.Close()
-	if werr := sc.Wait(); werr != nil {
-		t.Fatalf("src tar unexpectedly failed: %v (stderr: %s)", werr, srcErr.String())
-	}
+	_, _ = io.Copy(io.Discard, srcOut) // let the src tar finish even if io.Copy stopped early
+	_ = sc.Wait()                      // src tar may exit via SIGPIPE when the dest refuses early
 	err = dc.Wait()
 	if err == nil {
 		t.Fatalf("destination unexpectedly succeeded (stderr: %s)", dstErr.String())
 	}
 	return err
+}
+
+// isBrokenPipe reports whether err is a broken-pipe / closed-pipe write error —
+// the expected outcome when a downstream consumer (here a guard that refuses)
+// closes its stdin before the producer finishes writing.
+func isBrokenPipe(err error) bool {
+	return errors.Is(err, syscall.EPIPE) || errors.Is(err, io.ErrClosedPipe)
 }
 
 // relEntries lists files AND empty directories under root (so emptydir shows up),

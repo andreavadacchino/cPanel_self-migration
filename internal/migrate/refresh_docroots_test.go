@@ -2,9 +2,11 @@ package migrate
 
 import (
 	"context"
+	"io"
 	"testing"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/cpanel"
+	"github.com/tis24dev/cPanel_self-migration/internal/logx"
 )
 
 // TestWebPlanSkipsDomainMissingFromDestDocroots is the regression for the
@@ -71,10 +73,43 @@ func TestWebPlanSkipsDomainMissingFromDestDocroots(t *testing.T) {
 func TestRefreshDocrootsNoOpWhenNotInScope(t *testing.T) {
 	pd := migrationData{} // mail-only: SrcDocroots and DestDocroots are nil
 	// pool is nil on purpose: if refreshDocroots tried to read, it would panic.
-	if err := refreshDocroots(context.TODO(), nil, &pd, nil); err != nil {
+	if err := refreshDocroots(context.TODO(), nil, &pd, nil, ""); err != nil {
 		t.Errorf("mail-only refresh must be a no-op returning nil, got %v", err)
 	}
 	if pd.SrcDocroots != nil || pd.DestDocroots != nil {
 		t.Error("mail-only refresh must not populate docroots")
+	}
+}
+
+// TestRefreshDocrootsReappliesDomainFilter is the regression for the --domain
+// leak: refreshDocroots re-reads the FULL source docroot inventory after domain
+// creation, which would silently undo the early --domain scope filter and let the
+// web phase empty + mirror EVERY domain's destination docroot. The re-read must
+// re-apply the onlyDomain filter to SrcDocroots (DestDocroots stays full).
+func TestRefreshDocrootsReappliesDomainFilter(t *testing.T) {
+	src := domainDataEnvelopeFor(
+		cpanel.DomainDataEntry{Domain: "keep.example", DocumentRoot: "/home/s/keep.example", Type: "addon_domain"},
+		cpanel.DomainDataEntry{Domain: "other.example", DocumentRoot: "/home/s/other.example", Type: "addon_domain"},
+	)
+	dest := domainDataEnvelopeFor(
+		cpanel.DomainDataEntry{Domain: "dest-main.example", DocumentRoot: "/home/d/public_html", Type: "main_domain"},
+		cpanel.DomainDataEntry{Domain: "keep.example", DocumentRoot: "/home/d/public_html/keep.example", Type: "addon_domain"},
+		cpanel.DomainDataEntry{Domain: "other.example", DocumentRoot: "/home/d/public_html/other.example", Type: "addon_domain"},
+	)
+	pool := applyDomainsRefreshPool(t, domainListEnvelope(), src, dest)
+
+	// File in scope, pre-filtered to keep.example (as the early scope filter left it).
+	pd := migrationData{
+		SrcDocroots:  []cpanel.DomainDataEntry{{Domain: "keep.example", DocumentRoot: "/home/s/keep.example", Type: "addon_domain"}},
+		DestDocroots: []cpanel.DomainDataEntry{{Domain: "dest-main.example"}},
+	}
+	if err := refreshDocroots(context.Background(), pool, &pd, logx.NewTo(io.Discard, 0), "keep.example"); err != nil {
+		t.Fatalf("refreshDocroots: %v", err)
+	}
+	if len(pd.SrcDocroots) != 1 || pd.SrcDocroots[0].Domain != "keep.example" {
+		t.Fatalf("SrcDocroots = %+v, want only keep.example (the --domain filter must survive the refresh)", pd.SrcDocroots)
+	}
+	if len(pd.DestDocroots) != 3 {
+		t.Errorf("DestDocroots = %+v, want all 3 (dest stays unfiltered for collision detection)", pd.DestDocroots)
 	}
 }

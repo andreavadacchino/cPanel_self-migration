@@ -851,7 +851,7 @@ func TestVerifyDefaultBodyFingerprintFaithfulMirror(t *testing.T) {
 // small-source / huge-destination DEST AHEAD mailbox is bounded by the dest side too.
 func TestVerifyMailContentDigestOverCapIsSoftNote(t *testing.T) {
 	// Source over the cap.
-	differ, note := verifyMailContentDigest(context.Background(), &sshx.Pool{}, "d.it", "u", "d.it", defaultMailContentMsgCap+1, 0)
+	differ, note := verifyMailContentDigest(context.Background(), &sshx.Pool{}, "d.it", "u", "d.it", defaultMailContentMsgCap+1, 0, logx.NewTo(io.Discard, 0), "u@d.it")
 	if differ || note == "" {
 		t.Fatalf("src over-cap: differ=%v note=%q, want differ=false and a non-empty note", differ, note)
 	}
@@ -860,7 +860,7 @@ func TestVerifyMailContentDigestOverCapIsSoftNote(t *testing.T) {
 	}
 	// Destination over the cap with a tiny source (the small-source/huge-dest case): the
 	// dest-side bound must still skip the hash with a soft note (no unbounded dest hashing).
-	differ, note = verifyMailContentDigest(context.Background(), &sshx.Pool{}, "d.it", "u", "d.it", 1, defaultMailContentMsgCap+1)
+	differ, note = verifyMailContentDigest(context.Background(), &sshx.Pool{}, "d.it", "u", "d.it", 1, defaultMailContentMsgCap+1, logx.NewTo(io.Discard, 0), "u@d.it")
 	if differ || note == "" {
 		t.Fatalf("dest over-cap: differ=%v note=%q, want differ=false and a non-empty note", differ, note)
 	}

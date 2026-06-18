@@ -3,8 +3,54 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestValidateScopeFilters(t *testing.T) {
+	cases := []struct {
+		name                    string
+		onlyDomain, onlyMailbox string
+		mail, file, db          bool
+		wantErr                 string // substring; "" means no error
+	}{
+		// Valid combinations.
+		{"no filters", "", "", false, false, false, ""},
+		{"domain bare", "tissolution.it", "", false, false, false, ""},
+		{"domain + mail", "tissolution.it", "", true, false, false, ""},
+		{"domain + file", "tissolution.it", "", false, true, false, ""},
+		{"mailbox", "", "info@tissolution.it", false, false, false, ""},
+		{"mailbox + mail (redundant)", "", "info@tissolution.it", true, false, false, ""},
+
+		// Illegal combinations.
+		{"mailbox + domain", "tissolution.it", "info@tissolution.it", false, false, false, "mutually exclusive"},
+		{"mailbox + file", "", "info@tissolution.it", false, true, false, "mail-only"},
+		{"mailbox + db", "", "info@tissolution.it", false, false, true, "mail-only"},
+		{"domain + db", "tissolution.it", "", false, false, true, "does not support databases"},
+
+		// Malformed values.
+		{"mailbox no at", "", "noat", false, false, false, "must be local@domain"},
+		{"mailbox empty domain", "", "info@", false, false, false, "must be local@domain"},
+		{"mailbox empty local", "", "@tissolution.it", false, false, false, "must be local@domain"},
+		{"mailbox traversal local", "", "..@tissolution.it", false, false, false, "invalid --mailbox"},
+		{"mailbox bad domain", "", "info@bad/domain", false, false, false, "invalid --mailbox"},
+		{"domain bad char", "bad/domain", "", false, false, false, "invalid --domain"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateScopeFilters(c.onlyDomain, c.onlyMailbox, c.mail, c.file, c.db)
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("got error %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("got error %v, want substring %q", err, c.wantErr)
+			}
+		})
+	}
+}
 
 // TestResolveConfigPathExplicit: an explicit --config is returned verbatim with no
 // discovery and no alternates.

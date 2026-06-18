@@ -6,7 +6,9 @@ root/WHM).
 
 > ⚠️ **Golden rule:** the **SOURCE (SRC) host is ALWAYS read-only**, in every
 > mode. All writes go **only** to the **DESTINATION (DEST)** host. This machine
-> acts as a bridge: data flows `SRC → (relay) → DEST`.
+> acts as a bridge: data flows `SRC → (relay) → DEST`. The source is only ever
+> read from, never written to, deleted from, or modified, so **your source data is
+> never touched or put at risk**, even if a run is interrupted or fails.
 
 ---
 
@@ -21,7 +23,7 @@ root/WHM).
 7. [Website-file flow details](#7-website-file-flow-details)
 8. [Database flow details](#8-database-flow-details)
 9. [The `--full` / `--force-sync` flag](#9-the---full----force-sync-flag)
-10. [The `--verify-checksums` flag](#10-the---verify-checksums-flag)
+10. [The `--verify-checksums` and `--deep-verify` flags](#10-the---verify-checksums-and---deep-verify-flags)
 11. [The `--apply-mirror` flag](#11-the---apply-mirror-flag)
 12. [Other flags](#12-other-flags)
 13. [Optional `databases:` config section](#13-optional-databases-config-section)
@@ -143,6 +145,54 @@ nothing about it:
 (or other app-config) reference — "orphan" databases — **are** discovered from
 the MySQL inventory and migrated/verified like any other DB. Only the classes
 listed above are out of scope.
+
+### Narrowing to one domain or one mailbox: `--domain` / `--mailbox`
+
+`--mail`/`--file`/`--db` choose **which kinds** of data run. Two optional filters
+choose **which domain or mailbox**:
+
+| Filter                   | Restricts the run to                  | Notes                                            |
+|--------------------------|---------------------------------------|--------------------------------------------------|
+| `--domain DOMAIN`        | one domain: its **docroot + mailboxes** | Composes with `--mail`/`--file`. **Never** migrates databases. |
+| `--mailbox local@domain` | one **mailbox** (copy + verify)       | Implies **mail only**.                           |
+
+`--domain` defaults to docroot + mail with no kind flag. Compose it to go narrower:
+
+| Command              | Effect                          |
+|----------------------|---------------------------------|
+| `--domain X`         | X's docroot + mailboxes         |
+| `--domain X --mail`  | only X's mailboxes              |
+| `--domain X --file`  | only X's docroot                |
+| `--mailbox a@X`      | only the mailbox `a@X` (mail only) |
+
+The target is validated against the **source** inventory: a `--domain` absent
+from the source, or a `--mailbox` that is not an active source mailbox, fails
+fast and lists what is available. Destination domain/account creation still runs
+for the targeted domain when it is missing, so a single domain can be migrated
+end-to-end onto a fresh account.
+
+**Rejected up front (exit 2):**
+
+- `--domain --db` — cPanel databases are account-wide and only loosely tied to a
+  domain (by the `wp-config.php` location), so `--domain` deliberately never
+  touches them. Migrate databases without `--domain`.
+- `--mailbox` together with `--file`, `--db`, or `--domain` — `--mailbox` is
+  mail-only and already names its own domain.
+- `--domain` / `--mailbox` with **no destination configured** — these filters
+  scope a *migration*; source-only analysis always covers the whole account.
+
+> **Note:** the mail-analysis artifact (`mail_analysis.log`) and the on-screen `~/mail
+> scan` line are an account-wide source audit and are **not** narrowed by these
+> filters; the compare/apply/verify steps and their counts **are**.
+
+Examples:
+
+```sh
+./cpanel-self-migration --domain tissolution.it                 # dry-run: docroot + mail for one domain
+./cpanel-self-migration --apply --domain tissolution.it         # apply: docroot + mail (no DB)
+./cpanel-self-migration --apply --domain tissolution.it --mail  # only that domain's mailboxes
+./cpanel-self-migration --apply --mailbox info@tissolution.it   # only one mailbox (copy + verify)
+```
 
 ---
 
@@ -272,8 +322,8 @@ that fails to copy, or that is still divergent here, makes the run exit non-zero
 (see [section 16](#16-exit-codes)).
 
 See also [`--full`](#9-the---full----force-sync-flag) and
-[`--verify-checksums`](#10-the---verify-checksums-flag), which tune the
-fast-skip, and [`--deep-verify`](#deep-verification--deep-verify), which hashes every
+[`--verify-checksums`](#10-the---verify-checksums-and---deep-verify-flags), which tune the
+fast-skip, and [`--deep-verify`](#deep-verification---deep-verify), which hashes every
 message body to catch same-name corruption.
 
 ---
@@ -424,7 +474,7 @@ Works **with `--apply`**, **mail flow only**. It disables the mailbox
 
 ---
 
-## 10. The `--verify-checksums` flag
+## 10. The `--verify-checksums` and `--deep-verify` flags
 
 ```sh
 ./cpanel-self-migration --apply --verify-checksums
@@ -566,12 +616,14 @@ they behave exactly as under `--apply`.
 | `--mail`             | Migrate mail only (see [section 2](#2-what-gets-migrated---mail----file----db)). |
 | `--file`             | Migrate website files only.                              |
 | `--db`               | Migrate databases only.                                  |
+| `--domain DOMAIN`    | Narrow the run to one domain (docroot + mail, never DB); see [section 2](#2-what-gets-migrated---mail----file----db). |
+| `--mailbox ADDR`     | Narrow the run to one mailbox `local@domain` (mail only). |
 | `--apply`            | Perform the migration (writes to DEST).                  |
 | `--apply-mirror`     | Like `--apply`, but MIRROR each mailbox (see [section 11](#11-the---apply-mirror-flag)). |
 | `--dry-run`          | Explicit dry-run (the default).                          |
 | `--full` / `--force-sync` | Force re-sync of every mailbox (with `--apply`).    |
 | `--verify-checksums` | Stricter mailbox fast-skip (with `--apply`); also enables deep mail content verify. |
-| `--deep-verify`      | Content-hash verification (sha256 per file/message, exact DB row counts); see [section 10](#10-the---verify-checksums-flag). |
+| `--deep-verify`      | Content-hash verification (sha256 per file/message, exact DB row counts); see [section 10](#10-the---verify-checksums-and---deep-verify-flags). |
 | `--config PATH`      | Path to `host.yaml` (default: `configs/host.yaml`).      |
 | `--log-level LEVEL`  | Verbosity: `info` (default) or `debug`.                  |
 | `--version`          | Print the binary version and exit.                       |
@@ -579,6 +631,10 @@ they behave exactly as under `--apply`.
 
 **Constraints:** `--apply` and `--dry-run` are mutually exclusive (error if used
 together). The `--mail` / `--file` / `--db` selectors can be combined freely.
+`--domain` narrows to one domain (compose with `--mail`/`--file`; rejected with
+`--db`); `--mailbox` narrows to one mailbox (mail only; rejected with
+`--file`/`--db`/`--domain`). Both `--domain` and `--mailbox` require a configured
+destination.
 
 ### `--log-level debug`
 

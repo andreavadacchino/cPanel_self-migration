@@ -9,14 +9,15 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/Go-1.25+-success.svg?logo=go)](https://go.dev/)
-[![codecov](https://codecov.io/gh/tis24dev/cPanel_self-migration/branch/dev/graph/badge.svg?token=ZVBLmmYNsl)](https://codecov.io/gh/tis24dev/cPanel_self-migration)
+[![codecov](https://codecov.io/gh/tis24dev/cPanel_self-migration/graph/badge.svg?branch=main)](https://codecov.io/gh/tis24dev/cPanel_self-migration)
 [![Go Report Card](https://goreportcard.com/badge/github.com/tis24dev/cPanel_self-migration)](https://goreportcard.com/report/github.com/tis24dev/cPanel_self-migration)
 [![GoSec](https://img.shields.io/github/actions/workflow/status/tis24dev/cPanel_self-migration/security-ultimate.yml?label=GoSec&logo=go)](https://github.com/tis24dev/cPanel_self-migration/actions/workflows/security-ultimate.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/tis24dev/cPanel_self-migration/codeql.yml?label=CodeQL&logo=github)](https://github.com/tis24dev/cPanel_self-migration/actions/workflows/codeql.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-success?logo=dependabot)](https://github.com/tis24dev/cPanel_self-migration/network/updates)
 [![cPanel](https://img.shields.io/badge/cPanel-to--cPanel-FF6C2C.svg?logo=cpanel&logoColor=white)](https://cpanel.net/)
-
-[Quick start](#quick-start) · [Why](#why) · [Safety](#safety--trust) · [Docs](docs/USAGE.md)
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee)](https://github.com/sponsors/tis24dev)
+[![Donate](https://img.shields.io/badge/Donate-PayPal-blue?logo=paypal)](https://paypal.me/DNoventa)
 
 </div>
 
@@ -49,13 +50,20 @@ copy.
 | **Databases** | MySQL data, users, grants, and supported CMS config rewrites. |
 | **Domains** | Missing addon domains and subdomains created on the destination. |
 
-Run everything together, or migrate only one area with `--mail`, `--file`, or
-`--db`.
+Run everything together, migrate only one area with `--mail`, `--file`, or
+`--db`, or narrow to a single domain (`--domain`) or a single mailbox
+(`--mailbox`).
+
+> **Your old host is never at risk.** The SOURCE account is opened strictly
+> **read-only**: the tool only reads from it and never writes to, deletes from, or
+> modifies anything there. Every change is made on the DESTINATION, so even an
+> interrupted or failed run cannot alter or endanger your source data.
 
 ## Built for safe migrations
 
-- **Source is read-only.** The old host is analyzed and copied from; all writes go
-  to the new host.
+- **Source is read-only.** The old host is only ever read from, never written to,
+  deleted from, or modified, so your source data is never at risk; all writes go to
+  the new host.
 - **Dry-run by default.** Running `cpanel-self-migration` with no flags previews
   the move and writes nothing.
 - **Designed for retries.** If a transfer is interrupted, run it again. Matching
@@ -78,7 +86,14 @@ your `PATH`.
 
 **2. Configure**
 
-Create `configs/host.yaml` with your source and destination cPanel SSH accounts:
+The installer already created your config from the template (as mode `600`), next
+to the binary:
+
+```text
+~/.local/share/cPanel_self-migration/configs/host.yaml
+```
+
+Open it and fill in your source and destination cPanel SSH accounts:
 
 ```yaml
 src:                       # SOURCE, read-only
@@ -96,11 +111,9 @@ dest:                      # DESTINATION, receives all writes
   timeout: "10s"
 ```
 
-Keep this file private:
-
-```sh
-chmod 600 configs/host.yaml
-```
+The binary finds this config next to itself, so you can run it from any directory.
+(Building from source instead? Copy `configs/host_template.yaml` to
+`configs/host.yaml` and `chmod 600` it.)
 
 **3. Preview**
 
@@ -144,10 +157,13 @@ target. The migration is a one-way flow from source to destination.
 cpanel-self-migration --apply --mail
 cpanel-self-migration --apply --file
 cpanel-self-migration --apply --db
+cpanel-self-migration --apply --domain example.com         # one domain (docroot + mail, no DB)
+cpanel-self-migration --apply --mailbox user@example.com   # one mailbox (copy + verify)
 cpanel-self-migration --apply --deep-verify
 cpanel-self-migration --apply-mirror --mail
 cpanel-self-migration --config /path/to/host.yaml
 cpanel-self-migration --version
+and more
 ```
 
 Full flag reference: **[docs/COMMAND.md](docs/COMMAND.md)**.
@@ -179,7 +195,9 @@ Cutover procedure and exit codes: **[docs/USAGE.md](docs/USAGE.md)**.
    + bytes, database table/object counts) into `logs/migration_report.log`.
 
 Only the selected flows run. With none of `--mail`, `--file`, or `--db`, all flows
-run.
+run. `--domain DOMAIN` narrows the run to a single domain (its docroot + mail,
+never databases; compose with `--mail`/`--file`), and `--mailbox local@domain`
+narrows it to a single mailbox (mail only).
 
 </details>
 
@@ -266,10 +284,7 @@ and provenance metadata.
 
 ## 💖 Support
 
-If this tool saved you a migration headache, consider supporting its development:
+If this tool saved you a migration headache, consider supporting its development
 
-[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-pink?logo=github)](https://github.com/sponsors/tis24dev)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-tis24dev-yellow?logo=buymeacoffee)](https://github.com/sponsors/tis24dev)
-[![Donate](https://img.shields.io/badge/Donate-PayPal-blue?logo=paypal)](https://paypal.me/DNoventa)
 
 Released under the [MIT License](https://opensource.org/licenses/MIT).

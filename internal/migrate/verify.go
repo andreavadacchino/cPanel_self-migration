@@ -319,7 +319,7 @@ func verify(ctx context.Context, pool *sshx.Pool, pd migrationData, log *logx.Lo
 		var mailContentNote string
 		fingerprintDiff := false
 		if !deep && (mv.kind == vConsistent || mv.kind == vDestAhead) {
-			if differ, note := verifyMailContentDigest(ctx, pool, m.Domain, m.User, destDomain, mv.totalCount, mailboxMsgTotal(destF)); differ {
+			if differ, note := verifyMailContentDigest(ctx, pool, m.Domain, m.User, destDomain, mv.totalCount, mailboxMsgTotal(destF), log, email); differ {
 				content = contentDiverged
 				contentBadThis = true
 				fingerprintDiff = true
@@ -521,12 +521,21 @@ const defaultMailContentMsgCap = 200_000
 // The cap is checked against max(srcCount, destCount): GetMessageDigests hashes EVERY
 // message on each host, so a DEST AHEAD mailbox with a small source but a huge destination
 // (e.g. a live archive) must be bounded by the dest side too, not just the source count.
-func verifyMailContentDigest(ctx context.Context, pool *sshx.Pool, srcDomain, user, destDomain string, srcCount, destCount int) (differ bool, note string) {
+func verifyMailContentDigest(ctx context.Context, pool *sshx.Pool, srcDomain, user, destDomain string, srcCount, destCount int, log *logx.Logger, email string) (differ bool, note string) {
 	if n := max(srcCount, destCount); n > defaultMailContentMsgCap {
 		return false, fmt.Sprintf("mailbox has %d messages (src %d / dest %d), above the default content-check cap (%d)", n, srcCount, destCount, defaultMailContentMsgCap)
 	}
-	sd, e1 := maildir.GetMessageDigests(ctx, pool.Src, srcDomain, user)
-	dd, e2 := maildir.GetMessageDigests(ctx, pool.Dest, destDomain, user, maildir.GuardRoot())
+	// Hashing every message body on both hosts is the slow part of the DEFAULT verify
+	// (the deep path already streams this). Show a live progress row so a big mailbox
+	// shows "src/dest N hashed" instead of an idle blinking cursor; the row is cleared
+	// (Finish) before the caller prints the verdict. Inert on a non-TTY / --log-level
+	// debug run (liveProgress off), exactly like the copy step's bars.
+	prog := inlineRow(log, "→", email, 0, "")
+	sd, e1 := maildir.GetMessageDigests(ctx, pool.Src, srcDomain, user,
+		maildir.WithProgress(func(n int) { prog.SetSuffix(fmt.Sprintf("src %d hashed", n)) }))
+	dd, e2 := maildir.GetMessageDigests(ctx, pool.Dest, destDomain, user, maildir.GuardRoot(),
+		maildir.WithProgress(func(n int) { prog.SetSuffix(fmt.Sprintf("dest %d hashed", n)) }))
+	prog.Finish()
 	if e1 != nil || e2 != nil {
 		logx.Debug("verify %s@%s: default body check unavailable (srcErr=%v destErr=%v)", user, srcDomain, e1, e2)
 		return false, "message bodies could not be hashed (sha256sum unavailable on the host?)"
