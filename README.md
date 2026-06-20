@@ -22,6 +22,8 @@
 </div>
 
 ---
+[Quick start](#quick-start) · [Why](#why) · [Safety](#safety--trust) · [Docs](docs/USAGE.md)
+---
 
 ## Why
 
