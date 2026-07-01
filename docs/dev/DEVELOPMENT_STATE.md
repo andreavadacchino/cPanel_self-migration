@@ -1,7 +1,7 @@
 # Development State — cPanel Self-Migration (handoff)
 
 Snapshot for starting a fresh development session. Last updated after
-**PR 5D** (`--fail-on-blockers` CI gating flag).
+**PR 6B** (`inventory dns-plan` offline plan builder).
 
 ## What this tool is
 
@@ -31,6 +31,9 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 5B | Real-server hardening: cron `secure=` leak, FTP/SSL parsing | #7 |
 | 5C | Collector audit: email disk usage, autoresponder hardening | #8 |
 | 5D | `--fail-on-blockers`: `inventory policy` exits 3 when blocked | #9 |
+| 6A | DNS import/verifier micro-design (v2 post adversarial review) | #11 |
+| 6B-pre | real-server DNS capability captures (mass_edit_zone OK on v110) | #12 |
+| 6B | `inventory dns-plan`: offline DNS import plan builder | (open) |
 
 ## The full pipeline (all read-only / offline)
 
@@ -135,10 +138,14 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
 
 ## Suggested next steps (not started)
 
-- **PR 6 — DNS import/verifier** (roadmap): the write side of DNS,
-  gated behind the policy report. High risk — needs the full backup +
-  rollback protocol from the project CLAUDE.md, a dedicated micro-design
-  document first, and a live session for Orbit approvals.
+- **PR 6C — `dns verify`** (read-only): re-fetch destination zones and
+  compare against a plan; exit 3 on drift/mismatch. Reuses
+  `internal/sshtest` for end-to-end tests.
+- **PR 6D — `dns apply`**: the only writer. High risk — full backup +
+  rollback protocol from the project CLAUDE.md, sacrificial-zone smoke
+  first, and a live session for Orbit approvals. Contract in
+  `PR6A_DNS_IMPORT_DESIGN.md`; write API facts in
+  `PR6B_PRE_CAPTURES.md` (mass_edit_zone is line_index-addressed!).
 - **Policy rule refinement / configurable rules** — only if real usage
   shows the v0 rule table is too aggressive; the smoke test did not show
   false positives (the 24 blockers were legitimate for two *different*

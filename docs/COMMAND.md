@@ -167,3 +167,41 @@ gate without parsing JSON:
 cpanel-self-migration inventory policy --diff ./inventory_diff.json --fail-on-blockers \
   && echo "migration can proceed"
 ```
+
+## Subcommand: `inventory dns-plan`
+
+Fully offline builder of the DNS import plan
+(`dns_import_plan.json` + `.md`): what a future gated apply would write
+into the DESTINATION account's zones. It consumes the two inventory
+files (NOT the diff, which is lossy for DNS records); the policy report
+is optional **context** — findings are cross-referenced into the plan,
+but a `blocked` status never prevents plan generation (NS always
+differs between hosts, so gating on the status would block every real
+migration). Design: `docs/dev/PR6A_DNS_IMPORT_DESIGN.md`.
+
+```bash
+cpanel-self-migration inventory dns-plan \
+  --source ./inventory_source.json \
+  --destination ./inventory_destination.json \
+  [--policy ./policy_report.json] \
+  --ip-map 194.76.118.193=38.224.109.78 [--ip-map OLD=NEW ...] \
+  [--output-json ./dns_import_plan.json] \
+  [--output-md ./dns_import_plan.md]
+```
+
+Plan actions per rrset (zone, type, name — canonicalized lowercase
+absolute FQDNs): `add` (missing on destination), `replace` (values
+differ after translation), `skip` (equal, TTL-only drift, SOA,
+host-validation records `_acme-challenge*`/`_cpanel-dcv-test-record`),
+`manual` (never applied, no override: NS/delegation, unsupported record
+types, CNAME cross-type conflicts, A/AAAA with any un-mapped address,
+TXT containing a mapped source IP — e.g. SPF). Destination-only rrsets
+are listed as informational and **never deleted**.
+
+Safety rules: every A/AAAA value must have an `--ip-map` entry
+(identity `X=X` authorizes a verbatim copy); written TTLs are capped at
+3600; the plan embeds the SHA-256 of both inventory files and the
+effective ip-map for auditability.
+
+Exit codes: `0` plan generated, `1` missing/invalid input (including
+malformed `--ip-map` values) or write failure, `2` flag usage error.
