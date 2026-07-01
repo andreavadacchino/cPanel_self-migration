@@ -20,6 +20,22 @@ func WriteInventoryJSON(path string, inv NormalizedInventory) error {
 	return os.WriteFile(path, b, 0o600)
 }
 
+func AggregateWarnings(result CollectResult) []string {
+	var all []string
+	for _, w := range result.Source.Warnings {
+		all = append(all, "source: "+w)
+	}
+	if result.Dest != nil {
+		for _, w := range result.Dest.Warnings {
+			all = append(all, "destination: "+w)
+		}
+	}
+	if len(all) == 0 {
+		return []string{}
+	}
+	return all
+}
+
 func WriteReport(path string, result CollectResult) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("accountinventory: mkdir %s: %w", filepath.Dir(path), err)

@@ -83,6 +83,75 @@ func TestWriteReport(t *testing.T) {
 	}
 }
 
+func TestAggregateWarnings(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   CollectResult
+		wantLen  int
+		contains []string
+	}{
+		{
+			name: "source only with warnings",
+			result: CollectResult{
+				Source: NormalizedInventory{
+					Warnings: []string{"mail unavailable"},
+				},
+			},
+			wantLen:  1,
+			contains: []string{"source: mail unavailable"},
+		},
+		{
+			name: "source + dest both with warnings",
+			result: CollectResult{
+				Source: NormalizedInventory{
+					Warnings: []string{"src warning"},
+				},
+				Dest: &NormalizedInventory{
+					Warnings: []string{"dst warning 1", "dst warning 2"},
+				},
+			},
+			wantLen:  3,
+			contains: []string{"source: src warning", "destination: dst warning 1", "destination: dst warning 2"},
+		},
+		{
+			name: "no warnings",
+			result: CollectResult{
+				Source: NormalizedInventory{Warnings: []string{}},
+			},
+			wantLen: 0,
+		},
+		{
+			name: "dest nil no crash",
+			result: CollectResult{
+				Source: NormalizedInventory{Warnings: []string{"w"}},
+				Dest:   nil,
+			},
+			wantLen:  1,
+			contains: []string{"source: w"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := AggregateWarnings(tt.result)
+			if len(got) != tt.wantLen {
+				t.Errorf("got %d warnings, want %d: %v", len(got), tt.wantLen, got)
+			}
+			for _, want := range tt.contains {
+				found := false
+				for _, w := range got {
+					if strings.Contains(w, want) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("warnings missing %q in %v", want, got)
+				}
+			}
+		})
+	}
+}
+
 func TestWriteReportWithDest(t *testing.T) {
 	dir := t.TempDir()
 	dest := NormalizedInventory{

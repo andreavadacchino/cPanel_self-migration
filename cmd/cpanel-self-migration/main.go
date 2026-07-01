@@ -244,9 +244,10 @@ func main() {
 }
 
 func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID string, em events.Emitter, writeReportJSON bool) error {
+	startedAt := time.Now()
 	srcRef := events.HostRef{IP: cfg.Src.IP, User: cfg.Src.SSHUser}
 	em.Send(events.Event{
-		RunID: runID, TS: time.Now(),
+		RunID: runID, TS: startedAt,
 		Level: events.LevelInfo, Type: events.EventRunStarted,
 		Message: "account inventory started",
 		Source:  srcRef,
@@ -301,13 +302,21 @@ func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID s
 	fmt.Fprintf(os.Stderr, "wrote %s\n", reportPath)
 
 	if writeReportJSON {
+		var destRef events.HostRef
+		if cfg.DestConfigured() {
+			destRef = events.HostRef{IP: cfg.Dest.IP, User: cfg.Dest.SSHUser}
+		}
 		rpt := events.RunReport{
 			RunID:           runID,
 			Version:         version.String(),
 			Mode:            "account-inventory",
+			Source:          srcRef,
+			Dest:            destRef,
+			StartedAt:       startedAt,
+			FinishedAt:      time.Now(),
 			ExitStatus:      events.ExitSuccess,
 			PhasesCompleted: []events.Phase{},
-			Warnings:        result.Source.Warnings,
+			Warnings:        accountinventory.AggregateWarnings(result),
 			Errors:          []string{},
 		}
 		rptPath := filepath.Join(outDir, "report.json")
