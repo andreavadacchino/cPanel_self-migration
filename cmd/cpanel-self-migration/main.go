@@ -28,6 +28,13 @@ import (
 )
 
 func main() {
+	// Subcommand dispatch happens before the global flag parsing: the
+	// `inventory diff` command is fully offline and shares none of the
+	// migration flags.
+	if len(os.Args) >= 3 && os.Args[1] == "inventory" && os.Args[2] == "diff" {
+		os.Exit(runInventoryDiffCmd(os.Args[3:]))
+	}
+
 	var (
 		apply       = flag.Bool("apply", false, "create missing domains + migrate the selected data (default: dry-run)")
 		dryRun      = flag.Bool("dry-run", false, "explicit dry-run: analyze + compare SRC/DEST, no changes")

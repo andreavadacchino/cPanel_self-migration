@@ -104,3 +104,29 @@ make build
 | `inventory_source.json`     | `--account-inventory`     |
 | `inventory_destination.json`| `--account-inventory` (if dest configured) |
 | `inventory_report.md`       | `--account-inventory`     |
+| `inventory_diff.json`       | `inventory diff`          |
+| `inventory_diff.md`         | `inventory diff`          |
+
+## Subcommand: `inventory diff`
+
+Deterministic, fully offline comparison of two inventory JSON files
+produced by `--account-inventory`. Never connects to any server; it only
+states WHAT differs (source → destination), with no judgment about
+safety.
+
+```bash
+cpanel-self-migration inventory diff \
+  --source ./inventory_source.json \
+  --destination ./inventory_destination.json \
+  [--output-json ./inventory_diff.json] \
+  [--output-md ./inventory_diff.md]
+```
+
+Compares all 10 sections (domains, mailboxes, databases, forwarders,
+autoresponders, ftp, ssl, php, dns, cron). DNS records are compared
+order-insensitively per zone; cron jobs are matched by their redacted
+command hash — the raw command is never reconstructed. Sections marked
+`available:false` on either side are skipped with a warning.
+
+Exit codes: `0` diff generated (differences are NOT an error), `1`
+missing/invalid input or write failure, `2` flag usage error.
