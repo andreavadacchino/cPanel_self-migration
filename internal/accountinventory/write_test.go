@@ -83,6 +83,38 @@ func TestWriteReport(t *testing.T) {
 	}
 }
 
+func TestWriteReportWithForwarders(t *testing.T) {
+	dir := t.TempDir()
+	result := CollectResult{
+		Source: NormalizedInventory{
+			Account:        AccountInfo{User: "u", Host: "h", CollectedAt: "t", Side: "source"},
+			Domains:        []DomainEntry{},
+			Mailboxes:      []MailboxEntry{},
+			Databases:      []DatabaseEntry{},
+			Forwarders:     []ForwarderEntry{{Source: "info@d.com", Destination: "admin@gmail.com", Domain: "d.com"}},
+			Autoresponders: []AutoresponderEntry{{Email: "info@d.com", Domain: "d.com", Subject: "OOO", Interval: 24}},
+			Warnings:       []string{},
+		},
+	}
+	path := filepath.Join(dir, "report.md")
+	if err := WriteReport(path, result); err != nil {
+		t.Fatalf("WriteReport: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"Forwarders (1)", "info@d.com", "admin@gmail.com",
+		"Autoresponders (1)", "OOO",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("report missing %q", want)
+		}
+	}
+}
+
 func TestAggregateWarnings(t *testing.T) {
 	tests := []struct {
 		name     string

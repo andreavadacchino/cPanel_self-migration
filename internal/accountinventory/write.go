@@ -79,6 +79,26 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 		sb.WriteString("\n")
 	}
 
+	fmt.Fprintf(sb, "## Forwarders (%d)\n\n", len(inv.Forwarders))
+	if len(inv.Forwarders) > 0 {
+		sb.WriteString("| Source | Destination | Domain |\n")
+		sb.WriteString("|--------|-------------|--------|\n")
+		for _, f := range inv.Forwarders {
+			fmt.Fprintf(sb, "| %s | %s | %s |\n", f.Source, f.Destination, f.Domain)
+		}
+		sb.WriteString("\n")
+	}
+
+	fmt.Fprintf(sb, "## Autoresponders (%d)\n\n", len(inv.Autoresponders))
+	if len(inv.Autoresponders) > 0 {
+		sb.WriteString("| Email | Domain | Subject | Interval (h) |\n")
+		sb.WriteString("|-------|--------|---------|---------------|\n")
+		for _, a := range inv.Autoresponders {
+			fmt.Fprintf(sb, "| %s | %s | %s | %d |\n", a.Email, a.Domain, a.Subject, a.Interval)
+		}
+		sb.WriteString("\n")
+	}
+
 	fmt.Fprintf(sb, "## Databases (%d)\n\n", len(inv.Databases))
 	if len(inv.Databases) > 0 {
 		sb.WriteString("| Database | Disk Usage | Users |\n")

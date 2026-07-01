@@ -30,12 +30,27 @@ type DatabaseEntry struct {
 	Users     []string `json:"users"`
 }
 
+type ForwarderEntry struct {
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Domain      string `json:"domain"`
+}
+
+type AutoresponderEntry struct {
+	Email    string `json:"email"`
+	Domain   string `json:"domain"`
+	Subject  string `json:"subject"`
+	Interval int    `json:"interval"`
+}
+
 type NormalizedInventory struct {
-	Account   AccountInfo     `json:"account"`
-	Domains   []DomainEntry   `json:"domains"`
-	Mailboxes []MailboxEntry  `json:"mailboxes"`
-	Databases []DatabaseEntry `json:"databases"`
-	Warnings  []string        `json:"warnings"`
+	Account        AccountInfo          `json:"account"`
+	Domains        []DomainEntry        `json:"domains"`
+	Mailboxes      []MailboxEntry       `json:"mailboxes"`
+	Databases      []DatabaseEntry      `json:"databases"`
+	Forwarders     []ForwarderEntry     `json:"forwarders"`
+	Autoresponders []AutoresponderEntry `json:"autoresponders"`
+	Warnings       []string             `json:"warnings"`
 }
 
 func NewEmptyInventory(user, host, side string) NormalizedInventory {
@@ -46,9 +61,11 @@ func NewEmptyInventory(user, host, side string) NormalizedInventory {
 			CollectedAt: time.Now().UTC().Format(time.RFC3339),
 			Side:        side,
 		},
-		Domains:   []DomainEntry{},
-		Mailboxes: []MailboxEntry{},
-		Databases: []DatabaseEntry{},
-		Warnings:  []string{},
+		Domains:        []DomainEntry{},
+		Mailboxes:      []MailboxEntry{},
+		Databases:      []DatabaseEntry{},
+		Forwarders:     []ForwarderEntry{},
+		Autoresponders: []AutoresponderEntry{},
+		Warnings:       []string{},
 	}
 }

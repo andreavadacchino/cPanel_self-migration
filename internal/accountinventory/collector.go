@@ -49,10 +49,12 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 			CollectedAt: time.Now().UTC().Format(time.RFC3339),
 			Side:        side,
 		},
-		Domains:   []DomainEntry{},
-		Mailboxes: []MailboxEntry{},
-		Databases: []DatabaseEntry{},
-		Warnings:  []string{},
+		Domains:        []DomainEntry{},
+		Mailboxes:      []MailboxEntry{},
+		Databases:      []DatabaseEntry{},
+		Forwarders:     []ForwarderEntry{},
+		Autoresponders: []AutoresponderEntry{},
+		Warnings:       []string{},
 	}
 
 	domains, err := cpanel.ListDomains(ctx, r)
@@ -110,6 +112,35 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 				Name:      db.Database,
 				DiskUsage: int64(db.DiskUsage),
 				Users:     db.Users,
+			})
+		}
+	}
+
+	for _, d := range domains {
+		fwds, err := cpanel.ListForwarders(ctx, r, d.Name)
+		if err != nil {
+			inv.Warnings = append(inv.Warnings, fmt.Sprintf("forwarders for %s unavailable: %v", d.Name, err))
+			continue
+		}
+		for _, f := range fwds {
+			inv.Forwarders = append(inv.Forwarders, ForwarderEntry{
+				Source:      f.Dest,
+				Destination: f.Forward,
+				Domain:      d.Name,
+			})
+		}
+
+		ars, err := cpanel.ListAutoresponders(ctx, r, d.Name)
+		if err != nil {
+			inv.Warnings = append(inv.Warnings, fmt.Sprintf("autoresponders for %s unavailable: %v", d.Name, err))
+			continue
+		}
+		for _, a := range ars {
+			inv.Autoresponders = append(inv.Autoresponders, AutoresponderEntry{
+				Email:    a.Email + "@" + a.Domain,
+				Domain:   a.Domain,
+				Subject:  a.Subject,
+				Interval: a.Interval,
 			})
 		}
 	}

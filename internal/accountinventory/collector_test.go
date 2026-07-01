@@ -48,6 +48,8 @@ func newFakeRunnerFromFixtures(t *testing.T) *fakeRunner {
 		"DomainInfo list_domains":        loadFixture(t, "domaininfo_list.json"),
 		"DomainInfo domains_data":        loadFixture(t, "domaininfo_domains_data.json"),
 		"Email list_pops_with_disk":      loadFixture(t, "email_list_pops.json"),
+		"Email list_forwarders":          loadFixture(t, "email_forwarders.json"),
+		"Email list_auto_responders":     loadFixture(t, "email_autoresponders.json"),
 		"Mysql list_databases":           wrapUAPI(`[{"database":"src_wp","disk_usage":1024,"users":["src_admin"]}]`),
 		"Mysql list_users":              wrapUAPI(`[{"user":"src_admin","short_user":"admin","databases":["src_wp"]}]`),
 	}}
@@ -99,6 +101,60 @@ func TestCollectWithDestination(t *testing.T) {
 	}
 	if result.Dest.Account.Side != "destination" {
 		t.Errorf("Dest side = %q", result.Dest.Account.Side)
+	}
+}
+
+func TestCollectForwardersAndAutoresponders(t *testing.T) {
+	runner := newFakeRunnerFromFixtures(t)
+	ctx := context.Background()
+
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(result.Source.Forwarders) == 0 {
+		t.Error("expected forwarders")
+	}
+	found := false
+	for _, f := range result.Source.Forwarders {
+		if f.Source == "info@main.example" && f.Destination == "admin@gmail.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing expected forwarder info@main.example -> admin@gmail.com, got: %+v", result.Source.Forwarders)
+	}
+	if len(result.Source.Autoresponders) == 0 {
+		t.Error("expected autoresponders")
+	}
+}
+
+func TestCollectForwardersWarningNotFatal(t *testing.T) {
+	runner := &fakeRunner{responses: map[string][]byte{
+		"DomainInfo list_domains":    loadFixture(t, "domaininfo_list.json"),
+		"DomainInfo domains_data":    loadFixture(t, "domaininfo_domains_data.json"),
+		"Email list_pops_with_disk":  loadFixture(t, "email_list_pops.json"),
+		"Mysql list_databases":       wrapUAPI(`[]`),
+		"Mysql list_users":           wrapUAPI(`[]`),
+	}}
+	ctx := context.Background()
+
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect should not fail on forwarder error: %v", err)
+	}
+	if len(result.Source.Forwarders) != 0 {
+		t.Errorf("Forwarders should be empty, got %d", len(result.Source.Forwarders))
+	}
+	hasWarning := false
+	for _, w := range result.Source.Warnings {
+		if contains(w, "forwarder") || contains(w, "Forwarder") {
+			hasWarning = true
+			break
+		}
+	}
+	if !hasWarning {
+		t.Errorf("expected warning about forwarders, got: %v", result.Source.Warnings)
 	}
 }
 
