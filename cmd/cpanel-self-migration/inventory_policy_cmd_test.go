@@ -18,6 +18,14 @@ func writeDiffFileFor(t *testing.T, dir string, mutate func(dest *accountinvento
 	src.Domains = []accountinventory.DomainEntry{{Name: "main.example", Type: "main"}}
 	src.Mailboxes = []accountinventory.MailboxEntry{{Email: "info@main.example", Domain: "main.example", User: "info"}}
 	src.Forwarders = []accountinventory.ForwarderEntry{{Source: "fwd@main.example", Destination: "info@main.example", Domain: "main.example"}}
+	// Mark every config section available on both sides: an unavailable
+	// section emits POL-SECTION-UNAVAILABLE (review), so without this the
+	// no-mutation fixture could never reach "ready".
+	src.FTP.Available = true
+	src.SSL.Available = true
+	src.PHP.Available = true
+	src.DNS.Available = true
+	src.Cron.Available = true
 	dest := src
 	dest.Mailboxes = append([]accountinventory.MailboxEntry{}, src.Mailboxes...)
 	dest.Forwarders = append([]accountinventory.ForwarderEntry{}, src.Forwarders...)
@@ -98,11 +106,23 @@ func TestInventoryPolicyCmdFailOnBlockersBlockedExitsThree(t *testing.T) {
 func TestInventoryPolicyCmdFailOnBlockersReadyExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	diff := writeDiffFileFor(t, dir, nil) // identical inventories → ready
+	outJSON := filepath.Join(dir, "policy.json")
 
 	code := runInventoryPolicyCmd([]string{"--diff", diff, "--fail-on-blockers",
-		"--output-json", filepath.Join(dir, "policy.json"), "--output-md", filepath.Join(dir, "policy.md")})
+		"--output-json", outJSON, "--output-md", filepath.Join(dir, "policy.md")})
 	if code != 0 {
 		t.Errorf("exit = %d, want 0 (ready must not gate)", code)
+	}
+	b, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r map[string]any
+	if err := json.Unmarshal(b, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r["overall_status"] != "ready" {
+		t.Fatalf("fixture produced overall_status = %v, want ready (test would be vacuous)", r["overall_status"])
 	}
 }
 
