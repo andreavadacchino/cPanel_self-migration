@@ -49,6 +49,17 @@ func WriteReport(path string, result CollectResult) error {
 	return os.WriteFile(path, []byte(sb.String()), 0o600)
 }
 
+func writeConfigSection(sb *strings.Builder, title string, sec ConfigSection, count int) {
+	status := "available"
+	if !sec.Available {
+		status = "unavailable"
+	}
+	fmt.Fprintf(sb, "## %s (%d) — %s via %s\n\n", title, count, status, sec.SourceFunction)
+	for _, w := range sec.Warnings {
+		fmt.Fprintf(sb, "> **Warning**: %s\n\n", w)
+	}
+}
+
 func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title string) {
 	fmt.Fprintf(sb, "# Account Inventory — %s\n\n", title)
 	fmt.Fprintf(sb, "- **User**: %s\n", inv.Account.User)
@@ -109,6 +120,36 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 				users = "—"
 			}
 			fmt.Fprintf(sb, "| %s | %d | %s |\n", db.Name, db.DiskUsage, users)
+		}
+		sb.WriteString("\n")
+	}
+
+	writeConfigSection(sb, "FTP Accounts", inv.FTP.ConfigSection, len(inv.FTP.Items))
+	if len(inv.FTP.Items) > 0 {
+		sb.WriteString("| Login | Type | Directory | Disk Used (MB) |\n")
+		sb.WriteString("|-------|------|-----------|----------------|\n")
+		for _, f := range inv.FTP.Items {
+			fmt.Fprintf(sb, "| %s | %s | %s | %d |\n", f.Login, f.Type, f.Dir, f.DiskUsed)
+		}
+		sb.WriteString("\n")
+	}
+
+	writeConfigSection(sb, "SSL Certificates", inv.SSL.ConfigSection, len(inv.SSL.Items))
+	if len(inv.SSL.Items) > 0 {
+		sb.WriteString("| Domains | Issuer | Valid Until | Type |\n")
+		sb.WriteString("|---------|--------|------------|------|\n")
+		for _, s := range inv.SSL.Items {
+			fmt.Fprintf(sb, "| %s | %s | %d | %s |\n", s.Domains, s.Issuer, s.ValidUntil, s.ValidationType)
+		}
+		sb.WriteString("\n")
+	}
+
+	writeConfigSection(sb, "PHP Versions", inv.PHP.ConfigSection, len(inv.PHP.Items))
+	if len(inv.PHP.Items) > 0 {
+		sb.WriteString("| Domain | Version |\n")
+		sb.WriteString("|--------|---------|\n")
+		for _, p := range inv.PHP.Items {
+			fmt.Fprintf(sb, "| %s | %s |\n", p.Domain, p.Version)
 		}
 		sb.WriteString("\n")
 	}

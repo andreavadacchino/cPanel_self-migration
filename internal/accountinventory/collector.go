@@ -145,6 +145,79 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 		}
 	}
 
+	inv.FTP = collectFTP(ctx, r)
+	inv.SSL = collectSSL(ctx, r)
+	inv.PHP = collectPHP(ctx, r)
+
 	return inv, nil
+}
+
+func collectFTP(ctx context.Context, r cpanel.Runner) FTPSection {
+	sec := FTPSection{
+		ConfigSection: ConfigSection{Method: "uapi", SourceFunction: "Ftp::list_ftp_with_disk", Warnings: []string{}},
+		Items:         []FTPEntry{},
+	}
+	accounts, err := cpanel.ListFTPAccounts(ctx, r)
+	if err != nil {
+		sec.Available = false
+		sec.Warnings = append(sec.Warnings, fmt.Sprintf("FTP accounts unavailable: %v", err))
+		return sec
+	}
+	sec.Available = true
+	for _, a := range accounts {
+		sec.Items = append(sec.Items, FTPEntry{
+			Login:    a.Login,
+			Type:     a.AcctType,
+			Dir:      a.Dir,
+			DiskUsed: a.DiskUsed,
+		})
+	}
+	return sec
+}
+
+func collectSSL(ctx context.Context, r cpanel.Runner) SSLSection {
+	sec := SSLSection{
+		ConfigSection: ConfigSection{Method: "uapi", SourceFunction: "SSL::list_certs", Warnings: []string{}},
+		Items:         []SSLEntry{},
+	}
+	certs, err := cpanel.ListSSLCerts(ctx, r)
+	if err != nil {
+		sec.Available = false
+		sec.Warnings = append(sec.Warnings, fmt.Sprintf("SSL certificates unavailable: %v", err))
+		return sec
+	}
+	sec.Available = true
+	for _, c := range certs {
+		sec.Items = append(sec.Items, SSLEntry{
+			Domains:        c.Domains,
+			Issuer:         c.IssuerCN,
+			ValidFrom:      c.NotBefore,
+			ValidUntil:     c.NotAfter,
+			IsSelfSigned:   c.IsSelfSigned != 0,
+			ValidationType: c.ValidationType,
+		})
+	}
+	return sec
+}
+
+func collectPHP(ctx context.Context, r cpanel.Runner) PHPSection {
+	sec := PHPSection{
+		ConfigSection: ConfigSection{Method: "uapi", SourceFunction: "LangPHP::php_get_vhost_versions", Warnings: []string{}},
+		Items:         []PHPEntry{},
+	}
+	versions, err := cpanel.ListPHPVersions(ctx, r)
+	if err != nil {
+		sec.Available = false
+		sec.Warnings = append(sec.Warnings, fmt.Sprintf("PHP versions unavailable: %v", err))
+		return sec
+	}
+	sec.Available = true
+	for _, v := range versions {
+		sec.Items = append(sec.Items, PHPEntry{
+			Domain:  v.Vhost,
+			Version: v.Version,
+		})
+	}
+	return sec
 }
 

@@ -52,6 +52,9 @@ func newFakeRunnerFromFixtures(t *testing.T) *fakeRunner {
 		"Email list_auto_responders":     loadFixture(t, "email_autoresponders.json"),
 		"Mysql list_databases":           wrapUAPI(`[{"database":"src_wp","disk_usage":1024,"users":["src_admin"]}]`),
 		"Mysql list_users":              wrapUAPI(`[{"user":"src_admin","short_user":"admin","databases":["src_wp"]}]`),
+		"Ftp list_ftp_with_disk":         loadFixture(t, "ftp_list.json"),
+		"SSL list_certs":                loadFixture(t, "ssl_list_certs.json"),
+		"LangPHP php_get_vhost_versions": loadFixture(t, "php_vhost_versions.json"),
 	}}
 }
 
@@ -155,6 +158,67 @@ func TestCollectForwardersWarningNotFatal(t *testing.T) {
 	}
 	if !hasWarning {
 		t.Errorf("expected warning about forwarders, got: %v", result.Source.Warnings)
+	}
+}
+
+func TestCollectFTPSSLPHP(t *testing.T) {
+	runner := newFakeRunnerFromFixtures(t)
+	ctx := context.Background()
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !result.Source.FTP.Available {
+		t.Error("FTP should be available")
+	}
+	if len(result.Source.FTP.Items) != 2 {
+		t.Errorf("FTP items = %d, want 2", len(result.Source.FTP.Items))
+	}
+	if !result.Source.SSL.Available {
+		t.Error("SSL should be available")
+	}
+	if len(result.Source.SSL.Items) != 2 {
+		t.Errorf("SSL items = %d, want 2", len(result.Source.SSL.Items))
+	}
+	if !result.Source.PHP.Available {
+		t.Error("PHP should be available")
+	}
+	if len(result.Source.PHP.Items) != 2 {
+		t.Errorf("PHP items = %d, want 2", len(result.Source.PHP.Items))
+	}
+	if result.Source.FTP.SourceFunction != "Ftp::list_ftp_with_disk" {
+		t.Errorf("FTP source_function = %q", result.Source.FTP.SourceFunction)
+	}
+}
+
+func TestCollectFTPFailOthersOK(t *testing.T) {
+	runner := &fakeRunner{responses: map[string][]byte{
+		"DomainInfo list_domains":        loadFixture(t, "domaininfo_list.json"),
+		"DomainInfo domains_data":        loadFixture(t, "domaininfo_domains_data.json"),
+		"Email list_pops_with_disk":      loadFixture(t, "email_list_pops.json"),
+		"Email list_forwarders":          loadFixture(t, "email_forwarders.json"),
+		"Email list_auto_responders":     loadFixture(t, "email_autoresponders.json"),
+		"Mysql list_databases":           wrapUAPI(`[]`),
+		"Mysql list_users":               wrapUAPI(`[]`),
+		"SSL list_certs":                 loadFixture(t, "ssl_list_certs.json"),
+		"LangPHP php_get_vhost_versions": loadFixture(t, "php_vhost_versions.json"),
+	}}
+	ctx := context.Background()
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect should not fail: %v", err)
+	}
+	if result.Source.FTP.Available {
+		t.Error("FTP should be unavailable (no fixture)")
+	}
+	if len(result.Source.FTP.Warnings) == 0 {
+		t.Error("FTP should have a warning")
+	}
+	if !result.Source.SSL.Available {
+		t.Error("SSL should still be available")
+	}
+	if !result.Source.PHP.Available {
+		t.Error("PHP should still be available")
 	}
 }
 

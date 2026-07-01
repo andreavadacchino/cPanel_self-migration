@@ -43,6 +43,49 @@ type AutoresponderEntry struct {
 	Interval int    `json:"interval"`
 }
 
+type FTPEntry struct {
+	Login    string `json:"login"`
+	Type     string `json:"type"`
+	Dir      string `json:"dir"`
+	DiskUsed int64  `json:"disk_used"`
+}
+
+type SSLEntry struct {
+	Domains        string `json:"domains"`
+	Issuer         string `json:"issuer"`
+	ValidFrom      int64  `json:"valid_from"`
+	ValidUntil     int64  `json:"valid_until"`
+	IsSelfSigned   bool   `json:"is_self_signed"`
+	ValidationType string `json:"validation_type"`
+}
+
+type PHPEntry struct {
+	Domain  string `json:"domain"`
+	Version string `json:"version"`
+}
+
+type ConfigSection struct {
+	Available      bool     `json:"available"`
+	Method         string   `json:"method"`
+	SourceFunction string   `json:"source_function"`
+	Warnings       []string `json:"warnings"`
+}
+
+type FTPSection struct {
+	ConfigSection
+	Items []FTPEntry `json:"items"`
+}
+
+type SSLSection struct {
+	ConfigSection
+	Items []SSLEntry `json:"items"`
+}
+
+type PHPSection struct {
+	ConfigSection
+	Items []PHPEntry `json:"items"`
+}
+
 type NormalizedInventory struct {
 	Account        AccountInfo          `json:"account"`
 	Domains        []DomainEntry        `json:"domains"`
@@ -50,6 +93,9 @@ type NormalizedInventory struct {
 	Databases      []DatabaseEntry      `json:"databases"`
 	Forwarders     []ForwarderEntry     `json:"forwarders"`
 	Autoresponders []AutoresponderEntry `json:"autoresponders"`
+	FTP            FTPSection           `json:"ftp"`
+	SSL            SSLSection           `json:"ssl"`
+	PHP            PHPSection           `json:"php"`
 	Warnings       []string             `json:"warnings"`
 }
 
@@ -66,6 +112,9 @@ func NewEmptyInventory(user, host, side string) NormalizedInventory {
 		Databases:      []DatabaseEntry{},
 		Forwarders:     []ForwarderEntry{},
 		Autoresponders: []AutoresponderEntry{},
+		FTP:            FTPSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []FTPEntry{}},
+		SSL:            SSLSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []SSLEntry{}},
+		PHP:            PHPSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []PHPEntry{}},
 		Warnings:       []string{},
 	}
 }
