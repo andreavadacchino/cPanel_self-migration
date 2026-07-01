@@ -62,7 +62,10 @@ type InventoryDiff struct {
 	GeneratedAt     string                 `json:"generated_at"`
 	Summary         DiffSummary            `json:"summary"`
 	Sections        map[string]SectionDiff `json:"sections"`
-	Warnings        []string               `json:"warnings"`
+	// Warnings holds cross-section warnings. Currently always empty —
+	// per-section warnings live in each SectionDiff — but it is part of
+	// the diff schema consumers can already rely on.
+	Warnings []string `json:"warnings"`
 }
 
 // diffSectionNames fixes the section order for reports and iteration.
@@ -192,8 +195,20 @@ func skipUnavailable(name string, srcAvail, destAvail bool) (SectionDiff, bool) 
 }
 
 func sortSectionDiff(sec *SectionDiff) {
-	sort.Slice(sec.Added, func(i, j int) bool { return sec.Added[i].Key < sec.Added[j].Key })
-	sort.Slice(sec.Removed, func(i, j int) bool { return sec.Removed[i].Key < sec.Removed[j].Key })
+	// Detail is the secondary key: entries can legitimately share a Key
+	// (e.g. one cron command scheduled several times), and without a full
+	// order the map-iteration order of their producer would leak into the
+	// output, breaking the determinism contract.
+	byKeyDetail := func(entries []DiffEntry) func(i, j int) bool {
+		return func(i, j int) bool {
+			if entries[i].Key != entries[j].Key {
+				return entries[i].Key < entries[j].Key
+			}
+			return entries[i].Detail < entries[j].Detail
+		}
+	}
+	sort.Slice(sec.Added, byKeyDetail(sec.Added))
+	sort.Slice(sec.Removed, byKeyDetail(sec.Removed))
 	sort.Slice(sec.Changed, func(i, j int) bool {
 		if sec.Changed[i].Key != sec.Changed[j].Key {
 			return sec.Changed[i].Key < sec.Changed[j].Key
@@ -310,15 +325,25 @@ func phpItems(in []PHPEntry) []keyedItem {
 // DNS: zone-aware, order-insensitive comparison
 // ---------------------------------------------------------------------------
 
-// canonicalDNSValue renders one record's comparable value: the normalized
-// value plus TTL (and MX priority) so any of them changing is visible,
-// while record ORDER never matters.
-func canonicalDNSValue(r DNSRecordEntry) string {
-	v := r.Value
+// dnsValue carries the two renderings of one record's comparable value:
+// compare is unambiguous (NUL-framed fields — free-text TXT values that
+// happen to contain "prio=…"/"ttl=…" cannot collide with a genuinely
+// prioritized record), display is the human form used in reports.
+type dnsValue struct {
+	compare string
+	display string
+}
+
+func canonicalDNSValue(r DNSRecordEntry) dnsValue {
+	display := r.Value
 	if r.Priority != 0 {
-		v = fmt.Sprintf("prio=%d %s", r.Priority, v)
+		display = fmt.Sprintf("prio=%d %s", r.Priority, display)
 	}
-	return fmt.Sprintf("%s ttl=%d", v, r.TTL)
+	display = fmt.Sprintf("%s ttl=%d", display, r.TTL)
+	return dnsValue{
+		compare: fmt.Sprintf("%d\x00%d\x00%s", r.Priority, r.TTL, r.Value),
+		display: display,
+	}
 }
 
 func diffDNS(src, dest DNSSection) SectionDiff {
@@ -365,25 +390,40 @@ func diffDNS(src, dest DNSSection) SectionDiff {
 
 // diffZoneRecords groups records by (type, name) and compares the sorted
 // canonical value-sets: same group with different values is a "changed"
-// entry, a group present on one side only is added/removed.
+// entry, a group present on one side only is added/removed. Equality is
+// decided on the unambiguous compare form; reports show the display form.
 func diffZoneRecords(sec *SectionDiff, zone string, src, dest []DNSRecordEntry) {
-	group := func(records []DNSRecordEntry) map[string][]string {
-		g := map[string][]string{}
+	group := func(records []DNSRecordEntry) map[string][]dnsValue {
+		g := map[string][]dnsValue{}
 		for _, r := range records {
 			k := r.Type + " " + r.Name
 			g[k] = append(g[k], canonicalDNSValue(r))
 		}
 		for k := range g {
-			sort.Strings(g[k])
+			sort.Slice(g[k], func(i, j int) bool { return g[k][i].compare < g[k][j].compare })
 		}
 		return g
+	}
+	compareSet := func(values []dnsValue) string {
+		parts := make([]string, 0, len(values))
+		for _, v := range values {
+			parts = append(parts, v.compare)
+		}
+		return strings.Join(parts, "\x01")
+	}
+	displaySet := func(values []dnsValue) string {
+		parts := make([]string, 0, len(values))
+		for _, v := range values {
+			parts = append(parts, v.display)
+		}
+		return strings.Join(parts, "; ")
 	}
 	sg, dg := group(src), group(dest)
 
 	for k, values := range dg {
 		if _, ok := sg[k]; !ok {
 			sec.Added = append(sec.Added, DiffEntry{
-				Key: "zone " + zone + " " + k, Detail: strings.Join(values, "; "),
+				Key: "zone " + zone + " " + k, Detail: displaySet(values),
 			})
 		}
 	}
@@ -391,16 +431,16 @@ func diffZoneRecords(sec *SectionDiff, zone string, src, dest []DNSRecordEntry) 
 		destValues, ok := dg[k]
 		if !ok {
 			sec.Removed = append(sec.Removed, DiffEntry{
-				Key: "zone " + zone + " " + k, Detail: strings.Join(srcValues, "; "),
+				Key: "zone " + zone + " " + k, Detail: displaySet(srcValues),
 			})
 			continue
 		}
-		if strings.Join(srcValues, "\x00") != strings.Join(destValues, "\x00") {
+		if compareSet(srcValues) != compareSet(destValues) {
 			sec.Changed = append(sec.Changed, DiffFieldChange{
 				Key:         "zone " + zone + " " + k,
 				Field:       "records",
-				Source:      strings.Join(srcValues, "; "),
-				Destination: strings.Join(destValues, "; "),
+				Source:      displaySet(srcValues),
+				Destination: displaySet(destValues),
 			})
 		}
 	}

@@ -389,6 +389,65 @@ func TestDiffCronDuplicateHashDeterministic(t *testing.T) {
 	}
 }
 
+func TestDiffCronDuplicateSlotOrderDeterministic(t *testing.T) {
+	// Same command with several schedules added on the destination: the
+	// added entries share the same Key and differ only in Detail. Their
+	// order must be deterministic (map iteration must not leak through).
+	build := func() (NormalizedInventory, NormalizedInventory) {
+		src := baseInventory()
+		dest := baseInventory()
+		for _, hour := range []string{"15", "9", "21", "4"} {
+			j := dest.Cron.Jobs[0]
+			j.Hour = hour
+			dest.Cron.Jobs = append(dest.Cron.Jobs, j)
+		}
+		return src, dest
+	}
+	src, dest := build()
+	first := DiffInventories(src, dest)
+	firstSec := sectionOf(t, first, "cron")
+	if len(firstSec.Added) != 4 {
+		t.Fatalf("added = %d, want 4", len(firstSec.Added))
+	}
+	for i := 1; i < len(firstSec.Added); i++ {
+		prev, cur := firstSec.Added[i-1], firstSec.Added[i]
+		if prev.Key > cur.Key || (prev.Key == cur.Key && prev.Detail > cur.Detail) {
+			t.Fatalf("added not sorted by (key, detail): %+v", firstSec.Added)
+		}
+	}
+	// Repeat: identical input must yield an identical diff every time.
+	for run := 0; run < 20; run++ {
+		s2, d2 := build()
+		sec := sectionOf(t, DiffInventories(s2, d2), "cron")
+		for i := range firstSec.Added {
+			if sec.Added[i] != firstSec.Added[i] {
+				t.Fatalf("run %d: non-deterministic order at %d: %+v vs %+v",
+					run, i, sec.Added[i], firstSec.Added[i])
+			}
+		}
+	}
+}
+
+func TestDiffDNSCanonicalValueNoCollision(t *testing.T) {
+	// A TXT-style value that happens to START with "prio=5 " must not
+	// compare equal to a genuinely prioritized record with the remaining
+	// text: naive string concatenation would collide and silently hide
+	// real drift.
+	src := baseInventory()
+	dest := baseInventory()
+	src.DNS.Zones[0].Records = []DNSRecordEntry{
+		{Type: "TXT", Name: "main.example.", TTL: 60, Value: "prio=5 hello", Priority: 0},
+	}
+	dest.DNS.Zones[0].Records = []DNSRecordEntry{
+		{Type: "TXT", Name: "main.example.", TTL: 60, Value: "hello", Priority: 5},
+	}
+
+	sec := sectionOf(t, DiffInventories(src, dest), "dns")
+	if len(sec.Changed) != 1 {
+		t.Fatalf("colliding canonical values hid a real record change: %+v", sec)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Determinism
 // ---------------------------------------------------------------------------

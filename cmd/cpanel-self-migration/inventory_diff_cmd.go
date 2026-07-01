@@ -13,8 +13,8 @@ import (
 // runInventoryDiffCmd implements `cpanel-self-migration inventory diff`:
 // a fully offline, read-only comparison of two inventory JSON files. It
 // never connects to any server. Exit codes: 0 = diff generated (with or
-// without differences), 1 = missing/invalid input or write failure,
-// 2 = flag usage error.
+// without differences), 1 = invalid input (missing required flags,
+// unreadable file, bad JSON) or write failure, 2 = unparsable flags.
 func runInventoryDiffCmd(args []string) int {
 	fs := flag.NewFlagSet("inventory diff", flag.ContinueOnError)
 	source := fs.String("source", "", "path to the source inventory JSON (required)")
