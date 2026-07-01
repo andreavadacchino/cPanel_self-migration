@@ -148,6 +148,7 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 	inv.FTP = collectFTP(ctx, r)
 	inv.SSL = collectSSL(ctx, r)
 	inv.PHP = collectPHP(ctx, r)
+	inv.DNS = collectDNS(ctx, r, inv.Domains)
 
 	return inv, nil
 }
@@ -198,6 +199,107 @@ func collectSSL(ctx context.Context, r cpanel.Runner) SSLSection {
 		})
 	}
 	return sec
+}
+
+func collectDNS(ctx context.Context, r cpanel.Runner, domains []DomainEntry) DNSSection {
+	sec := DNSSection{
+		ConfigSection: ConfigSection{Warnings: []string{}},
+		Zones:         []DNSZoneResult{},
+	}
+
+	seen := map[string]bool{}
+	for _, d := range domains {
+		zone := d.Name
+		if seen[zone] {
+			continue
+		}
+		seen[zone] = true
+
+		zr := DNSZoneResult{
+			Zone:     zone,
+			Records:  []DNSRecordEntry{},
+			Warnings: []string{},
+			Errors:   []string{},
+		}
+
+		records, err := cpanel.FetchDNSZoneUAPI(ctx, r, zone)
+		if err == nil {
+			zr.Available = true
+			zr.Method = "uapi"
+			zr.SourceFunction = "DNS::parse_zone"
+			zr.Records = toDNSRecordEntries(records)
+			zr.RawIncluded = hasRawRecords(records)
+			sec.Zones = append(sec.Zones, zr)
+			continue
+		}
+
+		records, err = cpanel.FetchDNSZoneAPI2(ctx, r, zone)
+		if err == nil {
+			zr.Available = true
+			zr.Method = "api2"
+			zr.SourceFunction = "ZoneEdit::fetchzone_records"
+			zr.Records = toDNSRecordEntries(records)
+			zr.RawIncluded = hasRawRecords(records)
+		} else {
+			zr.Available = false
+			zr.Method = "unavailable"
+			zr.Warnings = append(zr.Warnings, fmt.Sprintf("DNS zone %s unavailable: %v", zone, err))
+		}
+
+		sec.Zones = append(sec.Zones, zr)
+	}
+
+	anyAvailable := false
+	for _, z := range sec.Zones {
+		if z.Available {
+			anyAvailable = true
+			break
+		}
+	}
+	sec.Available = anyAvailable
+	if anyAvailable {
+		for _, z := range sec.Zones {
+			if z.Available {
+				sec.Method = z.Method
+				sec.SourceFunction = z.SourceFunction
+				break
+			}
+		}
+	} else {
+		sec.Method = "unavailable"
+	}
+
+	return sec
+}
+
+func toDNSRecordEntries(records []cpanel.DNSRecord) []DNSRecordEntry {
+	out := make([]DNSRecordEntry, 0, len(records))
+	for _, r := range records {
+		out = append(out, DNSRecordEntry{
+			Type:     r.Type,
+			Name:     r.Name,
+			TTL:      r.TTL,
+			Value:    r.Value,
+			Priority: r.Priority,
+			Exchange: r.Exchange,
+			Address:  r.Address,
+			Target:   r.Target,
+			TxtData:  r.TxtData,
+			Class:    r.Class,
+			Line:     r.Line,
+			Raw:      r.Raw,
+		})
+	}
+	return out
+}
+
+func hasRawRecords(records []cpanel.DNSRecord) bool {
+	for _, r := range records {
+		if r.Raw != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func collectPHP(ctx context.Context, r cpanel.Runner) PHPSection {

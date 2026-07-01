@@ -1,0 +1,90 @@
+{
+  "cpanelresult": {
+    "apiversion": 2,
+    "func": "fetchzone_records",
+    "module": "ZoneEdit",
+    "data": [
+      {
+        "line": 1,
+        "type": "A",
+        "name": "example.com.",
+        "address": "192.168.1.1",
+        "ttl": 14400,
+        "class": "IN",
+        "record": "example.com.\t14400\tIN\tA\t192.168.1.1"
+      },
+      {
+        "line": 2,
+        "type": "AAAA",
+        "name": "example.com.",
+        "address": "2001:db8::1",
+        "ttl": 14400,
+        "class": "IN",
+        "record": "example.com.\t14400\tIN\tAAAA\t2001:db8::1"
+      },
+      {
+        "line": 3,
+        "type": "CNAME",
+        "name": "mail.example.com.",
+        "cname": "example.com.",
+        "ttl": 14400,
+        "class": "IN",
+        "record": "mail.example.com.\t14400\tIN\tCNAME\texample.com."
+      },
+      {
+        "line": 4,
+        "type": "MX",
+        "name": "example.com.",
+        "exchange": "mail.example.com.",
+        "preference": 10,
+        "ttl": 14400,
+        "class": "IN",
+        "record": "example.com.\t14400\tIN\tMX\t10\tmail.example.com."
+      },
+      {
+        "line": 5,
+        "type": "TXT",
+        "name": "example.com.",
+        "txtdata": "v=spf1 include:_spf.google.com ~all",
+        "ttl": 14400,
+        "class": "IN",
+        "record": "example.com.\t14400\tIN\tTXT\t\"v=spf1 include:_spf.google.com ~all\""
+      },
+      {
+        "line": 6,
+        "type": "NS",
+        "name": "example.com.",
+        "nsdname": "ns1.example.com.",
+        "ttl": 86400,
+        "class": "IN",
+        "record": "example.com.\t86400\tIN\tNS\tns1.example.com."
+      },
+      {
+        "line": 7,
+        "type": "SOA",
+        "name": "example.com.",
+        "mname": "ns1.example.com.",
+        "rname": "admin.example.com.",
+        "serial": 2024010101,
+        "refresh": 3600,
+        "retry": 1800,
+        "expire": 1209600,
+        "minimum": 86400,
+        "ttl": 86400,
+        "class": "IN",
+        "record": "example.com.\t86400\tIN\tSOA\tns1.example.com.\tadmin.example.com.\t2024010101\t3600\t1800\t1209600\t86400"
+      },
+      {
+        "line": 8,
+        "type": ":RAW",
+        "name": "",
+        "raw": "; custom record that cpanel does not parse",
+        "ttl": 0,
+        "class": ""
+      }
+    ],
+    "event": {
+      "result": 1
+    }
+  }
+}

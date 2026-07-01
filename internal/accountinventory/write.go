@@ -49,6 +49,38 @@ func WriteReport(path string, result CollectResult) error {
 	return os.WriteFile(path, []byte(sb.String()), 0o600)
 }
 
+func writeDNSSection(sb *strings.Builder, dns DNSSection) {
+	totalRecords := 0
+	for _, z := range dns.Zones {
+		totalRecords += len(z.Records)
+	}
+
+	writeConfigSection(sb, "DNS Zones", dns.ConfigSection, len(dns.Zones))
+
+	for _, z := range dns.Zones {
+		status := "available"
+		if !z.Available {
+			status = "unavailable"
+		}
+		fmt.Fprintf(sb, "### %s — %s via %s (%d records)\n\n", z.Zone, status, z.Method, len(z.Records))
+		for _, w := range z.Warnings {
+			fmt.Fprintf(sb, "> **Warning**: %s\n\n", w)
+		}
+		if len(z.Records) > 0 {
+			sb.WriteString("| Type | Name | TTL | Value |\n")
+			sb.WriteString("|------|------|-----|-------|\n")
+			for _, r := range z.Records {
+				val := r.Value
+				if len(val) > 60 {
+					val = val[:57] + "..."
+				}
+				fmt.Fprintf(sb, "| %s | %s | %d | %s |\n", r.Type, r.Name, r.TTL, val)
+			}
+			sb.WriteString("\n")
+		}
+	}
+}
+
 func writeConfigSection(sb *strings.Builder, title string, sec ConfigSection, count int) {
 	status := "available"
 	if !sec.Available {
@@ -153,6 +185,8 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 		}
 		sb.WriteString("\n")
 	}
+
+	writeDNSSection(sb, inv.DNS)
 
 	if len(inv.Warnings) > 0 {
 		fmt.Fprintf(sb, "## Warnings (%d)\n\n", len(inv.Warnings))

@@ -184,6 +184,59 @@ func TestAggregateWarnings(t *testing.T) {
 	}
 }
 
+func TestWriteReportWithDNS(t *testing.T) {
+	dir := t.TempDir()
+	result := CollectResult{
+		Source: NormalizedInventory{
+			Account:        AccountInfo{User: "u", Host: "h", CollectedAt: "t", Side: "source"},
+			Domains:        []DomainEntry{},
+			Mailboxes:      []MailboxEntry{},
+			Databases:      []DatabaseEntry{},
+			Forwarders:     []ForwarderEntry{},
+			Autoresponders: []AutoresponderEntry{},
+			FTP:            FTPSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []FTPEntry{}},
+			SSL:            SSLSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []SSLEntry{}},
+			PHP:            PHPSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []PHPEntry{}},
+			DNS: DNSSection{
+				ConfigSection: ConfigSection{Available: true, Method: "api2", SourceFunction: "ZoneEdit::fetchzone_records", Warnings: []string{}},
+				Zones: []DNSZoneResult{
+					{
+						Available:      true,
+						Zone:           "example.com",
+						Method:         "api2",
+						SourceFunction: "ZoneEdit::fetchzone_records",
+						Records: []DNSRecordEntry{
+							{Type: "A", Name: "example.com.", TTL: 14400, Value: "192.168.1.1", Address: "192.168.1.1"},
+							{Type: "MX", Name: "example.com.", TTL: 14400, Value: "mail.example.com.", Exchange: "mail.example.com.", Priority: 10},
+						},
+						Warnings: []string{},
+						Errors:   []string{},
+					},
+				},
+			},
+			Warnings: []string{},
+		},
+	}
+	path := filepath.Join(dir, "report.md")
+	if err := WriteReport(path, result); err != nil {
+		t.Fatalf("WriteReport: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"DNS Zones", "example.com", "api2",
+		"192.168.1.1", "mail.example.com.",
+		"| Type |",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("report missing %q", want)
+		}
+	}
+}
+
 func TestWriteReportWithDest(t *testing.T) {
 	dir := t.TempDir()
 	dest := NormalizedInventory{
