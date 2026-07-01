@@ -18,6 +18,12 @@ import (
 // input (missing required flags, unreadable file, bad JSON) or write
 // failure, 2 = unparsable flags, 3 = --fail-on-blockers was set and the
 // overall status is "blocked" (reports are still fully written first).
+// exitBlockedGate is the process exit code emitted when
+// --fail-on-blockers is set and the overall status is blocked. It is
+// part of the CLI contract (documented in docs/COMMAND.md); tests assert
+// the literal value on purpose so a change here fails loudly.
+const exitBlockedGate = 3
+
 func runInventoryPolicyCmd(args []string) int {
 	fs := flag.NewFlagSet("inventory policy", flag.ContinueOnError)
 	diffPath := fs.String("diff", "", "path to the inventory_diff.json to classify (required)")
@@ -60,8 +66,8 @@ func runInventoryPolicyCmd(args []string) int {
 		r.OverallStatus, r.Summary.Blockers, r.Summary.Reviews, r.Summary.Warnings, r.Summary.Info)
 	fmt.Fprintf(os.Stderr, "wrote %s\nwrote %s\n", *outJSON, *outMD)
 	if *failOnBlockers && r.OverallStatus == accountinventory.StatusBlocked {
-		fmt.Fprintln(os.Stderr, "fail-on-blockers: overall status is blocked, exiting 3")
-		return 3
+		fmt.Fprintf(os.Stderr, "fail-on-blockers: overall status is blocked, exiting %d\n", exitBlockedGate)
+		return exitBlockedGate
 	}
 	return 0
 }

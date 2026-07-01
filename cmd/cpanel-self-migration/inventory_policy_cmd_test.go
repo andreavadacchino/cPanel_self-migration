@@ -41,6 +41,23 @@ func writeDiffFileFor(t *testing.T, dir string, mutate func(dest *accountinvento
 	return path
 }
 
+// readOverallStatus parses the JSON policy report and returns its
+// overall_status, failing the test if the file is missing or malformed.
+func readOverallStatus(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("policy JSON report not readable: %v", err)
+	}
+	var r struct {
+		OverallStatus string `json:"overall_status"`
+	}
+	if err := json.Unmarshal(b, &r); err != nil {
+		t.Fatalf("policy JSON report not parsable: %v", err)
+	}
+	return r.OverallStatus
+}
+
 func TestInventoryPolicyCmdWithBlockerExitsZero(t *testing.T) {
 	dir := t.TempDir()
 	diff := writeDiffFileFor(t, dir, func(dest *accountinventory.NormalizedInventory) {
@@ -53,16 +70,8 @@ func TestInventoryPolicyCmdWithBlockerExitsZero(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (blockers are findings, not process errors)", code)
 	}
-	b, err := os.ReadFile(outJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var r map[string]any
-	if err := json.Unmarshal(b, &r); err != nil {
-		t.Fatal(err)
-	}
-	if r["overall_status"] != "blocked" {
-		t.Errorf("overall_status = %v, want blocked", r["overall_status"])
+	if got := readOverallStatus(t, outJSON); got != "blocked" {
+		t.Errorf("overall_status = %v, want blocked", got)
 	}
 	md, err := os.ReadFile(outMD)
 	if err != nil {
@@ -82,21 +91,15 @@ func TestInventoryPolicyCmdFailOnBlockersBlockedExitsThree(t *testing.T) {
 	outMD := filepath.Join(dir, "policy.md")
 
 	code := runInventoryPolicyCmd([]string{"--diff", diff, "--fail-on-blockers", "--output-json", outJSON, "--output-md", outMD})
+	// The literal 3 is asserted on purpose: the exit code is CLI contract
+	// (docs/COMMAND.md), so a change to exitBlockedGate must fail here.
 	if code != 3 {
 		t.Fatalf("exit = %d, want 3 (blocked status must gate with --fail-on-blockers)", code)
 	}
 	// The gate must NOT suppress report generation: both artifacts exist
 	// and the JSON still records the blocked status.
-	b, err := os.ReadFile(outJSON)
-	if err != nil {
-		t.Fatalf("JSON report not written before gating exit: %v", err)
-	}
-	var r map[string]any
-	if err := json.Unmarshal(b, &r); err != nil {
-		t.Fatal(err)
-	}
-	if r["overall_status"] != "blocked" {
-		t.Errorf("overall_status = %v, want blocked", r["overall_status"])
+	if got := readOverallStatus(t, outJSON); got != "blocked" {
+		t.Errorf("overall_status = %v, want blocked", got)
 	}
 	if _, err := os.Stat(outMD); err != nil {
 		t.Errorf("markdown report not written before gating exit: %v", err)
@@ -113,16 +116,8 @@ func TestInventoryPolicyCmdFailOnBlockersReadyExitsZero(t *testing.T) {
 	if code != 0 {
 		t.Errorf("exit = %d, want 0 (ready must not gate)", code)
 	}
-	b, err := os.ReadFile(outJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var r map[string]any
-	if err := json.Unmarshal(b, &r); err != nil {
-		t.Fatal(err)
-	}
-	if r["overall_status"] != "ready" {
-		t.Fatalf("fixture produced overall_status = %v, want ready (test would be vacuous)", r["overall_status"])
+	if got := readOverallStatus(t, outJSON); got != "ready" {
+		t.Fatalf("fixture produced overall_status = %v, want ready (test would be vacuous)", got)
 	}
 }
 
@@ -138,16 +133,8 @@ func TestInventoryPolicyCmdFailOnBlockersReviewRequiredExitsZero(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 (--fail-on-blockers gates only blocked, not review_required)", code)
 	}
-	b, err := os.ReadFile(outJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var r map[string]any
-	if err := json.Unmarshal(b, &r); err != nil {
-		t.Fatal(err)
-	}
-	if r["overall_status"] != "review_required" {
-		t.Fatalf("fixture produced overall_status = %v, want review_required (test would be vacuous)", r["overall_status"])
+	if got := readOverallStatus(t, outJSON); got != "review_required" {
+		t.Fatalf("fixture produced overall_status = %v, want review_required (test would be vacuous)", got)
 	}
 }
 
