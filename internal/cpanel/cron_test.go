@@ -213,9 +213,15 @@ func TestRedactCronCommand(t *testing.T) {
 		},
 		{
 			name:     "bearer header",
-			in:       `curl -H "Authorization: Bearer eyJhbGciOi.secret.sig" https://x.y/`,
-			mustHide: []string{"eyJhbGciOi.secret.sig"},
+			in:       `curl -H "Authorization: Bearer FAKEJWT.testonly.notreal" https://x.y/`,
+			mustHide: []string{"FAKEJWT.testonly.notreal"},
 			mustKeep: []string{"curl", "https://x.y/"},
+		},
+		{
+			name:     "basic auth header",
+			in:       `curl -H "Authorization: Basic RkFLRTp0ZXN0b25seQ==" https://x.y/ping`,
+			mustHide: []string{"RkFLRTp0ZXN0b25seQ=="},
+			mustKeep: []string{"curl", "https://x.y/ping"},
 		},
 		{
 			name:     "url credentials",
@@ -310,5 +316,22 @@ func TestFetchCrontabMissingMarker(t *testing.T) {
 	_, err := FetchCrontab(t.Context(), r)
 	if err == nil {
 		t.Fatal("missing RC marker must be an error")
+	}
+}
+
+func TestFetchCrontabMarkerSpoofInContent(t *testing.T) {
+	// A job that prints the marker text must not hijack RC parsing: only
+	// the final standalone marker line counts.
+	out := []byte("0 1 * * * echo __CRONTAB_RC:9__ done\n__CRONTAB_RC:0__\n")
+	r := &fakeRunner{out: out}
+	res, err := FetchCrontab(t.Context(), r)
+	if err != nil {
+		t.Fatalf("FetchCrontab: %v", err)
+	}
+	if len(res.Jobs) != 1 {
+		t.Fatalf("jobs = %d, want 1", len(res.Jobs))
+	}
+	if !strings.Contains(res.Jobs[0].CommandRedacted, "__CRONTAB_RC:9__") {
+		t.Errorf("spoofed marker text must stay part of the command: %q", res.Jobs[0].CommandRedacted)
 	}
 }

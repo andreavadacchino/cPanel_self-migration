@@ -64,10 +64,13 @@ func newCrontabResult() CrontabResult {
 // crontabScript reads the user crontab. `crontab -l` legitimately exits 1
 // when the user has no crontab, and Runner.RunScript treats any non-zero
 // exit as an error — so the script always exits 0 and carries the real
-// exit code in a trailing marker that FetchCrontab strips and classifies.
+// exit code in a trailing marker LINE (`__CRONTAB_RC:<digits>__`, alone at
+// column 0) that FetchCrontab strips and classifies.
 const crontabScript = `out=$(crontab -l 2>&1); rc=$?; printf '%s\n__CRONTAB_RC:%d__\n' "$out" "$rc"`
 
-const cronRCMarker = "__CRONTAB_RC:"
+// cronRCLineRE matches the marker ONLY as a standalone line, so a crontab
+// entry that happens to print the marker text inline cannot spoof it.
+var cronRCLineRE = regexp.MustCompile(`^__CRONTAB_RC:([0-9]+)__$`)
 
 // FetchCrontab reads and parses the account crontab. "no crontab for user"
 // is NOT an error: it returns an empty result with a light warning. Any
@@ -102,23 +105,24 @@ func FetchCrontab(ctx context.Context, c Runner) (CrontabResult, error) {
 }
 
 // splitCronMarker separates the crontab content from the trailing
-// __CRONTAB_RC:<n>__ marker emitted by crontabScript.
+// __CRONTAB_RC:<n>__ marker line emitted by crontabScript. Only the LAST
+// line matching the strict marker format is accepted; earlier occurrences
+// of the marker text inside job commands stay part of the content.
 func splitCronMarker(out string) (content string, rc int, err error) {
-	idx := strings.LastIndex(out, cronRCMarker)
-	if idx < 0 {
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	last := len(lines) - 1
+	if last < 0 {
+		return "", 0, fmt.Errorf("crontab -l: empty output, RC marker missing")
+	}
+	m := cronRCLineRE.FindStringSubmatch(lines[last])
+	if m == nil {
 		return "", 0, fmt.Errorf("crontab -l: RC marker missing in output (%d bytes)", len(out))
 	}
-	tail := out[idx+len(cronRCMarker):]
-	end := strings.Index(tail, "__")
-	if end < 0 {
-		return "", 0, fmt.Errorf("crontab -l: malformed RC marker")
-	}
-	rc, convErr := strconv.Atoi(tail[:end])
+	rc, convErr := strconv.Atoi(m[1])
 	if convErr != nil {
 		return "", 0, fmt.Errorf("crontab -l: unreadable RC marker: %w", convErr)
 	}
-	content = strings.TrimSuffix(out[:idx], "\n")
-	return content, rc, nil
+	return strings.Join(lines[:last], "\n"), rc, nil
 }
 
 // ---------------------------------------------------------------------------
