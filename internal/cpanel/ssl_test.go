@@ -16,7 +16,7 @@ func TestParseListSSLCerts(t *testing.T) {
 	if data[0].ID != "cert_abc123" {
 		t.Errorf("[0] id = %q", data[0].ID)
 	}
-	if !strings.Contains(data[0].Domains, "main.example") {
+	if !strings.Contains(string(data[0].Domains), "main.example") {
 		t.Errorf("[0] domains = %q, want to contain main.example", data[0].Domains)
 	}
 	if data[0].IssuerCN != "R3" {

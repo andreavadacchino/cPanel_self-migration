@@ -1,0 +1,4 @@
+{"result":{"status":1,"data":[
+{"id":"c1","friendly_name":"Cert for doctorbike.it","domains":["*.doctorbike.it","doctorbike.it"],"issuer.commonName":"YR2","issuer.organizationName":"Let's Encrypt","not_before":1781184888,"not_after":1788960887,"is_self_signed":0,"validation_type":"dv","modulus_length":2048},
+{"id":"c2","friendly_name":"Cert for shop","domains":["shop.doctorbike.it","www.shop.doctorbike.it"],"issuer.commonName":"YR1","not_before":1780061817,"not_after":1787837816,"is_self_signed":0,"validation_type":"dv","modulus_length":2048}
+]}}
