@@ -13,8 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
+	"github.com/tis24dev/cPanel_self-migration/internal/events"
 	"github.com/tis24dev/cPanel_self-migration/internal/logx"
 	"github.com/tis24dev/cPanel_self-migration/internal/migrate"
 	"github.com/tis24dev/cPanel_self-migration/internal/validate"
@@ -38,6 +40,10 @@ func main() {
 		cfgPath     = flag.String("config", "", "path to host.yaml (default: configs/host.yaml next to the binary or CWD)")
 		logLevel    = flag.String("log-level", "info", "log verbosity: info | debug (debug traces SSH sessions, transfers, and network errors to stderr)")
 		showVersion = flag.Bool("version", false, "print the version and exit")
+		runID       = flag.String("run-id", "", "optional run identifier for structured output (default: auto-generated)")
+		outputDir   = flag.String("output-dir", "", "output directory for artifacts (default: current working directory)")
+		jsonEvents  = flag.Bool("json-events", false, "write JSONL events to <output-dir>/events.jsonl")
+		reportJSON  = flag.Bool("report-json", false, "write JSON report to <output-dir>/report.json")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -133,13 +139,32 @@ func main() {
 
 	outDir, err := os.Getwd()
 	if err != nil {
-		// OutputDir anchors all audit artifacts (the report + analysis logs). If the
-		// working directory cannot be determined (e.g. it was removed), fail fast with
-		// a clear message BEFORE opening any SSH connection, rather than write the
-		// artifacts to an empty/relative path or surface a confusing later error.
 		fmt.Fprintln(os.Stderr, "error: cannot determine the current working directory (needed for the logs/ artifacts):", err)
 		os.Exit(1)
 	}
+	if *outputDir != "" {
+		outDir = *outputDir
+	}
+
+	if *runID != "" {
+		if err := events.ValidateRunID(*runID); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(2)
+		}
+	}
+
+	var em events.Emitter
+	if *jsonEvents {
+		evPath := filepath.Join(outDir, "events.jsonl")
+		ew, err := events.NewWriter(evPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error: cannot create events file:", err)
+			os.Exit(1)
+		}
+		defer ew.Close()
+		em = events.Emitter{Emit: func(e events.Event) { _ = ew.Write(e) }}
+	}
+
 	opts := migrate.Options{
 		Apply:           *apply || *applyMirror,
 		ForceSync:       *full || *forceSync,
@@ -152,9 +177,23 @@ func main() {
 		OnlyDomain:      *onlyDomain,
 		OnlyMailbox:     *onlyMailbox,
 		OutputDir:       outDir,
+		RunID:           *runID,
+		Events:          em,
 	}
 
-	if err := migrate.Run(ctx, cfg, opts); err != nil {
+	startedAt := time.Now()
+	runErr := migrate.Run(ctx, cfg, opts)
+	finishedAt := time.Now()
+
+	if *reportJSON {
+		rpt := buildRunReport(opts, cfg, startedAt, finishedAt, runErr, ctx.Err())
+		rptPath := filepath.Join(outDir, "report.json")
+		if werr := events.WriteReport(rptPath, rpt); werr != nil {
+			fmt.Fprintln(os.Stderr, "warning: could not write report.json:", werr)
+		}
+	}
+
+	if err := runErr; err != nil {
 		if ctx.Err() != nil {
 			// Interrupted: report cleanly with a distinct exit code (130 =
 			// terminated by Ctrl-C, the shell convention).
@@ -163,6 +202,47 @@ func main() {
 		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
+	}
+}
+
+func buildRunReport(opts migrate.Options, cfg config.Config, startedAt, finishedAt time.Time, runErr, ctxErr error) events.RunReport {
+	mode := "dry-run"
+	if opts.Apply {
+		mode = "apply"
+	}
+	status := events.ExitSuccess
+	errs := []string{}
+	if runErr != nil {
+		if ctxErr != nil {
+			status = events.ExitInterrupted
+		} else {
+			status = events.ExitFailed
+		}
+		errs = append(errs, runErr.Error())
+	}
+	runID := opts.RunID
+	if runID == "" {
+		runID = events.NewRunID(opts.Now)
+	}
+	return events.RunReport{
+		RunID:   runID,
+		Version: version.String(),
+		Mode:    mode,
+		Scope: events.ReportScope{
+			Mail:          opts.DoMail,
+			Files:         opts.DoFile,
+			Databases:     opts.DoDB,
+			DomainFilter:  opts.OnlyDomain,
+			MailboxFilter: opts.OnlyMailbox,
+		},
+		Source:          events.HostRef{IP: cfg.Src.IP, User: cfg.Src.SSHUser},
+		Dest:            events.HostRef{IP: cfg.Dest.IP, User: cfg.Dest.SSHUser},
+		StartedAt:       startedAt,
+		FinishedAt:      finishedAt,
+		ExitStatus:      status,
+		PhasesCompleted: []events.Phase{},
+		Warnings:        []string{},
+		Errors:          errs,
 	}
 }
 
@@ -278,7 +358,7 @@ func validateScopeFilters(onlyDomain, onlyMailbox string, mailFlag, fileFlag, db
 func usage() {
 	fmt.Fprintf(os.Stderr, `cpanel-self-migration — cPanel email + website-file + database migration tool
 
-Usage: %s [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--domain DOMAIN] [--mailbox ADDR] [--full] [--verify-checksums] [--deep-verify] [--config PATH] [--log-level LEVEL]
+Usage: %s [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--domain DOMAIN] [--mailbox ADDR] [--full] [--verify-checksums] [--deep-verify] [--config PATH] [--log-level LEVEL] [--run-id ID] [--output-dir DIR] [--json-events] [--report-json]
 
   (default) dry-run  : analyze + compare SOURCE/DEST, no changes
   --apply            : create missing domains + migrate the selected data
@@ -304,6 +384,14 @@ Usage: %s [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--domain 
                        corruption; slower (reads every byte on both sides)
   --config PATH      : path to host.yaml (default: configs/host.yaml)
   --log-level LEVEL  : info (default) or debug (verbose diagnostics to stderr)
+  --run-id ID        : optional run identifier for structured output (default:
+                       auto-generated as run-YYYYMMDD-HHMMSS)
+  --output-dir DIR   : output directory for all artifacts — logs/, events.jsonl,
+                       report.json (default: current working directory)
+  --json-events      : write JSONL events to <output-dir>/events.jsonl (one JSON
+                       object per line, append-only; does not suppress stdout)
+  --report-json      : write JSON summary to <output-dir>/report.json at the end
+                       of the run (does not suppress stdout)
 
 The SOURCE host is ALWAYS read-only; all writes target the DESTINATION.
 Mail is normally MERGED into the destination (existing messages are kept, only

@@ -15,6 +15,7 @@ import (
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
 	"github.com/tis24dev/cPanel_self-migration/internal/dbmig"
 	"github.com/tis24dev/cPanel_self-migration/internal/domainname"
+	"github.com/tis24dev/cPanel_self-migration/internal/events"
 	"github.com/tis24dev/cPanel_self-migration/internal/logx"
 	"github.com/tis24dev/cPanel_self-migration/internal/model"
 	"github.com/tis24dev/cPanel_self-migration/internal/report"
@@ -59,8 +60,10 @@ type Options struct {
 	// OnlyMailbox, when non-empty (local@domain), narrows the run to exactly one
 	// ACTIVE mailbox; it is inherently mail-only.
 	OnlyMailbox string
-	OutputDir   string // where artifacts (logs) are written
-	Now         time.Time
+	OutputDir string // where artifacts (logs) are written
+	Now       time.Time
+	RunID     string         // optional; generated if empty
+	Events    events.Emitter // optional; zero value = no events emitted
 }
 
 // timeFormat is the timestamp layout used in the log artifacts.
@@ -180,6 +183,21 @@ func createLogFile(outputDir, name string) (*atomicLogFile, string, error) {
 	return &atomicLogFile{File: f, root: root, tmp: tmp, name: name, dir: dir}, filepath.Join(dir, name), nil
 }
 
+// emitEvent is a convenience wrapper for sending events with host context.
+func emitEvent(em events.Emitter, runID string, srcRef, destRef hostRef, phase events.Phase, etype events.EventType, level events.Level, msg string, data any) {
+	em.Send(events.Event{
+		RunID:   runID,
+		TS:      time.Now(),
+		Level:   level,
+		Phase:   phase,
+		Type:    etype,
+		Message: msg,
+		Source:  events.HostRef{IP: srcRef.IP, User: srcRef.User},
+		Dest:    events.HostRef{IP: destRef.IP, User: destRef.User},
+		Data:    data,
+	})
+}
+
 // Run executes the migration according to opts. cfg must have a valid source;
 // if the destination is not configured, Run stops after the source analysis.
 func Run(ctx context.Context, cfg config.Config, opts Options) error {
@@ -221,6 +239,11 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	// steps are numbered, so a mail-only run shows [1..6] and a file-only run
 	// shows its own steps, with no misleading "skipped" noise for the other
 	// flow. Domain creation is shared (needed by both mail and files).
+	runID := opts.RunID
+	if runID == "" {
+		runID = events.NewRunID(opts.Now)
+	}
+
 	plan := buildPipeline(opts, destConfigured)
 	log := logx.New(plan.total)
 	mode := "DRY-RUN (no changes)"
@@ -237,7 +260,13 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	}
 	log.Plain("")
 
+	em := opts.Events
+	emitEvent(em, runID, srcRef, destRef, "", events.EventRunStarted, events.LevelInfo,
+		fmt.Sprintf("migration started — mode: %s — scope: %s", mode, scope), nil)
+
 	// ---- STEP: connect to both servers ----
+	emitEvent(em, runID, srcRef, destRef, events.PhaseConnect, events.EventPhaseStarted, events.LevelInfo,
+		"Connecting to servers", nil)
 	if destConfigured {
 		log.Step("Connecting to source and destination ...")
 		log.Detail("opening SSH connections ...")
@@ -247,9 +276,13 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	}
 	pool, err := sshx.DialBoth(ctx, cfg, "")
 	if err != nil {
+		emitEvent(em, runID, srcRef, destRef, events.PhaseConnect, events.EventPhaseFailed, events.LevelError,
+			fmt.Sprintf("connect failed: %v", err), nil)
 		return err
 	}
 	defer pool.Close()
+	emitEvent(em, runID, srcRef, destRef, events.PhaseConnect, events.EventPhaseCompleted, events.LevelInfo,
+		"connected", nil)
 	if destConfigured {
 		log.OK("connected to source and destination")
 	} else {
@@ -258,6 +291,8 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 
 	// ---- STEP: analyze source ~/mail (read-only) — only when mail is in scope.
 	if doMail {
+		emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeMail, events.EventPhaseStarted, events.LevelInfo,
+			"Analyzing source mailboxes", nil)
 		log.Step("Analyzing the SOURCE mailboxes (~/mail) ...")
 		// Live scan as ONE inline row: action "~/mail scan" on the left, a live
 		// "N mailboxes" counter on the right while the (single) ~/mail walk runs,
@@ -267,6 +302,8 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 		rep, err := analyze(ctx, pool.Src, srcRef.String(), date, func() { prog.Add(1) })
 		if err != nil {
 			prog.Finish()
+			emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeMail, events.EventPhaseFailed, events.LevelError,
+				fmt.Sprintf("analyze mail failed: %v", err), nil)
 			return err
 		}
 		af, analysisPath, err := createLogFile(opts.OutputDir, "mail_analysis.log")
@@ -291,6 +328,8 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 		prog.Replace(itemStr(log, "✓", "~/mail scan",
 			"%s — %d mailbox(es) in %d domain(s) (%d active, %d orphan)", log.Green("done"), nm, nd, na, no))
 		log.OK("wrote %s", analysisPath)
+		emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeMail, events.EventPhaseCompleted, events.LevelInfo,
+			fmt.Sprintf("analyzed %d mailbox(es) in %d domain(s)", nm, nd), map[string]any{"domains": nd, "mailboxes": nm, "active": na, "orphan": no})
 	}
 
 	if !destConfigured {
@@ -315,6 +354,8 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 		}
 		log.Plain("")
 		log.Plain("Destination not configured — stopped after source analysis.")
+		emitEvent(em, runID, srcRef, destRef, "", events.EventRunCompleted, events.LevelInfo,
+			"source-only analysis complete", nil)
 		return nil
 	}
 
@@ -322,10 +363,16 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	// gatherData renders its own live progress (a per-operation bar that ends in a
 	// persistent "✓ inventory  read — ..." line), so no static header is printed
 	// here — that would just blink with a frozen cursor during the reads.
+	emitEvent(em, runID, srcRef, destRef, events.PhaseGatherData, events.EventPhaseStarted, events.LevelInfo,
+		"Gathering inventory from source and destination", nil)
 	pd, err := gatherData(ctx, pool, log, doMail, doFile, doDB)
 	if err != nil {
+		emitEvent(em, runID, srcRef, destRef, events.PhaseGatherData, events.EventPhaseFailed, events.LevelError,
+			fmt.Sprintf("gather data failed: %v", err), nil)
 		return err
 	}
+	emitEvent(em, runID, srcRef, destRef, events.PhaseGatherData, events.EventPhaseCompleted, events.LevelInfo,
+		"inventory gathered", nil)
 	// Narrow the working-set to --domain / --mailbox (if set) BEFORE coverage,
 	// domain-create planning, summaries, and compare/apply all read it. This one
 	// call cascades to every phase; it validates the target exists on the source
@@ -350,31 +397,55 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	// only. compareDryRun reports BOTH the domain plan (present / to create) and the
 	// per-mailbox comparison, so the step title names both. ----
 	if doMail {
+		emitEvent(em, runID, srcRef, destRef, events.PhaseCompareMail, events.EventPhaseStarted, events.LevelInfo,
+			"Comparing mailboxes", nil)
 		log.Step("Comparing SOURCE and DESTINATION domains and mailboxes (read-only) ...")
 		compareDryRun(ctx, &comparator{src: pool.Src, dest: pool.Dest}, pd, log, opts.MirrorMail)
+		emitEvent(em, runID, srcRef, destRef, events.PhaseCompareMail, events.EventPhaseCompleted, events.LevelInfo,
+			"mailbox comparison done", nil)
 	}
 
 	// ---- STEPS: analyze + compare web files (read-only) — file scope only. ----
 	if doFile {
+		emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeFiles, events.EventPhaseStarted, events.LevelInfo,
+			"Analyzing web files", nil)
 		log.Step("Analyzing the SOURCE web files (docroots) ...")
 		if err := analyzeWebFiles(ctx, pool, pd, log, opts.OutputDir, srcRef.String(), date, false); err != nil {
+			emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeFiles, events.EventPhaseFailed, events.LevelError,
+				fmt.Sprintf("analyze web files failed: %v", err), nil)
 			return err
 		}
+		emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeFiles, events.EventPhaseCompleted, events.LevelInfo,
+			"web file analysis done", nil)
 
+		emitEvent(em, runID, srcRef, destRef, events.PhaseCompareFiles, events.EventPhaseStarted, events.LevelInfo,
+			"Comparing web files", nil)
 		log.Step("Comparing SOURCE and DESTINATION web files (read-only) ...")
 		compareWebFiles(ctx, pool, pd, log)
+		emitEvent(em, runID, srcRef, destRef, events.PhaseCompareFiles, events.EventPhaseCompleted, events.LevelInfo,
+			"web file comparison done", nil)
 	}
 
 	// ---- STEPS: analyze + compare databases (read-only) — db scope only. ----
 	if doDB {
+		emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeDB, events.EventPhaseStarted, events.LevelInfo,
+			"Analyzing databases", nil)
 		overrides := dbOverrides(cfg)
 		log.Step("Analyzing the SOURCE databases ...")
 		if err := analyzeDBs(ctx, pd, log, opts.OutputDir, srcRef.String(), date, overrides, false); err != nil {
+			emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeDB, events.EventPhaseFailed, events.LevelError,
+				fmt.Sprintf("analyze databases failed: %v", err), nil)
 			return err
 		}
+		emitEvent(em, runID, srcRef, destRef, events.PhaseAnalyzeDB, events.EventPhaseCompleted, events.LevelInfo,
+			"database analysis done", nil)
 
+		emitEvent(em, runID, srcRef, destRef, events.PhaseCompareDB, events.EventPhaseStarted, events.LevelInfo,
+			"Comparing databases", nil)
 		log.Step("Comparing SOURCE and DESTINATION databases (read-only) ...")
 		compareDBs(pd, log, overrides)
+		emitEvent(em, runID, srcRef, destRef, events.PhaseCompareDB, events.EventPhaseCompleted, events.LevelInfo,
+			"database comparison done", nil)
 	}
 
 	// ---- Apply (or stop here in dry-run). ----
@@ -382,10 +453,20 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 		log.Plain("")
 		log.Plain("DRY-RUN complete: no changes were made to either server.")
 		log.Plain("Re-run with %s to perform the migration (%s).", applyCommand(doMail, doFile, doDB, opts.OnlyDomain, opts.OnlyMailbox), scope)
+		emitEvent(em, runID, srcRef, destRef, "", events.EventRunCompleted, events.LevelInfo,
+			"dry-run complete", nil)
 		return nil
 	}
 
-	return runApply(ctx, pool, cfg, pd, opts, log, srcRef.String(), destRef.String(), date)
+	err = runApply(ctx, pool, cfg, pd, opts, log, srcRef.String(), destRef.String(), date)
+	if err != nil {
+		emitEvent(em, runID, srcRef, destRef, "", events.EventRunFailed, events.LevelError,
+			fmt.Sprintf("migration failed: %v", err), nil)
+	} else {
+		emitEvent(em, runID, srcRef, destRef, "", events.EventRunCompleted, events.LevelInfo,
+			"migration completed", nil)
+	}
+	return err
 }
 
 // pipeline describes the active steps for a run (only used for the [n/N] count).

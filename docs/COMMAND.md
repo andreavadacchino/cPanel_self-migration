@@ -5,7 +5,7 @@ written to or modified, so your source data is never touched or at risk. All wri
 go to the **DESTINATION**. Full details in [USAGE.md](USAGE.md).
 
 ```text
-cpanel-self-migration [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--domain DOMAIN] [--mailbox ADDR] [--full] [--verify-checksums] [--deep-verify] [--config PATH] [--log-level LEVEL]
+cpanel-self-migration [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--domain DOMAIN] [--mailbox ADDR] [--full] [--verify-checksums] [--deep-verify] [--config PATH] [--log-level LEVEL] [--run-id ID] [--output-dir DIR] [--json-events] [--report-json]
 ```
 
 ## Flags
@@ -27,6 +27,10 @@ cpanel-self-migration [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db
 | `--deep-verify`           | With `--apply`: verify by CONTENT hash, not metadata — sha256 per web file + per mail message, exact DB row counts + same-version table checksum. Catches same-size corruption; slower (reads every byte on both sides). |
 | `--config PATH`           | Path to `host.yaml` (default: `configs/host.yaml`).               |
 | `--log-level info\|debug` | Verbosity (`debug` → diagnostics to stderr). Default `info`.       |
+| `--run-id ID`             | Optional run identifier for structured output. Default: auto-generated `run-YYYYMMDD-HHMMSS`. |
+| `--output-dir DIR`        | Output directory for all artifacts (default: CWD). Created if missing. |
+| `--json-events`           | Write JSONL events to `<output-dir>/events.jsonl`. Does not suppress stdout. |
+| `--report-json`           | Write JSON summary to `<output-dir>/report.json`. Does not suppress stdout. |
 | `--version`               | Print version and exit.                                            |
 | `-h`, `--help`            | Show help and exit.                                                |
 
@@ -88,9 +92,11 @@ make build
 
 ## Artifacts (under `logs/`)
 
-| File                        | When            |
-|-----------------------------|-----------------|
-| `mail_analysis.log`         | `--mail`        |
-| `web_analysis.log`          | `--file`        |
-| `db_analysis.log`           | `--db`          |
-| `migration_report.log`      | `--apply`       |
+| File                        | When               |
+|-----------------------------|--------------------|
+| `logs/mail_analysis.log`    | `--mail`           |
+| `logs/web_analysis.log`     | `--file`           |
+| `logs/db_analysis.log`      | `--db`             |
+| `logs/migration_report.log` | `--apply`          |
+| `events.jsonl`              | `--json-events`    |
+| `report.json`               | `--report-json`    |
