@@ -3,84 +3,105 @@
     "apiversion": 2,
     "func": "fetchzone_records",
     "module": "ZoneEdit",
+    "preevent": {
+      "result": 1
+    },
+    "postevent": {
+      "result": 1
+    },
     "data": [
       {
+        "record": null,
+        "Line": 1,
         "line": 1,
-        "type": "A",
-        "name": "example.com.",
-        "address": "192.168.1.1",
-        "ttl": 14400,
-        "class": "IN",
-        "record": "example.com.\t14400\tIN\tA\t192.168.1.1"
+        "type": ":RAW",
+        "raw": "; cPanel first:11.62.0.19 Cpanel::ZoneFile::VERSION:1.3 hostname:server.example.test"
       },
       {
         "line": 2,
-        "type": "AAAA",
-        "name": "example.com.",
-        "address": "2001:db8::1",
-        "ttl": 14400,
-        "class": "IN",
-        "record": "example.com.\t14400\tIN\tAAAA\t2001:db8::1"
+        "Line": 2,
+        "record": null,
+        "ttl": "14400",
+        "type": "$TTL"
       },
       {
         "line": 3,
-        "type": "CNAME",
-        "name": "mail.example.com.",
-        "cname": "example.com.",
-        "ttl": 14400,
+        "Line": 3,
+        "Lines": 1,
+        "type": "SOA",
         "class": "IN",
-        "record": "mail.example.com.\t14400\tIN\tCNAME\texample.com."
+        "name": "example.com.",
+        "ttl": 86400,
+        "record": null,
+        "mname": "ns1.example.com",
+        "rname": "admin.example.com",
+        "serial": "2024010101",
+        "refresh": "3600",
+        "retry": "1800",
+        "expire": "1209600",
+        "minimum": "86400"
       },
       {
         "line": 4,
-        "type": "MX",
-        "name": "example.com.",
-        "exchange": "mail.example.com.",
-        "preference": 10,
-        "ttl": 14400,
+        "Line": 4,
+        "type": "NS",
         "class": "IN",
-        "record": "example.com.\t14400\tIN\tMX\t10\tmail.example.com."
+        "name": "example.com.",
+        "ttl": 86400,
+        "record": null,
+        "nsdname": "ns1.example.com"
       },
       {
         "line": 5,
-        "type": "TXT",
-        "name": "example.com.",
-        "txtdata": "v=spf1 include:_spf.google.com ~all",
-        "ttl": 14400,
+        "Line": 5,
+        "type": "A",
         "class": "IN",
-        "record": "example.com.\t14400\tIN\tTXT\t\"v=spf1 include:_spf.google.com ~all\""
+        "name": "example.com.",
+        "ttl": 14400,
+        "record": "192.168.1.1",
+        "address": "192.168.1.1"
       },
       {
         "line": 6,
-        "type": "NS",
-        "name": "example.com.",
-        "nsdname": "ns1.example.com.",
-        "ttl": 86400,
+        "Line": 6,
+        "type": "AAAA",
         "class": "IN",
-        "record": "example.com.\t86400\tIN\tNS\tns1.example.com."
+        "name": "example.com.",
+        "ttl": 14400,
+        "record": "2001:db8::1",
+        "address": "2001:db8::1"
       },
       {
         "line": 7,
-        "type": "SOA",
-        "name": "example.com.",
-        "mname": "ns1.example.com.",
-        "rname": "admin.example.com.",
-        "serial": 2024010101,
-        "refresh": 3600,
-        "retry": 1800,
-        "expire": 1209600,
-        "minimum": 86400,
-        "ttl": 86400,
+        "Line": 7,
+        "type": "MX",
         "class": "IN",
-        "record": "example.com.\t86400\tIN\tSOA\tns1.example.com.\tadmin.example.com.\t2024010101\t3600\t1800\t1209600\t86400"
+        "name": "example.com.",
+        "ttl": 14400,
+        "record": null,
+        "exchange": "mail.example.com",
+        "preference": "10"
       },
       {
         "line": 8,
-        "type": ":RAW",
-        "name": "",
-        "raw": "; custom record that cpanel does not parse",
-        "ttl": 0,
-        "class": ""
+        "Line": 8,
+        "type": "CNAME",
+        "class": "IN",
+        "name": "www.example.com.",
+        "ttl": 14400,
+        "record": "example.com",
+        "cname": "example.com"
+      },
+      {
+        "line": 9,
+        "Line": 9,
+        "type": "TXT",
+        "class": "IN",
+        "name": "example.com.",
+        "ttl": 14400,
+        "record": null,
+        "txtdata": "v=spf1 include:_spf.google.com ~all",
+        "unencoded": 1
       }
     ],
     "event": {

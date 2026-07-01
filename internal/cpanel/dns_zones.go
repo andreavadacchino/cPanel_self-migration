@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/logx"
@@ -35,12 +36,12 @@ type DNSRecord struct {
 // ---------------------------------------------------------------------------
 
 type uapiDNSRawRecord struct {
-	DNameB64   string   `json:"dname_b64"`
-	RecordType string   `json:"record_type"`
-	DataB64    []string `json:"data_b64"`
-	TTL        int      `json:"ttl"`
-	LineIndex  int      `json:"line_index"`
-	Type       string   `json:"type"` // "record", "control", "comment"
+	DNameB64   string    `json:"dname_b64"`
+	RecordType string    `json:"record_type"`
+	DataB64    []string  `json:"data_b64"`
+	TTL        flexInt64 `json:"ttl"` // number OR quoted string across cPanel builds
+	LineIndex  int       `json:"line_index"`
+	Type       string    `json:"type"` // "record", "control", "comment"
 }
 
 func FetchDNSZoneUAPI(ctx context.Context, c Runner, zone string) ([]DNSRecord, error) {
@@ -83,7 +84,7 @@ func normalizeUAPIRecords(raw []uapiDNSRawRecord) ([]DNSRecord, []string) {
 		rec := DNSRecord{
 			Type: r.RecordType,
 			Name: dname,
-			TTL:  r.TTL,
+			TTL:  int(r.TTL),
 			Line: r.LineIndex,
 		}
 
@@ -110,9 +111,12 @@ func normalizeUAPIRecords(raw []uapiDNSRawRecord) ([]DNSRecord, []string) {
 				rec.Value = decodedData[0]
 			}
 		case "TXT":
+			// Long TXT values (DKIM keys) arrive split into 255-char
+			// segments; RFC 1035 semantics concatenate them.
 			if len(decodedData) > 0 {
-				rec.TxtData = decodedData[0]
-				rec.Value = decodedData[0]
+				joined := strings.Join(decodedData, "")
+				rec.TxtData = joined
+				rec.Value = joined
 			}
 		case "NS":
 			if len(decodedData) > 0 {
@@ -169,27 +173,33 @@ func parseUAPIDNSZone(out []byte) ([]DNSRecord, error) {
 // API2 ZoneEdit::fetchzone_records (legacy fallback)
 // ---------------------------------------------------------------------------
 
+// api2DNSRawRecord is one entry of ZoneEdit::fetchzone_records. Verified
+// against a live cPanel 110.0 (build 131): numeric fields arrive as EITHER
+// bare numbers or quoted strings depending on the field and record type
+// (e.g. the $TTL pseudo-record carries ttl:"14400" while an A record carries
+// ttl:14400; MX preference and all SOA counters are quoted strings), so every
+// numeric field uses flexInt64 — a plain int would fail the WHOLE zone decode.
 type api2DNSRawRecord struct {
-	Line       int             `json:"line"`
-	Type       string          `json:"type"`
-	Name       string          `json:"name"`
-	TTL        int             `json:"ttl"`
-	Class      string          `json:"class"`
-	Record     string          `json:"record"`
-	Address    string          `json:"address,omitempty"`
-	Cname      string          `json:"cname,omitempty"`
-	Exchange   string          `json:"exchange,omitempty"`
-	Preference int             `json:"preference,omitempty"`
-	TxtData    string          `json:"txtdata,omitempty"`
-	NSDName    string          `json:"nsdname,omitempty"`
-	MName      string          `json:"mname,omitempty"`
-	RName      string          `json:"rname,omitempty"`
-	Serial     json.Number     `json:"serial,omitempty"`
-	Refresh    int             `json:"refresh,omitempty"`
-	Retry      int             `json:"retry,omitempty"`
-	Expire     int             `json:"expire,omitempty"`
-	Minimum    int             `json:"minimum,omitempty"`
-	RawField   string          `json:"raw,omitempty"`
+	Line       flexInt64 `json:"line"`
+	Type       string    `json:"type"`
+	Name       string    `json:"name"`
+	TTL        flexInt64 `json:"ttl"`
+	Class      string    `json:"class"`
+	Record     string    `json:"record"`
+	Address    string    `json:"address,omitempty"`
+	Cname      string    `json:"cname,omitempty"`
+	Exchange   string    `json:"exchange,omitempty"`
+	Preference flexInt64 `json:"preference,omitempty"`
+	TxtData    string    `json:"txtdata,omitempty"`
+	NSDName    string    `json:"nsdname,omitempty"`
+	MName      string    `json:"mname,omitempty"`
+	RName      string    `json:"rname,omitempty"`
+	Serial     flexInt64 `json:"serial,omitempty"`
+	Refresh    flexInt64 `json:"refresh,omitempty"`
+	Retry      flexInt64 `json:"retry,omitempty"`
+	Expire     flexInt64 `json:"expire,omitempty"`
+	Minimum    flexInt64 `json:"minimum,omitempty"`
+	RawField   string    `json:"raw,omitempty"`
 }
 
 func FetchDNSZoneAPI2(ctx context.Context, c Runner, domain string) ([]DNSRecord, error) {
@@ -209,9 +219,9 @@ func normalizeAPI2Records(raw []api2DNSRawRecord) []DNSRecord {
 		rec := DNSRecord{
 			Type:  r.Type,
 			Name:  r.Name,
-			TTL:   r.TTL,
+			TTL:   int(r.TTL),
 			Class: r.Class,
-			Line:  r.Line,
+			Line:  int(r.Line),
 		}
 
 		switch r.Type {
@@ -223,7 +233,7 @@ func normalizeAPI2Records(raw []api2DNSRawRecord) []DNSRecord {
 			rec.Value = r.Cname
 		case "MX":
 			rec.Exchange = r.Exchange
-			rec.Priority = r.Preference
+			rec.Priority = int(r.Preference)
 			rec.Value = r.Exchange
 		case "TXT":
 			rec.TxtData = r.TxtData
@@ -232,7 +242,7 @@ func normalizeAPI2Records(raw []api2DNSRawRecord) []DNSRecord {
 			rec.Target = r.NSDName
 			rec.Value = r.NSDName
 		case "SOA":
-			rec.Value = fmt.Sprintf("%s %s %s", r.MName, r.RName, r.Serial)
+			rec.Value = fmt.Sprintf("%s %s %d", r.MName, r.RName, int64(r.Serial))
 			rawBytes, _ := json.Marshal(r)
 			rec.Raw = rawBytes
 		case ":RAW":
