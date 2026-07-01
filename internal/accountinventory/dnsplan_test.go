@@ -3,6 +3,7 @@ package accountinventory
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // Fixture helpers reproduce the REAL parse_zone shape captured on cPanel
@@ -422,6 +423,118 @@ func TestBuildDNSPlanDeterministicOrdering(t *testing.T) {
 	// Same inputs → identical plan (summary included).
 	if p1.Summary != p2.Summary {
 		t.Errorf("summary not deterministic: %+v vs %+v", p1.Summary, p2.Summary)
+	}
+}
+
+func TestCanonDNSName(t *testing.T) {
+	cases := []struct {
+		name, zone, want string
+	}{
+		{"", "example.com", "example.com."},
+		{"@", "example.com", "example.com."},
+		{"example.com.", "example.com", "example.com."},
+		{"example.com", "example.com", "example.com."},  // bare apex, no dot
+		{"Example.COM", "example.com", "example.com."},  // bare apex, mixed case
+		{"WWW", "example.com", "www.example.com."},
+		{"www.example.com.", "Example.Com", "www.example.com."},
+		{"*", "example.com", "*.example.com."},
+		{"mail", "example.com.", "mail.example.com."}, // zone already dotted
+		{"a.b", "example.com", "a.b.example.com."},
+	}
+	for _, c := range cases {
+		if got := canonDNSName(c.name, c.zone); got != c.want {
+			t.Errorf("canonDNSName(%q, %q) = %q, want %q", c.name, c.zone, got, c.want)
+		}
+	}
+}
+
+func TestSplitTXTSegmentsUTF8Boundary(t *testing.T) {
+	// 254 ASCII bytes then a 2-byte rune straddling the 255-byte cut:
+	// the split must back off to the rune boundary, keeping every
+	// segment valid UTF-8 (JSON round-trip safe) and rejoinable.
+	s := strings.Repeat("a", 254) + "è" + strings.Repeat("b", 10)
+	segs := splitTXTSegments(s)
+	if strings.Join(segs, "") != s {
+		t.Fatal("segments do not rejoin to the source value")
+	}
+	for i, seg := range segs {
+		if len(seg) > 255 {
+			t.Errorf("segment %d exceeds 255 bytes: %d", i, len(seg))
+		}
+		if !utf8.ValidString(seg) {
+			t.Errorf("segment %d is invalid UTF-8 — JSON persistence would corrupt it", i)
+		}
+	}
+	if len(segs[0]) != 254 {
+		t.Errorf("first cut = %d bytes, want 254 (backed off the rune boundary)", len(segs[0]))
+	}
+}
+
+func TestBuildDNSPlanInvalidUTF8TXTIsManual(t *testing.T) {
+	src := planInventory("source", "1.2.3.4",
+		planZone("example.com", txtRec("bad", "ok\xff\xfe", 300)))
+	dest := planInventory("destination", "5.6.7.8", planZone("example.com"))
+
+	_, z := singleZonePlan(t, src, dest, nil)
+	if op := findOp(t, z, "TXT", "bad.example.com."); op.Action != ActionManual {
+		t.Errorf("invalid-UTF-8 TXT action = %s, want manual", op.Action)
+	}
+}
+
+func TestBuildDNSPlanTXTMultiMatchReasonIsDeterministic(t *testing.T) {
+	src := planInventory("source", "1.2.3.4",
+		planZone("example.com",
+			txtRec("example.com.", "v=spf1 ip4:194.76.118.193 ip4:185.221.174.205 ~all", 300)))
+	dest := planInventory("destination", "5.6.7.8", planZone("example.com"))
+	ipMap := map[string]string{"194.76.118.193": "1.1.1.1", "185.221.174.205": "2.2.2.2"}
+
+	_, z1 := singleZonePlan(t, src, dest, ipMap)
+	op1 := findOp(t, z1, "TXT", "example.com.")
+	for i := 0; i < 5; i++ {
+		_, z2 := singleZonePlan(t, src, dest, ipMap)
+		if op2 := findOp(t, z2, "TXT", "example.com."); op2.Reason != op1.Reason {
+			t.Fatalf("manual reason not deterministic: %q vs %q", op1.Reason, op2.Reason)
+		}
+	}
+	if !strings.Contains(op1.Reason, "185.221.174.205") || !strings.Contains(op1.Reason, "194.76.118.193") {
+		t.Errorf("reason should list every matched address: %q", op1.Reason)
+	}
+}
+
+func TestBuildDNSPlanIPv6SpellingVariantsMatch(t *testing.T) {
+	src := planInventory("source", "1.2.3.4",
+		planZone("example.com",
+			DNSRecordEntry{Type: "AAAA", Name: "v6", TTL: 300,
+				Address: "2001:0db8:0000:0000:0000:0000:0000:0001", Value: "2001:0db8::1"}))
+	dest := planInventory("destination", "5.6.7.8", planZone("example.com"))
+
+	// The map uses the compressed spelling; the record the expanded one.
+	_, z := singleZonePlan(t, src, dest, map[string]string{"2001:db8::1": "2001:db8::2"})
+	op := findOp(t, z, "AAAA", "v6.example.com.")
+	if op.Action != ActionAdd {
+		t.Fatalf("AAAA spelling variant action = %s, want add (netip-canonical match)", op.Action)
+	}
+	if op.Records[0].Data[0] != "2001:db8::2" {
+		t.Errorf("translated AAAA = %v, want canonical 2001:db8::2", op.Records[0].Data)
+	}
+}
+
+func TestBuildDNSPlanZonesJSONStaysArrayWhenAllManual(t *testing.T) {
+	// Fresh-migration shape: the destination has no zones at all. The
+	// plan must keep zones=[] (array), not null, for jq/6C consumers.
+	src := planInventory("source", "1.2.3.4",
+		planZone("example.com", aRec("example.com.", "194.76.118.193", 300)))
+	dest := planInventory("destination", "5.6.7.8")
+
+	p, err := BuildDNSPlan(src, dest, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Zones == nil {
+		t.Fatal("plan.Zones is nil — must be a non-nil empty slice (JSON [])")
+	}
+	if len(p.ManualZones) != 1 {
+		t.Fatalf("manual zones = %+v", p.ManualZones)
 	}
 }
 

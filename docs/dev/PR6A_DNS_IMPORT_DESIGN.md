@@ -125,7 +125,10 @@ into the compare key — the diff reports drift, the plan acts on
 substance). Written records (`add`/`replace`) carry
 `min(source TTL, 3600)`; the cap bounds how long a wrong record or a
 rollback lives in resolver caches, and the plan notes each capped
-value. Lowering TTLs ahead of a cutover remains an operator task, out
+value. Deviation for TTL ≤ 0: real parse_zone always carries a
+positive TTL, so a non-positive value means missing collector data and
+defaults to the cap (flagged) rather than writing an accidental
+"do not cache". Lowering TTLs ahead of a cutover remains an operator task, out
 of scope.
 
 ## IP translation — the reason a blind copy is wrong

@@ -2,9 +2,11 @@ package accountinventory
 
 import (
 	"fmt"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // DNS import plan (PR 6B). BuildDNSPlan is fully offline: it consumes
@@ -121,7 +123,25 @@ func canonDNSName(name, zone string) string {
 	if strings.HasSuffix(n, ".") {
 		return n
 	}
+	// A bare name equal to the zone is the apex, not a relative name:
+	// real parse_zone emits the apex WITH the dot, but a degraded
+	// upstream (hand-edited zone, different collector) must not turn
+	// "example.com" into "example.com.example.com.".
+	if n == strings.TrimSuffix(z, ".") {
+		return z
+	}
 	return n + "." + z
+}
+
+// canonIPString returns the canonical textual form of an IP literal,
+// or the lowercased input when it does not parse — failing safe: an
+// unparsable address can never match an ip-map entry, so its rrset
+// lands in manual.
+func canonIPString(s string) string {
+	if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
+		return a.String()
+	}
+	return strings.ToLower(strings.TrimSpace(s))
 }
 
 // leftmostLabel returns the first DNS label of a canonical name.
@@ -133,15 +153,27 @@ func leftmostLabel(name string) string {
 }
 
 // splitTXTSegments splits TXT data into RFC 1035 character-string
-// segments, the format both parse_zone and mass_edit_zone use.
+// segments (≤255 bytes), the format both parse_zone and mass_edit_zone
+// use. Cuts land on UTF-8 rune boundaries: a segment holding half a
+// multi-byte rune would be invalid UTF-8 and encoding/json silently
+// rewrites invalid bytes to U+FFFD when the plan is persisted — the
+// rejoined value would no longer equal the source. Callers must reject
+// non-UTF-8 input first (classify sends it to manual).
 func splitTXTSegments(s string) []string {
 	if s == "" {
 		return []string{""}
 	}
 	var out []string
 	for len(s) > txtSegmentLen {
-		out = append(out, s[:txtSegmentLen])
-		s = s[txtSegmentLen:]
+		cut := txtSegmentLen
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		if cut == 0 { // degenerate: no boundary in the window
+			cut = txtSegmentLen
+		}
+		out = append(out, s[:cut])
+		s = s[cut:]
 	}
 	return append(out, s)
 }
@@ -157,7 +189,7 @@ type rrsetKey struct {
 func planValue(r DNSRecordEntry, zone string) string {
 	switch r.Type {
 	case "A", "AAAA":
-		return strings.ToLower(r.Address)
+		return canonIPString(r.Address)
 	case "CNAME", "NS":
 		return canonDNSName(r.Target, zone)
 	case "MX":
@@ -211,14 +243,22 @@ func BuildDNSPlan(src, dest NormalizedInventory, policy *PolicyReport, ipMap map
 	if !dest.DNS.Available {
 		return DNSPlan{}, fmt.Errorf("destination DNS section unavailable — re-run the inventory")
 	}
-	if ipMap == nil {
-		ipMap = map[string]string{}
+	// Both sides of every mapping go through netip canonicalization so
+	// lookups are by address identity, not by spelling.
+	canonMap := make(map[string]string, len(ipMap))
+	for k, v := range ipMap {
+		canonMap[canonIPString(k)] = canonIPString(v)
 	}
+	ipMap = canonMap
 
+	// Zones is seeded non-nil so the JSON stays array-typed ("[]", not
+	// null) even when every source zone lands in ManualZones — the
+	// normal state of a fresh migration (diff.go convention).
 	plan := DNSPlan{
 		Mode:          "dns-import-plan",
 		FormatVersion: 1,
 		IPMap:         ipMap,
+		Zones:         []PlanZone{},
 	}
 
 	destZones := map[string]DNSZoneResult{}
@@ -273,7 +313,7 @@ func BuildDNSPlan(src, dest NormalizedInventory, policy *PolicyReport, ipMap map
 }
 
 func buildZonePlan(zone string, srcRecords, destRecords []DNSRecordEntry, ipMap map[string]string) PlanZone {
-	pz := PlanZone{Zone: zone}
+	pz := PlanZone{Zone: zone, Ops: []PlanOp{}}
 	srcSets := groupRRSets(srcRecords, zone)
 	destSets := groupRRSets(destRecords, zone)
 
@@ -373,13 +413,33 @@ func classify(op *PlanOp, k rrsetKey, records []DNSRecordEntry, destSets map[rrs
 	}
 	if k.Type == "TXT" {
 		for _, r := range records {
+			if !utf8.ValidString(r.TxtData) {
+				op.Action = ActionManual
+				op.Reason = "TXT value is not valid UTF-8 — it cannot be represented faithfully in the plan file"
+				return
+			}
+		}
+		// Substring match is deliberately naive: a false positive only
+		// costs a manual review (fail-safe), a miss would ship a stale
+		// address inside SPF.
+		matched := map[string]bool{}
+		for _, r := range records {
 			for from := range ipMap {
 				if strings.Contains(r.TxtData, from) {
-					op.Action = ActionManual
-					op.Reason = fmt.Sprintf("TXT value contains mapped source address %s (SPF?) — rewrite by hand", from)
-					return
+					matched[from] = true
 				}
 			}
+		}
+		if len(matched) > 0 {
+			addrs := make([]string, 0, len(matched))
+			for a := range matched {
+				addrs = append(addrs, a)
+			}
+			sort.Strings(addrs)
+			op.Action = ActionManual
+			op.Reason = fmt.Sprintf("TXT value contains mapped source address(es) %s (SPF?) — rewrite by hand",
+				strings.Join(addrs, ", "))
+			return
 		}
 	}
 
@@ -438,14 +498,19 @@ func translateRecords(records []DNSRecordEntry, typ string, ipMap map[string]str
 		var value string
 		switch typ {
 		case "A", "AAAA":
-			addr := strings.ToLower(r.Address)
+			// Lookups go through netip canonical form so textually
+			// different spellings of the same address (IPv6 zero
+			// compression, case) still match; an unparsable address
+			// fails safe into manual.
+			addr := canonIPString(r.Address)
 			to, ok := ipMap[addr]
 			if !ok {
 				unmappedSet[addr] = true
 				continue
 			}
+			to = canonIPString(to)
 			rec.Data = []string{to}
-			value = strings.ToLower(to)
+			value = to
 		case "CNAME":
 			t := canonDNSName(r.Target, zone)
 			rec.Data = []string{t}
@@ -468,11 +533,14 @@ func translateRecords(records []DNSRecordEntry, typ string, ipMap map[string]str
 	return out, unmapped
 }
 
+// capTTL implements the design's min(source TTL, 3600) with one
+// documented deviation: TTL <= 0 is treated as MISSING collector data
+// (parse_zone always carries a positive ttl on real records; a zero
+// here means the field never decoded) and defaults to the cap rather
+// than writing an accidental "do not cache". The capped flag surfaces
+// both cases in the plan so the reviewer sees the rewrite.
 func capTTL(ttl int) (int, bool) {
-	if ttl <= 0 {
-		return planWriteTTLCap, true
-	}
-	if ttl > planWriteTTLCap {
+	if ttl <= 0 || ttl > planWriteTTLCap {
 		return planWriteTTLCap, true
 	}
 	return ttl, false

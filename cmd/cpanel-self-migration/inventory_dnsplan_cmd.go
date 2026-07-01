@@ -15,29 +15,37 @@ import (
 
 // ipMapFlag collects repeatable --ip-map OLD=NEW pairs. Both sides must
 // be IP literals; identity mappings (X=X) are the explicit way to
-// authorize copying an address verbatim.
-type ipMapFlag map[string]string
+// authorize copying an address verbatim. Set never returns an error:
+// malformed values accumulate in errs and are reported AFTER flag
+// parsing as input errors (exit 1) — a Set error would surface as
+// flag.Parse's generic failure and misclassify as usage (exit 2), and
+// distinguishing the two by matching the stdlib error text would be
+// fragile.
+type ipMapFlag struct {
+	m    map[string]string
+	errs []string
+}
 
-func (m ipMapFlag) String() string {
-	parts := make([]string, 0, len(m))
-	for k, v := range m {
+func (f *ipMapFlag) String() string {
+	parts := make([]string, 0, len(f.m))
+	for k, v := range f.m {
 		parts = append(parts, k+"="+v)
 	}
 	return strings.Join(parts, ",")
 }
 
-func (m ipMapFlag) Set(s string) error {
+func (f *ipMapFlag) Set(s string) error {
 	from, to, ok := strings.Cut(s, "=")
-	if !ok || from == "" || to == "" {
-		return fmt.Errorf("want OLD_IP=NEW_IP, got %q", s)
+	switch {
+	case !ok || from == "" || to == "":
+		f.errs = append(f.errs, fmt.Sprintf("--ip-map: want OLD_IP=NEW_IP, got %q", s))
+	case net.ParseIP(from) == nil:
+		f.errs = append(f.errs, fmt.Sprintf("--ip-map: %q is not an IP address", from))
+	case net.ParseIP(to) == nil:
+		f.errs = append(f.errs, fmt.Sprintf("--ip-map: %q is not an IP address", to))
+	default:
+		f.m[strings.ToLower(from)] = to
 	}
-	if net.ParseIP(from) == nil {
-		return fmt.Errorf("%q is not an IP address", from)
-	}
-	if net.ParseIP(to) == nil {
-		return fmt.Errorf("%q is not an IP address", to)
-	}
-	m[strings.ToLower(from)] = to
 	return nil
 }
 
@@ -53,17 +61,20 @@ func runInventoryDNSPlanCmd(args []string) int {
 	policyPath := fs.String("policy", "", "optional policy_report.json for context cross-references")
 	outJSON := fs.String("output-json", "dns_import_plan.json", "path for the machine-readable plan")
 	outMD := fs.String("output-md", "dns_import_plan.md", "path for the human-readable plan")
-	ipMap := ipMapFlag{}
+	ipMap := &ipMapFlag{m: map[string]string{}}
 	fs.Var(ipMap, "ip-map", "OLD_IP=NEW_IP translation (repeatable; identity X=X authorizes a verbatim copy)")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory dns-plan --source SRC.json --destination DEST.json [--policy POLICY.json] [--ip-map OLD=NEW ...] [--output-json PATH] [--output-md PATH]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
-		if strings.Contains(err.Error(), "invalid value") {
-			return 1 // malformed --ip-map value: input error, not flag usage
-		}
 		return 2
+	}
+	if len(ipMap.errs) > 0 {
+		for _, e := range ipMap.errs {
+			fmt.Fprintln(os.Stderr, "error:", e)
+		}
+		return 1
 	}
 	if *source == "" || *destination == "" {
 		fmt.Fprintln(os.Stderr, "error: --source and --destination are required")
@@ -92,7 +103,7 @@ func runInventoryDNSPlanCmd(args []string) int {
 		policy = &p
 	}
 
-	plan, err := accountinventory.BuildDNSPlan(srcInv, destInv, policy, ipMap)
+	plan, err := accountinventory.BuildDNSPlan(srcInv, destInv, policy, ipMap.m)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
