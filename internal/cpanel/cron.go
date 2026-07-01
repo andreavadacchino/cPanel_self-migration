@@ -290,8 +290,11 @@ const redactedCronPlaceholder = "[REDACTED]"
 // Deliberately over-redacts (e.g. "monkey=") — a lost banana beats a
 // leaked credential. Mirrors the keyword approach of events/redact.go,
 // which operates on JSON keys and is not reusable for shell command lines.
+// "secure" is included because PrestaShop (and other) cron jobs authenticate
+// with secure=<token> / ?secure=<token>; a real live crontab leaked such a
+// token because only "secret" (not "secure") was covered.
 var cronSensitiveNameFragments = []string{
-	"pass", "pwd", "token", "secret", "key", "auth", "cred", "bearer",
+	"pass", "pwd", "token", "secret", "secure", "key", "auth", "cred", "bearer",
 }
 
 func isSensitiveCronName(name string) bool {
@@ -316,12 +319,12 @@ var (
 	// at whitespace, &, or a quote so surrounding syntax survives. The
 	// separator is strictly '=' — a bare space would eat innocent arguments
 	// ("ssh-keygen -f …" must survive intact).
-	cronKeyValueRE = regexp.MustCompile(`(?i)([A-Za-z0-9_-]*(?:pass|pwd|token|secret|key|auth|cred)[A-Za-z0-9_-]*=\s*)("[^"]*"|'[^']*'|[^&\s"']+)`)
+	cronKeyValueRE = regexp.MustCompile(`(?i)([A-Za-z0-9_-]*(?:pass|pwd|token|secret|secure|key|auth|cred)[A-Za-z0-9_-]*=\s*)("[^"]*"|'[^']*'|[^&\s"']+)`)
 	// Sensitive FLAGS also accept a space-separated value (--password X,
 	// --user admin:pw). The (^|\s) anchor pins the dash to the start of a
 	// token: without it, the "-keygen" inside "ssh-keygen" would match and
 	// eat the following argument.
-	cronFlagValueRE = regexp.MustCompile(`(?i)((?:^|\s)--?[A-Za-z0-9_-]*(?:pass|pwd|token|secret|key|auth|cred|user)[A-Za-z0-9_-]*[= ]\s*)("[^"]*"|'[^']*'|[^&\s"']+)`)
+	cronFlagValueRE = regexp.MustCompile(`(?i)((?:^|\s)--?[A-Za-z0-9_-]*(?:pass|pwd|token|secret|secure|key|auth|cred|user)[A-Za-z0-9_-]*[= ]\s*)("[^"]*"|'[^']*'|[^&\s"']+)`)
 	// MySQL-style concatenated -p<password> (mysqldump -pSECRET). Over-
 	// matches other tools' -p<value> (ssh -p2222) — accepted trade-off.
 	// MUST run before cronFlagValueRE: a password containing "pass" would

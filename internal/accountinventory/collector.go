@@ -221,7 +221,7 @@ func collectFTP(ctx context.Context, r cpanel.Runner) FTPSection {
 			Login:    a.Login,
 			Type:     a.AcctType,
 			Dir:      a.Dir,
-			DiskUsed: a.DiskUsed,
+			DiskUsed: int64(a.DiskUsed),
 		})
 	}
 	return sec
@@ -241,7 +241,7 @@ func collectSSL(ctx context.Context, r cpanel.Runner) SSLSection {
 	sec.Available = true
 	for _, c := range certs {
 		sec.Items = append(sec.Items, SSLEntry{
-			Domains:        c.Domains,
+			Domains:        string(c.Domains),
 			Issuer:         c.IssuerCN,
 			ValidFrom:      c.NotBefore,
 			ValidUntil:     c.NotAfter,

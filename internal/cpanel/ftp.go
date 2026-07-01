@@ -8,14 +8,14 @@ import (
 )
 
 type FTPAccountEntry struct {
-	Login           string `json:"login"`
-	AcctType        string `json:"accttype"`
-	Dir             string `json:"dir"`
-	RelDir          string `json:"reldir"`
-	DiskQuota       string `json:"diskquota"`
-	DiskUsed        int64  `json:"diskused"`
-	DiskUsedPercent int    `json:"diskusedpercent"`
-	Deleteable      int    `json:"deleteable"`
+	Login           string    `json:"login"`
+	AcctType        string    `json:"accttype"`
+	Dir             string    `json:"dir"`
+	RelDir          string    `json:"reldir"`
+	DiskQuota       string    `json:"diskquota"`
+	DiskUsed        flexInt64 `json:"diskused"` // string "57632.08" or float 13558.40 across builds
+	DiskUsedPercent int       `json:"diskusedpercent"`
+	Deleteable      int       `json:"deleteable"`
 }
 
 func ListFTPAccounts(ctx context.Context, c Runner) ([]FTPAccountEntry, error) {

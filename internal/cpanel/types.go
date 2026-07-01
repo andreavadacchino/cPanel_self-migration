@@ -25,9 +25,44 @@ func (f *flexInt64) UnmarshalJSON(b []byte) error {
 	}
 	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
 		*f = flexInt64(n)
+		return nil
 	}
-	// A non-integer value (e.g. "" handled above, or unexpected text) stays 0:
+	// Some builds report a fractional value (e.g. Ftp::list_ftp_with_disk's
+	// diskused = "57632.08" or a bare 13558.40). Truncate to the integer part
+	// rather than collapse to 0, which would zero out every disk figure.
+	if v, err := strconv.ParseFloat(s, 64); err == nil {
+		*f = flexInt64(int64(v))
+		return nil
+	}
+	// A non-numeric value (e.g. "" handled above, or unexpected text) stays 0:
 	// this field is informational only, so we never fail the surrounding decode.
+	return nil
+}
+
+// flexStringList decodes a field that a cPanel build returns as EITHER a
+// single string or a JSON array of strings (notably SSL::list_certs' domains,
+// a SAN list). Values are flattened to a comma-joined string — the form the
+// diff/policy layers already key on — so a shape change can never fail the
+// whole response and silently drop the section.
+type flexStringList string
+
+func (f *flexStringList) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		return nil
+	}
+	if s[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(b, &arr); err != nil {
+			return nil // never fail the surrounding decode over a cosmetic field
+		}
+		*f = flexStringList(strings.Join(arr, ","))
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*f = flexStringList(one)
+	}
 	return nil
 }
 

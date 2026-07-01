@@ -1,0 +1,5 @@
+{"result":{"status":1,"data":[
+{"login":"anonimo@doctorbike.it","accttype":"sub","dir":"/home/doctorbike","reldir":"","diskquota":"unlimited","diskused":"57632.08","deleteable":1},
+{"login":"doctorbike","accttype":"main","dir":"/home/doctorbike","reldir":"","diskquota":"80000.00","diskused":"60811.73","deleteable":1},
+{"login":"italplant","accttype":"main","dir":"/home/italplant","reldir":"","diskquota":"15000.00","diskused":13558.40,"deleteable":1}
+]}}
