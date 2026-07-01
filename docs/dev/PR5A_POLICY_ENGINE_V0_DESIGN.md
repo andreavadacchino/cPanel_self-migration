@@ -74,7 +74,15 @@ The diff DNS keys are parsed positionally (`zone <zone> [<TYPE> <name>]`)
 — a format owned and tested by this repo. Cron removed/added entries
 carry `… enabled=true|false` in Detail; the diff producer was aligned in
 this PR (the whole-group branch previously omitted the flag the policy
-needs).
+needs). Skipped comparisons travel in the structured
+`sections.*.skipped` field (added in this PR): the "incomplete data can
+never be ready" gate branches on that field, never on warning prose.
+
+Legacy note: a diff produced by a pre-PR5A binary lacks both the
+`skipped` field and the cron `enabled=` flag. The engine fails CLOSED on
+such files: every removed cron job classifies as an active-job blocker
+(systematic false positives, never false negatives). Regenerate the diff
+with the current binary for accurate cron findings.
 
 The input file must have `mode == "inventory-diff"`; anything else is
 rejected (exit 1).

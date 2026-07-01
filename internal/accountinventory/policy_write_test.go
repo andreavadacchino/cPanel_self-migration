@@ -86,6 +86,32 @@ func TestWritePolicyMarkdown(t *testing.T) {
 	}
 }
 
+func TestWritePolicyMarkdownNewlineInjectionSafe(t *testing.T) {
+	// A crafted TXT record containing newlines must not break out of its
+	// table cell (DNS values are attacker-influenced free text).
+	d := diffWith("dns", changed(DiffFieldChange{
+		Key: "zone main.example TXT evil.main.example.", Field: "records",
+		Source:      "v=ok ttl=1",
+		Destination: "v=evil ttl=1\n\n# Injected heading\n| fake | row |",
+	}))
+	r := EvaluatePolicy(d)
+	r.InputDiff, r.GeneratedAt = "d.json", "t"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "policy.md")
+	if err := WritePolicyMarkdown(path, r); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	// Inline occurrences inside a cell are harmless; breaking out means
+	// the injected text starts its OWN line.
+	if strings.Contains(string(b), "\n# Injected heading") {
+		t.Error("newline in a record value broke out of its markdown cell")
+	}
+	if strings.Contains(string(b), "\n| fake | row |") {
+		t.Error("injected table row escaped its cell")
+	}
+}
+
 func TestWritePolicyMarkdownClean(t *testing.T) {
 	r := EvaluatePolicy(emptyDiff())
 	r.InputDiff, r.GeneratedAt = "d.json", "t"

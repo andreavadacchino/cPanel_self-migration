@@ -32,10 +32,15 @@ type DiffFieldChange struct {
 }
 
 type SectionDiff struct {
-	Added    []DiffEntry       `json:"added"`
-	Removed  []DiffEntry       `json:"removed"`
-	Changed  []DiffFieldChange `json:"changed"`
-	Warnings []string          `json:"warnings"`
+	Added   []DiffEntry       `json:"added"`
+	Removed []DiffEntry       `json:"removed"`
+	Changed []DiffFieldChange `json:"changed"`
+	// Skipped lists comparisons that could NOT be performed (section or
+	// zone unavailable on either side). It is a structured signal — the
+	// policy engine gates on it, so it must never be folded into the
+	// free-text Warnings.
+	Skipped  []string `json:"skipped"`
+	Warnings []string `json:"warnings"`
 }
 
 func newSectionDiff() SectionDiff {
@@ -43,6 +48,7 @@ func newSectionDiff() SectionDiff {
 		Added:    []DiffEntry{},
 		Removed:  []DiffEntry{},
 		Changed:  []DiffFieldChange{},
+		Skipped:  []string{},
 		Warnings: []string{},
 	}
 }
@@ -102,7 +108,7 @@ func DiffInventories(src, dest NormalizedInventory) InventoryDiff {
 		d.Summary.Added += len(sec.Added)
 		d.Summary.Removed += len(sec.Removed)
 		d.Summary.Changed += len(sec.Changed)
-		d.Summary.Warnings += len(sec.Warnings)
+		d.Summary.Warnings += len(sec.Warnings) + len(sec.Skipped)
 	}
 	d.Summary.Warnings += len(d.Warnings)
 	return d
@@ -187,7 +193,7 @@ func skipUnavailable(name string, srcAvail, destAvail bool) (SectionDiff, bool) 
 		} else if !destAvail {
 			side = "source and destination"
 		}
-		sec.Warnings = append(sec.Warnings,
+		sec.Skipped = append(sec.Skipped,
 			fmt.Sprintf("%s unavailable on %s — comparison skipped", name, side))
 		return sec, true
 	}
@@ -215,6 +221,7 @@ func sortSectionDiff(sec *SectionDiff) {
 		}
 		return sec.Changed[i].Field < sec.Changed[j].Field
 	})
+	sort.Strings(sec.Skipped)
 	sort.Strings(sec.Warnings)
 }
 
@@ -377,7 +384,7 @@ func diffDNS(src, dest DNSSection) SectionDiff {
 			continue
 		}
 		if !sz.Available || !dz.Available {
-			sec.Warnings = append(sec.Warnings,
+			sec.Skipped = append(sec.Skipped,
 				fmt.Sprintf("zone %s unavailable on one side — records not compared", name))
 			continue
 		}

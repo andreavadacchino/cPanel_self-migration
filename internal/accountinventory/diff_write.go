@@ -52,11 +52,15 @@ func WriteDiffMarkdown(path string, d InventoryDiff) error {
 		if !ok {
 			continue
 		}
-		if len(sec.Added) == 0 && len(sec.Removed) == 0 && len(sec.Changed) == 0 && len(sec.Warnings) == 0 {
+		if len(sec.Added) == 0 && len(sec.Removed) == 0 && len(sec.Changed) == 0 &&
+			len(sec.Warnings) == 0 && len(sec.Skipped) == 0 {
 			continue
 		}
 		fmt.Fprintf(&sb, "## %s — %d added, %d removed, %d changed\n\n",
 			name, len(sec.Added), len(sec.Removed), len(sec.Changed))
+		for _, s := range sec.Skipped {
+			fmt.Fprintf(&sb, "> **Comparison skipped**: %s\n\n", s)
+		}
 		for _, w := range sec.Warnings {
 			fmt.Fprintf(&sb, "> **Warning**: %s\n\n", w)
 		}

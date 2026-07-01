@@ -219,15 +219,18 @@ func TestDiffUnavailableSectionWarnsNotPanics(t *testing.T) {
 
 	d := DiffInventories(src, dest)
 	sec := sectionOf(t, d, "ftp")
-	if len(sec.Warnings) == 0 {
-		t.Error("unavailable ftp must produce a section warning")
+	// A skipped comparison is a STRUCTURED signal, not prose: the policy
+	// engine gates on this field, so wording changes cannot silently
+	// downgrade "incomplete data" to "ready".
+	if len(sec.Skipped) == 0 {
+		t.Error("unavailable ftp must populate skipped")
 	}
 	// The missing items must NOT read as removals.
 	if len(sec.Removed) != 0 {
 		t.Errorf("removed = %+v, want none (section skipped)", sec.Removed)
 	}
 	if d.Summary.Warnings == 0 {
-		t.Error("summary must count warnings")
+		t.Error("summary must count skipped comparisons")
 	}
 }
 
@@ -305,8 +308,8 @@ func TestDiffDNSUnavailableZoneWarns(t *testing.T) {
 
 	d := DiffInventories(src, dest)
 	sec := sectionOf(t, d, "dns")
-	if len(sec.Warnings) == 0 {
-		t.Error("unavailable zone must warn")
+	if len(sec.Skipped) == 0 {
+		t.Error("unavailable zone must populate skipped")
 	}
 	// Records of the skipped zone must NOT read as removed.
 	if len(sec.Removed) != 0 {

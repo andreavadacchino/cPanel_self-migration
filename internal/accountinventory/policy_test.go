@@ -337,8 +337,10 @@ func TestPolicyForwarderRemovedReviewAddedInfo(t *testing.T) {
 }
 
 func TestPolicySectionUnavailableReview(t *testing.T) {
+	// Gating happens on the STRUCTURED Skipped field, not on warning
+	// prose: rewording a message can never turn incomplete data "ready".
 	sec := newSectionDiff()
-	sec.Warnings = append(sec.Warnings, "cron unavailable on destination — comparison skipped")
+	sec.Skipped = append(sec.Skipped, "cron unavailable on destination")
 	r := EvaluatePolicy(diffWith("cron", sec))
 	f := findingByID(t, r, "POL-SECTION-UNAVAILABLE")
 	if f.Severity != "review" {
@@ -346,6 +348,57 @@ func TestPolicySectionUnavailableReview(t *testing.T) {
 	}
 	if r.OverallStatus != "review_required" {
 		t.Errorf("status = %q — incomplete data can never be ready", r.OverallStatus)
+	}
+}
+
+func TestPolicyGenericWarningDoesNotGate(t *testing.T) {
+	sec := newSectionDiff()
+	sec.Warnings = append(sec.Warnings, `duplicate key "x" in source — last occurrence wins`)
+	r := EvaluatePolicy(diffWith("domains", sec))
+	if findingByID(t, r, "POL-DIFF-WARNING").Severity != "warning" {
+		t.Error("generic diff warning must be severity warning")
+	}
+	if r.OverallStatus != "ready" {
+		t.Errorf("status = %q — plain warnings must not gate", r.OverallStatus)
+	}
+}
+
+func TestPolicyDNSSOAChangedIsInfo(t *testing.T) {
+	// SOA serial/timers differ on virtually every regenerated zone:
+	// review-severity here would only train operators to skim findings.
+	r := EvaluatePolicy(diffWith("dns", changed(DiffFieldChange{
+		Key: "zone main.example SOA main.example.", Field: "records",
+		Source: "ns1. admin. 2026010101 ttl=1", Destination: "ns2. admin. 2026070101 ttl=1",
+	})))
+	f := findingByID(t, r, "POL-DNS-SOA-CHANGED")
+	if f.Severity != "info" {
+		t.Errorf("SOA changed = %q, want info", f.Severity)
+	}
+	if r.OverallStatus != "ready" {
+		t.Errorf("status = %q", r.OverallStatus)
+	}
+}
+
+func TestPolicyDNSKeyEmptyNameNotZone(t *testing.T) {
+	// A malformed record-level key with an empty owner name must NOT be
+	// classified as a whole missing zone (blocker with a wrong headline).
+	r := EvaluatePolicy(diffWith("dns", removed(DiffEntry{Key: "zone main.example TXT", Detail: "x ttl=1"})))
+	assertNoFindingID(t, r, "POL-DNS-ZONE-REMOVED")
+	if findingByID(t, r, "POL-DNS-RECORD-REMOVED").Severity != "review" {
+		t.Error("record with empty name must classify as record-level")
+	}
+}
+
+func TestPolicySortTiebreakerOnRefs(t *testing.T) {
+	// Two removed mailboxes: same severity/section/id and empty Detail —
+	// the refs must order them deterministically.
+	d := diffWith("mailboxes", removed(DiffEntry{Key: "b@x"}, DiffEntry{Key: "a@x"}))
+	r := EvaluatePolicy(d)
+	if len(r.Findings) != 2 {
+		t.Fatalf("findings = %d", len(r.Findings))
+	}
+	if r.Findings[0].SourceRef != "a@x" || r.Findings[1].SourceRef != "b@x" {
+		t.Errorf("findings not ordered by ref: %+v", r.Findings)
 	}
 }
 

@@ -160,25 +160,34 @@ func EvaluatePolicy(d InventoryDiff) PolicyReport {
 		if a.ID != b.ID {
 			return a.ID < b.ID
 		}
-		return a.Detail < b.Detail
+		if a.Detail != b.Detail {
+			return a.Detail < b.Detail
+		}
+		// Refs complete the ordering: several sections emit findings with
+		// an empty Detail (e.g. two removed mailboxes) that differ only
+		// by the item they reference.
+		if a.SourceRef != b.SourceRef {
+			return a.SourceRef < b.SourceRef
+		}
+		return a.DestinationRef < b.DestinationRef
 	})
 	return r
 }
 
-// evalSectionWarnings turns the diff's own section warnings into
-// findings: a skipped comparison means incomplete data, which can never
-// be "ready"; other diff warnings surface as non-gating warnings.
+// evalSectionWarnings turns the diff's structured signals into findings:
+// a skipped comparison (structured Skipped field, never matched by prose)
+// means incomplete data, which can never be "ready"; free-text diff
+// warnings surface as non-gating warnings.
 func evalSectionWarnings(section string, sec SectionDiff, emit func(PolicyFinding)) {
+	for _, s := range sec.Skipped {
+		emit(PolicyFinding{
+			ID: "POL-SECTION-UNAVAILABLE", Section: section, Severity: SeverityReview,
+			Title:          fmt.Sprintf("%s comparison incomplete", section),
+			Detail:         s,
+			Recommendation: "Re-run the inventory so both sides expose this section, then diff again.",
+		})
+	}
 	for _, w := range sec.Warnings {
-		if strings.Contains(w, "comparison skipped") || strings.Contains(w, "not compared") {
-			emit(PolicyFinding{
-				ID: "POL-SECTION-UNAVAILABLE", Section: section, Severity: SeverityReview,
-				Title:          fmt.Sprintf("%s comparison incomplete", section),
-				Detail:         w,
-				Recommendation: "Re-run the inventory so both sides expose this section, then diff again.",
-			})
-			continue
-		}
 		emit(PolicyFinding{
 			ID: "POL-DIFF-WARNING", Section: section, Severity: SeverityWarning,
 			Title:          fmt.Sprintf("%s diff warning", section),
@@ -311,6 +320,19 @@ func evalSSL(sec SectionDiff, d InventoryDiff, emit func(PolicyFinding)) {
 		}
 	}
 	for _, e := range sec.Removed {
+		if e.Key == "" {
+			// A certificate entry without a domain list cannot be
+			// cross-checked: fail closed with an explicit note instead of
+			// an empty, unactionable Item column.
+			emit(PolicyFinding{
+				ID: "POL-SSL-REMOVED", Section: "ssl", Severity: SeverityBlocker,
+				Title:          "Certificate missing for a domain still present",
+				Detail:         "certificate entry carries no domain list — verify manually",
+				Recommendation: "Issue or install a certificate on the destination before cutover.",
+				SourceRef:      "(no domain list)",
+			})
+			continue
+		}
 		allGone := true
 		for _, dom := range strings.Split(e.Key, ",") {
 			if !removedDomains[strings.TrimSpace(dom)] {
@@ -388,9 +410,12 @@ func evalPHP(sec SectionDiff, emit func(PolicyFinding)) {
 
 // dnsKeyType extracts the record type from a DNS diff key
 // ("zone <zone> <TYPE> <name>"); zone-level keys ("zone <zone>") return "".
+// A 3-token key (record whose owner name decoded empty) is still a
+// RECORD-level key: classifying it as a whole zone would produce an
+// alarming, wrong "zone missing" blocker for one malformed record.
 func dnsKeyType(key string) string {
 	fields := strings.Fields(key)
-	if len(fields) >= 4 && fields[0] == "zone" {
+	if len(fields) >= 3 && fields[0] == "zone" {
 		return fields[2]
 	}
 	return ""
@@ -430,7 +455,8 @@ func evalDNS(sec SectionDiff, emit func(PolicyFinding)) {
 	}
 	for _, c := range sec.Changed {
 		typ := dnsKeyType(c.Key)
-		if isMailRoutingType(typ) {
+		switch {
+		case isMailRoutingType(typ):
 			emit(PolicyFinding{
 				ID: "POL-DNS-" + typ + "-CHANGED", Section: "dns", Severity: SeverityBlocker,
 				Title:          typ + " record differs",
@@ -438,15 +464,25 @@ func evalDNS(sec SectionDiff, emit func(PolicyFinding)) {
 				Recommendation: "Review mail/delegation routing before cutover.",
 				SourceRef:      c.Key, DestinationRef: c.Key,
 			})
-			continue
+		case typ == "SOA":
+			// SOA serial/timers differ on virtually every regenerated
+			// zone: review-severity here would only cause finding fatigue.
+			emit(PolicyFinding{
+				ID: "POL-DNS-SOA-CHANGED", Section: "dns", Severity: SeverityInfo,
+				Title:          "SOA record differs",
+				Detail:         fmt.Sprintf("%s → %s", c.Source, c.Destination),
+				Recommendation: "Expected when a zone is regenerated on a new host; no action needed.",
+				SourceRef:      c.Key, DestinationRef: c.Key,
+			})
+		default:
+			emit(PolicyFinding{
+				ID: "POL-DNS-RECORD-CHANGED", Section: "dns", Severity: SeverityReview,
+				Title:          typ + " record differs",
+				Detail:         fmt.Sprintf("%s → %s", c.Source, c.Destination),
+				Recommendation: "Verify the destination value (SPF/DKIM/DMARC and app records especially).",
+				SourceRef:      c.Key, DestinationRef: c.Key,
+			})
 		}
-		emit(PolicyFinding{
-			ID: "POL-DNS-RECORD-CHANGED", Section: "dns", Severity: SeverityReview,
-			Title:          typ + " record differs",
-			Detail:         fmt.Sprintf("%s → %s", c.Source, c.Destination),
-			Recommendation: "Verify the destination value (SPF/DKIM/DMARC and app records especially).",
-			SourceRef:      c.Key, DestinationRef: c.Key,
-		})
 	}
 	for _, e := range sec.Added {
 		typ := dnsKeyType(e.Key)
