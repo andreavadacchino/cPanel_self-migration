@@ -173,6 +173,25 @@ func TestAPI2DNSMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestAPI2DNSEventResultAsString(t *testing.T) {
+	data := []byte(`{"cpanelresult":{"data":[{"line":1,"type":"A","name":"x.com.","address":"1.2.3.4","ttl":14400,"class":"IN","record":"x"}],"event":{"result":"1"}}}`)
+	records, err := parseAPI2DNSZone(data)
+	if err != nil {
+		t.Fatalf("event.result as string '1' should succeed: %v", err)
+	}
+	if len(records) != 1 {
+		t.Errorf("expected 1 record, got %d", len(records))
+	}
+}
+
+func TestAPI2DNSEventResultStringFailure(t *testing.T) {
+	data := []byte(`{"cpanelresult":{"data":[],"event":{"result":"0"},"error":"Zone not found"}}`)
+	_, err := parseAPI2DNSZone(data)
+	if err == nil {
+		t.Fatal("event.result '0' should fail")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // RunAPI2 infrastructure
 // ---------------------------------------------------------------------------

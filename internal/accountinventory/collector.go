@@ -209,6 +209,9 @@ func collectDNS(ctx context.Context, r cpanel.Runner, domains []DomainEntry) DNS
 
 	seen := map[string]bool{}
 	for _, d := range domains {
+		if d.Type == "sub" {
+			continue
+		}
 		zone := d.Name
 		if seen[zone] {
 			continue

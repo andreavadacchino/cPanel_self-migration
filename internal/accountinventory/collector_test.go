@@ -397,6 +397,22 @@ func TestCollectDNSFailNotFatal(t *testing.T) {
 	}
 }
 
+func TestCollectDNSSkipsSubdomains(t *testing.T) {
+	runner := newFakeRunnerFromFixtures(t)
+	ctx := context.Background()
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	for _, z := range result.Source.DNS.Zones {
+		for _, d := range result.Source.Domains {
+			if d.Name == z.Zone && d.Type == "sub" {
+				t.Errorf("subdomain %s should not appear as a DNS zone", z.Zone)
+			}
+		}
+	}
+}
+
 func TestCollectDNSNoNullArrays(t *testing.T) {
 	runner := newFakeRunnerFromFixtures(t)
 	ctx := context.Background()

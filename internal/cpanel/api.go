@@ -141,12 +141,12 @@ func parseAPI2[T any](module, fn string, out []byte) (T, error) {
 	if err := json.Unmarshal(out, &env); err != nil {
 		return zero, fmt.Errorf("cpapi2 %s::%s: parse JSON (%d bytes): %w", module, fn, len(out), err)
 	}
-	if env.CPanelResult.Event.Result != 1 {
+	if env.CPanelResult.Event.Result.String() != "1" {
 		errMsg := env.CPanelResult.Error
 		if errMsg == "" {
 			errMsg = "unknown API2 error"
 		}
-		return zero, fmt.Errorf("cpapi2 %s::%s: event.result=%d error=%s", module, fn, env.CPanelResult.Event.Result, errMsg)
+		return zero, fmt.Errorf("cpapi2 %s::%s: event.result=%s error=%s", module, fn, env.CPanelResult.Event.Result, errMsg)
 	}
 	return env.CPanelResult.Data, nil
 }

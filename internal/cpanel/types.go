@@ -133,7 +133,7 @@ type api2Envelope[T any] struct {
 	CPanelResult struct {
 		Data  T `json:"data"`
 		Event struct {
-			Result int `json:"result"`
+			Result json.Number `json:"result"`
 		} `json:"event"`
 		Error string `json:"error"`
 	} `json:"cpanelresult"`
