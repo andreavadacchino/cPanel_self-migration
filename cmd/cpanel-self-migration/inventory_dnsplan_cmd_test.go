@@ -135,6 +135,22 @@ func TestInventoryDNSPlanCmdBadIPMap(t *testing.T) {
 	}
 }
 
+func TestInventoryDNSPlanCmdWrongModePolicy(t *testing.T) {
+	dir := t.TempDir()
+	src := writeDNSInventory(t, dir, "src.json", "source", "example.com", nil)
+	dest := writeDNSInventory(t, dir, "dest.json", "destination", "example.com", nil)
+	notPolicy := filepath.Join(dir, "not-policy.json")
+	if err := os.WriteFile(notPolicy, []byte(`{"mode":"inventory-diff"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code := runInventoryDNSPlanCmd([]string{
+		"--source", src, "--destination", dest, "--policy", notPolicy,
+	})
+	if code != 1 {
+		t.Errorf("wrong-mode policy exit = %d, want 1", code)
+	}
+}
+
 func TestInventoryDNSPlanCmdMissingFlags(t *testing.T) {
 	if code := runInventoryDNSPlanCmd([]string{}); code != 1 {
 		t.Errorf("exit = %d, want 1", code)

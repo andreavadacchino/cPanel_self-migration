@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,9 +28,14 @@ type ipMapFlag struct {
 }
 
 func (f *ipMapFlag) String() string {
-	parts := make([]string, 0, len(f.m))
-	for k, v := range f.m {
-		parts = append(parts, k+"="+v)
+	keys := make([]string, 0, len(f.m))
+	for k := range f.m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+f.m[k])
 	}
 	return strings.Join(parts, ",")
 }
@@ -144,6 +150,9 @@ func loadPolicyFile(path string) (accountinventory.PolicyReport, error) {
 	}
 	if err := json.Unmarshal(b, &p); err != nil {
 		return p, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if p.Mode != "inventory-policy" {
+		return p, fmt.Errorf("%s: not a policy report (mode %q)", path, p.Mode)
 	}
 	return p, nil
 }
