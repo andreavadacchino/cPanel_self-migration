@@ -17,8 +17,10 @@ func writeDiffFileFor(t *testing.T, dir string, mutate func(dest *accountinvento
 	src := accountinventory.NewEmptyInventory("u", "1.2.3.4", "source")
 	src.Domains = []accountinventory.DomainEntry{{Name: "main.example", Type: "main"}}
 	src.Mailboxes = []accountinventory.MailboxEntry{{Email: "info@main.example", Domain: "main.example", User: "info"}}
+	src.Forwarders = []accountinventory.ForwarderEntry{{Source: "fwd@main.example", Destination: "info@main.example", Domain: "main.example"}}
 	dest := src
 	dest.Mailboxes = append([]accountinventory.MailboxEntry{}, src.Mailboxes...)
+	dest.Forwarders = append([]accountinventory.ForwarderEntry{}, src.Forwarders...)
 	if mutate != nil {
 		mutate(&dest)
 	}
@@ -60,6 +62,72 @@ func TestInventoryPolicyCmdWithBlockerExitsZero(t *testing.T) {
 	}
 	if !strings.Contains(string(md), "POL-MAILBOX-REMOVED") {
 		t.Error("markdown missing the blocker finding")
+	}
+}
+
+func TestInventoryPolicyCmdFailOnBlockersBlockedExitsThree(t *testing.T) {
+	dir := t.TempDir()
+	diff := writeDiffFileFor(t, dir, func(dest *accountinventory.NormalizedInventory) {
+		dest.Mailboxes = nil // mailbox removed → blocker
+	})
+	outJSON := filepath.Join(dir, "policy.json")
+	outMD := filepath.Join(dir, "policy.md")
+
+	code := runInventoryPolicyCmd([]string{"--diff", diff, "--fail-on-blockers", "--output-json", outJSON, "--output-md", outMD})
+	if code != 3 {
+		t.Fatalf("exit = %d, want 3 (blocked status must gate with --fail-on-blockers)", code)
+	}
+	// The gate must NOT suppress report generation: both artifacts exist
+	// and the JSON still records the blocked status.
+	b, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatalf("JSON report not written before gating exit: %v", err)
+	}
+	var r map[string]any
+	if err := json.Unmarshal(b, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r["overall_status"] != "blocked" {
+		t.Errorf("overall_status = %v, want blocked", r["overall_status"])
+	}
+	if _, err := os.Stat(outMD); err != nil {
+		t.Errorf("markdown report not written before gating exit: %v", err)
+	}
+}
+
+func TestInventoryPolicyCmdFailOnBlockersReadyExitsZero(t *testing.T) {
+	dir := t.TempDir()
+	diff := writeDiffFileFor(t, dir, nil) // identical inventories → ready
+
+	code := runInventoryPolicyCmd([]string{"--diff", diff, "--fail-on-blockers",
+		"--output-json", filepath.Join(dir, "policy.json"), "--output-md", filepath.Join(dir, "policy.md")})
+	if code != 0 {
+		t.Errorf("exit = %d, want 0 (ready must not gate)", code)
+	}
+}
+
+func TestInventoryPolicyCmdFailOnBlockersReviewRequiredExitsZero(t *testing.T) {
+	dir := t.TempDir()
+	diff := writeDiffFileFor(t, dir, func(dest *accountinventory.NormalizedInventory) {
+		dest.Forwarders = nil // forwarder removed → review, not blocker
+	})
+	outJSON := filepath.Join(dir, "policy.json")
+
+	code := runInventoryPolicyCmd([]string{"--diff", diff, "--fail-on-blockers",
+		"--output-json", outJSON, "--output-md", filepath.Join(dir, "policy.md")})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (--fail-on-blockers gates only blocked, not review_required)", code)
+	}
+	b, err := os.ReadFile(outJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r map[string]any
+	if err := json.Unmarshal(b, &r); err != nil {
+		t.Fatal(err)
+	}
+	if r["overall_status"] != "review_required" {
+		t.Fatalf("fixture produced overall_status = %v, want review_required (test would be vacuous)", r["overall_status"])
 	}
 }
 
