@@ -21,9 +21,11 @@ type CronEnvVar struct {
 	LineNumber    int
 }
 
-// CronJob is one normalized crontab entry. The raw command is hashed
-// (pre-redaction) for future comparison and then discarded: only the
-// redacted form is kept.
+// CronJob is one normalized crontab entry. Both hashes are computed over
+// the REDACTED text, never the raw one: a hash of a raw command whose
+// structure is visible in CommandRedacted would be an offline brute-force
+// oracle for the masked secret. Drift comparison across runs still works —
+// the same redaction yields the same hash.
 type CronJob struct {
 	Type            string // "schedule" | "macro"
 	Minute          string
@@ -33,8 +35,8 @@ type CronJob struct {
 	DayOfWeek       string
 	Macro           string // "@daily", "@reboot", …
 	CommandRedacted string
-	CommandSHA256   string // "sha256:<hex of the RAW command>"
-	RawLineSHA256   string // "sha256:<hex of the RAW line>"
+	CommandSHA256   string // "sha256:<hex of the redacted command>"
+	RawLineSHA256   string // "sha256:<hex of the redacted line>"
 	Enabled         bool   // false for commented-out jobs
 	LineNumber      int
 	Warnings        []string
@@ -96,10 +98,11 @@ func FetchCrontab(ctx context.Context, c Runner) (CrontabResult, error) {
 		return res, nil
 	}
 	// Real crontab failure (permissions, missing binary). The message is
-	// crontab's own stderr — no user secrets — but truncate defensively.
-	msg := content
-	if len(msg) > 200 {
-		msg = msg[:200] + "…"
+	// normally crontab's own stderr, but 2>&1 merges streams: run it
+	// through the redactor anyway before it can reach warnings/reports.
+	msg := RedactCronCommand(content)
+	if runes := []rune(msg); len(runes) > 200 {
+		msg = string(runes[:200]) + "…"
 	}
 	return CrontabResult{}, fmt.Errorf("crontab -l failed (rc=%d): %s", rc, msg)
 }
@@ -164,7 +167,7 @@ func ParseCrontab(raw string) CrontabResult {
 			if job, ok := tryParseJob(body); ok {
 				job.Enabled = false
 				job.LineNumber = lineNo
-				job.RawLineSHA256 = sha256Tag(line)
+				job.RawLineSHA256 = sha256Tag(RedactCronCommand(line))
 				res.Jobs = append(res.Jobs, job)
 				res.DisabledJobsCount++
 			} else {
@@ -189,13 +192,13 @@ func ParseCrontab(raw string) CrontabResult {
 		if job, ok := tryParseJob(trimmed); ok {
 			job.Enabled = true
 			job.LineNumber = lineNo
-			job.RawLineSHA256 = sha256Tag(line)
+			job.RawLineSHA256 = sha256Tag(RedactCronCommand(line))
 			res.Jobs = append(res.Jobs, job)
 			continue
 		}
 
 		res.Warnings = append(res.Warnings,
-			fmt.Sprintf("line %d unparsable (%s)", lineNo, sha256Tag(line)))
+			fmt.Sprintf("line %d unparsable (%s)", lineNo, sha256Tag(RedactCronCommand(line))))
 	}
 	return res
 }
@@ -213,11 +216,12 @@ func tryParseJob(line string) (CronJob, bool) {
 		if !cronMacros[macro] || command == "" {
 			return CronJob{}, false
 		}
+		redacted := RedactCronCommand(command)
 		return CronJob{
 			Type:            "macro",
 			Macro:           macro,
-			CommandRedacted: RedactCronCommand(command),
-			CommandSHA256:   sha256Tag(command),
+			CommandRedacted: redacted,
+			CommandSHA256:   sha256Tag(redacted),
 			Warnings:        []string{},
 		}, true
 	}
@@ -236,6 +240,7 @@ func tryParseJob(line string) (CronJob, bool) {
 			return CronJob{}, false
 		}
 	}
+	redacted := RedactCronCommand(command)
 	return CronJob{
 		Type:            "schedule",
 		Minute:          fields[0],
@@ -243,8 +248,8 @@ func tryParseJob(line string) (CronJob, bool) {
 		DayOfMonth:      fields[2],
 		Month:           fields[3],
 		DayOfWeek:       fields[4],
-		CommandRedacted: RedactCronCommand(command),
-		CommandSHA256:   sha256Tag(command),
+		CommandRedacted: redacted,
+		CommandSHA256:   sha256Tag(redacted),
 		Warnings:        []string{},
 	}, true
 }
@@ -300,23 +305,41 @@ func isSensitiveCronName(name string) bool {
 }
 
 var (
-	// scheme://user:pass@host → scheme://[REDACTED]@host
-	cronURLCredsRE = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@`)
+	// Everything between scheme:// and the LAST @ before the path is
+	// userinfo — greedy on purpose, so a password containing '@'
+	// (ftp://u:sec@ret@host) and single-token credentials
+	// (https://ghp_xxx@github.com) are both fully masked. Bare
+	// user@host without a scheme is NOT matched: that shape is also an
+	// email address, which must stay readable (MAILTO, mail -s).
+	cronURLCredsRE = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s]+@`)
 	// name=value where name contains a sensitive fragment; the value stops
 	// at whitespace, &, or a quote so surrounding syntax survives. The
 	// separator is strictly '=' — a bare space would eat innocent arguments
 	// ("ssh-keygen -f …" must survive intact).
 	cronKeyValueRE = regexp.MustCompile(`(?i)([A-Za-z0-9_-]*(?:pass|pwd|token|secret|key|auth|cred)[A-Za-z0-9_-]*=\s*)("[^"]*"|'[^']*'|[^&\s"']+)`)
+	// Sensitive FLAGS also accept a space-separated value (--password X,
+	// --user admin:pw). The (^|\s) anchor pins the dash to the start of a
+	// token: without it, the "-keygen" inside "ssh-keygen" would match and
+	// eat the following argument.
+	cronFlagValueRE = regexp.MustCompile(`(?i)((?:^|\s)--?[A-Za-z0-9_-]*(?:pass|pwd|token|secret|key|auth|cred|user)[A-Za-z0-9_-]*[= ]\s*)("[^"]*"|'[^']*'|[^&\s"']+)`)
+	// MySQL-style concatenated -p<password> (mysqldump -pSECRET). Over-
+	// matches other tools' -p<value> (ssh -p2222) — accepted trade-off.
+	// MUST run before cronFlagValueRE: a password containing "pass" would
+	// otherwise be misread by that regex as a flag NAME, redacting the
+	// following innocent argument instead of the secret itself.
+	cronDashPRE = regexp.MustCompile(`(^|\s)-p([^\s"']+)`)
 	// Bearer/Basic tokens in inline headers.
 	cronBearerRE = regexp.MustCompile(`(?i)\b(bearer|basic)([ :]+)[^\s"']+`)
 )
 
 // RedactCronCommand masks credentials embedded in a crontab command line
 // while leaving the command structure readable. Applied BEFORE anything is
-// stored; the raw command survives only as a sha256.
+// stored or hashed — the raw command never leaves this function's callers.
 func RedactCronCommand(cmd string) string {
 	out := cronURLCredsRE.ReplaceAllString(cmd, "${1}"+redactedCronPlaceholder+"@")
 	out = cronBearerRE.ReplaceAllString(out, "${1}${2}"+redactedCronPlaceholder)
+	out = cronDashPRE.ReplaceAllString(out, "${1}-p"+redactedCronPlaceholder)
+	out = cronFlagValueRE.ReplaceAllString(out, "${1}"+redactedCronPlaceholder)
 	out = cronKeyValueRE.ReplaceAllString(out, "${1}"+redactedCronPlaceholder)
 	return out
 }

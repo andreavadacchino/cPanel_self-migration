@@ -161,7 +161,10 @@ func collectCron(ctx context.Context, r cpanel.Runner) CronSection {
 	if err != nil {
 		sec.Available = false
 		sec.Method = "unavailable"
-		sec.Warnings = append(sec.Warnings, fmt.Sprintf("crontab unavailable: %v", err))
+		// Hard failures land in Errors; Warnings stays for soft conditions
+		// (empty crontab, unparsable lines) so JSON consumers can key off
+		// a non-empty errors array.
+		sec.Errors = append(sec.Errors, fmt.Sprintf("crontab unavailable: %v", err))
 		return sec
 	}
 

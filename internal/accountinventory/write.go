@@ -81,6 +81,15 @@ func writeDNSSection(sb *strings.Builder, dns DNSSection) {
 	}
 }
 
+// mdCell makes an arbitrary string safe inside a Markdown table cell
+// (cron commands routinely contain pipes) and truncates it rune-safely.
+func mdCell(s string, max int) string {
+	if runes := []rune(s); len(runes) > max {
+		s = string(runes[:max-3]) + "..."
+	}
+	return strings.ReplaceAll(s, "|", "\\|")
+}
+
 func writeCronSection(sb *strings.Builder, cron CronSection) {
 	status := "available"
 	if !cron.Available {
@@ -90,6 +99,9 @@ func writeCronSection(sb *strings.Builder, cron CronSection) {
 	for _, w := range cron.Warnings {
 		fmt.Fprintf(sb, "> **Warning**: %s\n\n", w)
 	}
+	for _, e := range cron.Errors {
+		fmt.Fprintf(sb, "> **Error**: %s\n\n", e)
+	}
 	if cron.CommentsCount > 0 || cron.DisabledJobsCount > 0 {
 		fmt.Fprintf(sb, "- Comments: %d — Disabled jobs: %d\n\n", cron.CommentsCount, cron.DisabledJobsCount)
 	}
@@ -97,7 +109,7 @@ func writeCronSection(sb *strings.Builder, cron CronSection) {
 		sb.WriteString("| Env Var | Value (redacted) |\n")
 		sb.WriteString("|---------|------------------|\n")
 		for _, e := range cron.Environment {
-			fmt.Fprintf(sb, "| %s | %s |\n", e.Name, e.ValueRedacted)
+			fmt.Fprintf(sb, "| %s | %s |\n", mdCell(e.Name, 40), mdCell(e.ValueRedacted, 60))
 		}
 		sb.WriteString("\n")
 	}
@@ -109,15 +121,11 @@ func writeCronSection(sb *strings.Builder, cron CronSection) {
 			if j.Type == "schedule" {
 				schedule = fmt.Sprintf("%s %s %s %s %s", j.Minute, j.Hour, j.DayOfMonth, j.Month, j.DayOfWeek)
 			}
-			cmd := j.CommandRedacted
-			if len(cmd) > 60 {
-				cmd = cmd[:57] + "..."
-			}
 			enabled := "yes"
 			if !j.Enabled {
 				enabled = "no"
 			}
-			fmt.Fprintf(sb, "| %s | %s | %s |\n", schedule, cmd, enabled)
+			fmt.Fprintf(sb, "| %s | %s | %s |\n", mdCell(schedule, 40), mdCell(j.CommandRedacted, 60), enabled)
 		}
 		sb.WriteString("\n")
 	}

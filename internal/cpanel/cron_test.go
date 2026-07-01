@@ -166,12 +166,18 @@ func TestParseCrontabHashesPresent(t *testing.T) {
 	if !strings.HasPrefix(j.RawLineSHA256, "sha256:") {
 		t.Errorf("RawLineSHA256 malformed: %q", j.RawLineSHA256)
 	}
-	// Hash must be of the RAW command (pre-redaction): two different
-	// secrets must produce different hashes even though both redact
-	// to the same placeholder.
+	// Hashes are computed on the REDACTED command: hashing the raw text
+	// would hand out an offline brute-force oracle for the masked secret
+	// (the visible structure + a low-entropy password = dictionary check).
+	// Two jobs differing only in their secret therefore hash identically.
 	res2 := ParseCrontab("0 3 * * * /bin/backup --password=different456\n")
-	if res2.Jobs[0].CommandSHA256 == j.CommandSHA256 {
-		t.Error("CommandSHA256 must be computed on the raw command, not the redacted one")
+	if res2.Jobs[0].CommandSHA256 != j.CommandSHA256 {
+		t.Error("CommandSHA256 must be computed on the redacted command (no raw-hash oracle)")
+	}
+	// And a genuinely different command still hashes differently.
+	res3 := ParseCrontab("0 3 * * * /bin/other-tool --password=x\n")
+	if res3.Jobs[0].CommandSHA256 == j.CommandSHA256 {
+		t.Error("different commands must produce different hashes")
 	}
 }
 
@@ -240,6 +246,48 @@ func TestRedactCronCommand(t *testing.T) {
 			in:       "/usr/bin/php /home/user/artisan schedule:run >> /dev/null 2>&1",
 			mustHide: nil,
 			mustKeep: []string{"/usr/bin/php", "/home/user/artisan", "schedule:run", ">> /dev/null 2>&1"},
+		},
+		{
+			name:     "mysqldump concatenated -p flag",
+			in:       "mysqldump -u root -pMySecretPass123 mydb > /home/u/backup.sql",
+			mustHide: []string{"MySecretPass123"},
+			mustKeep: []string{"mysqldump", "-u root", "mydb", "> /home/u/backup.sql"},
+		},
+		{
+			name:     "space-separated --password flag",
+			in:       "mysqldump --password MySecretPass456 --databases mydb",
+			mustHide: []string{"MySecretPass456"},
+			mustKeep: []string{"mysqldump", "--databases", "mydb"},
+		},
+		{
+			name:     "curl --user with credentials",
+			in:       "curl --user admin:S3cretPw https://x.y/status",
+			mustHide: []string{"S3cretPw"},
+			mustKeep: []string{"curl", "https://x.y/status"},
+		},
+		{
+			name:     "single-token URL credential (github PAT style)",
+			in:       "git pull https://ghp_FAKEtoken0123456789@github.com/org/repo.git",
+			mustHide: []string{"ghp_FAKEtoken0123456789"},
+			mustKeep: []string{"git pull", "github.com/org/repo.git"},
+		},
+		{
+			name:     "at-sign inside url password",
+			in:       "rsync backup ftp://deploy:sec@ret@files.example.com/dir",
+			mustHide: []string{"sec@ret", "ret@files"},
+			mustKeep: []string{"files.example.com/dir"},
+		},
+		{
+			name:     "email address survives (no scheme, not a credential)",
+			in:       "echo done | mail -s report admin@example.com",
+			mustHide: nil,
+			mustKeep: []string{"admin@example.com", "mail -s report"},
+		},
+		{
+			name:     "ssh-keygen space arg survives",
+			in:       "ssh-keygen -f /home/u/.ssh/id_test -N ''",
+			mustHide: nil,
+			mustKeep: []string{"ssh-keygen", "-f /home/u/.ssh/id_test"},
 		},
 	}
 

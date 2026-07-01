@@ -498,8 +498,8 @@ func TestCollectCronErrorNotFatal(t *testing.T) {
 	if cron.Method != "unavailable" {
 		t.Errorf("method = %q, want unavailable", cron.Method)
 	}
-	if len(cron.Warnings) == 0 {
-		t.Error("expected warning")
+	if len(cron.Errors) == 0 {
+		t.Error("hard failure must populate errors")
 	}
 	if len(result.Source.Domains) == 0 {
 		t.Error("rest of inventory must still be collected")

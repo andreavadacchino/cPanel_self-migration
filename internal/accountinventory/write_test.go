@@ -251,7 +251,7 @@ func TestWriteReportWithCron(t *testing.T) {
 		},
 		Jobs: []CronJobEntry{
 			{Type: "schedule", Minute: "0", Hour: "3", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
-				CommandRedacted: "/bin/backup --password=[REDACTED]", CommandSHA256: "sha256:aa", RawLineSHA256: "sha256:bb",
+				CommandRedacted: "/bin/dump db | gzip > /b/db.gz", CommandSHA256: "sha256:aa", RawLineSHA256: "sha256:bb",
 				Enabled: true, LineNumber: 2, Warnings: []string{}},
 			{Type: "macro", Macro: "@daily",
 				CommandRedacted: "/usr/bin/php /home/u/cron.php", CommandSHA256: "sha256:cc", RawLineSHA256: "sha256:dd",
@@ -273,7 +273,7 @@ func TestWriteReportWithCron(t *testing.T) {
 	for _, want := range []string{
 		"Cron Jobs (2)", "crontab -l",
 		"0 3 * * *", "@daily",
-		"[REDACTED]", "MAILTO",
+		"MAILTO",
 		"Disabled jobs: 1",
 		"| yes |", "| no |",
 	} {
@@ -283,6 +283,13 @@ func TestWriteReportWithCron(t *testing.T) {
 	}
 	if strings.Contains(s, "sha256:aa") {
 		t.Error("report should show redacted preview, not hashes")
+	}
+	// A pipe inside a command must be escaped, or it breaks the table row.
+	if !strings.Contains(s, `\|`) {
+		t.Error("pipe in command must be escaped in the markdown table")
+	}
+	if strings.Contains(s, " | gzip >") {
+		t.Errorf("unescaped pipe leaked into a table row")
 	}
 }
 
