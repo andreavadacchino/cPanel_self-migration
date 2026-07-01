@@ -362,6 +362,13 @@ func TestDiffCronDifferentCommand(t *testing.T) {
 	if !strings.Contains(sec.Added[0].Key, "[REDACTED]") {
 		t.Errorf("added key = %q, want redacted command", sec.Added[0].Key)
 	}
+	// Detail must carry the enabled flag: the policy engine needs it to
+	// distinguish a lost ACTIVE job (blocker) from a lost disabled one.
+	for _, e := range append(append([]DiffEntry{}, sec.Added...), sec.Removed...) {
+		if !strings.Contains(e.Detail, "enabled=") {
+			t.Errorf("cron entry detail %q missing enabled flag", e.Detail)
+		}
+	}
 }
 
 func TestDiffCronDuplicateHashDeterministic(t *testing.T) {

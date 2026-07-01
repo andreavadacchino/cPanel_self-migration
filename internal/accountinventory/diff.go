@@ -477,10 +477,15 @@ func diffCron(src, dest CronSection) SectionDiff {
 	// is used as the diff key.
 	keyOf := func(jobs []CronJobEntry) string { return jobs[0].CommandRedacted }
 
+	// Detail always carries the enabled flag: policy rules must be able
+	// to tell a lost ACTIVE job from a lost disabled one.
+	slotDetail := func(j CronJobEntry) string {
+		return cronSchedule(j) + " enabled=" + strconv.FormatBool(j.Enabled)
+	}
 	for sha, jobs := range dg {
 		if _, ok := sg[sha]; !ok {
 			for _, j := range jobs {
-				sec.Added = append(sec.Added, DiffEntry{Key: keyOf(jobs), Detail: cronSchedule(j)})
+				sec.Added = append(sec.Added, DiffEntry{Key: keyOf(jobs), Detail: slotDetail(j)})
 			}
 		}
 	}
@@ -488,7 +493,7 @@ func diffCron(src, dest CronSection) SectionDiff {
 		destJobs, ok := dg[sha]
 		if !ok {
 			for _, j := range srcJobs {
-				sec.Removed = append(sec.Removed, DiffEntry{Key: keyOf(srcJobs), Detail: cronSchedule(j)})
+				sec.Removed = append(sec.Removed, DiffEntry{Key: keyOf(srcJobs), Detail: slotDetail(j)})
 			}
 			continue
 		}
@@ -510,16 +515,13 @@ func diffCron(src, dest CronSection) SectionDiff {
 		}
 		// Same command scheduled multiple times: compare the multiset of
 		// schedule|enabled slots.
-		slot := func(j CronJobEntry) string {
-			return cronSchedule(j) + " enabled=" + strconv.FormatBool(j.Enabled)
-		}
 		srcSlots := map[string]int{}
 		for _, j := range srcJobs {
-			srcSlots[slot(j)]++
+			srcSlots[slotDetail(j)]++
 		}
 		destSlots := map[string]int{}
 		for _, j := range destJobs {
-			destSlots[slot(j)]++
+			destSlots[slotDetail(j)]++
 		}
 		for s, n := range destSlots {
 			for i := srcSlots[s]; i < n; i++ {
