@@ -1,0 +1,5 @@
+{"result":{"status":1,"data":[
+{"email":"assistenza@doctorbike.it","domain":"doctorbike.it","login":"assistenza@doctorbike.it","diskused":"3603.95","_diskused":"3779010736","diskquota":"unlimited","diskusedpercent":0},
+{"email":"direzione@doctorbike.it","domain":"doctorbike.it","login":"direzione@doctorbike.it","diskused":"1035.00","_diskused":"1085280485","diskquota":"5120.00","diskusedpercent":20},
+{"email":"info@doctorbike.it","domain":"doctorbike.it","login":"info@doctorbike.it","diskused":"14825.32","_diskused":"15545469799","diskquota":"unlimited","diskusedpercent":0}
+]}}

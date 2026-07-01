@@ -8,10 +8,13 @@ import (
 )
 
 type EmailAccountEntry struct {
-	Email         string `json:"email"`
-	Domain        string `json:"domain"`
-	Login         string `json:"login"`
-	DiskUsedQuota int64  `json:"diskusedquota"`
+	Email  string `json:"email"`
+	Domain string `json:"domain"`
+	Login  string `json:"login"`
+	// DiskUsedBytes binds "_diskused" (bytes), which the live server sends as
+	// a quoted string ("3779010736"). The previous binding to "diskusedquota"
+	// matched no real field, so every mailbox reported 0 disk used.
+	DiskUsedBytes flexInt64 `json:"_diskused"`
 }
 
 func ListEmailAccounts(ctx context.Context, c Runner) ([]EmailAccountEntry, error) {

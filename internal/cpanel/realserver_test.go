@@ -102,3 +102,26 @@ func TestRedactCronSecureToken(t *testing.T) {
 		t.Errorf("query-string secure= leaked: %q", got)
 	}
 }
+
+// Email list_pops_with_disk on a live server carries NO "diskusedquota"
+// field; disk usage is in "_diskused" (bytes, as a quoted string). The old
+// binding left every mailbox's disk usage at 0.
+func TestEmailRealServerDiskUsedBytes(t *testing.T) {
+	data := fixture(t, "email_list_pops_realserver.json")
+	entries, err := parseUAPI[[]EmailAccountEntry]("Email", "list_pops_with_disk", data)
+	if err != nil {
+		t.Fatalf("real-server email response failed to parse: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(entries))
+	}
+	if got := int64(entries[0].DiskUsedBytes); got != 3779010736 {
+		t.Errorf("disk used = %d, want 3779010736 (from _diskused)", got)
+	}
+	if got := int64(entries[1].DiskUsedBytes); got != 1085280485 {
+		t.Errorf("disk used = %d, want 1085280485", got)
+	}
+	if got := int64(entries[2].DiskUsedBytes); got != 15545469799 {
+		t.Errorf("disk used = %d, want 15545469799", got)
+	}
+}

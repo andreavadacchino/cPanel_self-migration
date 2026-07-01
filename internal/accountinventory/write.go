@@ -168,8 +168,8 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 
 	fmt.Fprintf(sb, "## Mailboxes (%d)\n\n", len(inv.Mailboxes))
 	if len(inv.Mailboxes) > 0 {
-		sb.WriteString("| Email | Domain | Disk Usage |\n")
-		sb.WriteString("|-------|--------|------------|\n")
+		sb.WriteString("| Email | Domain | Disk Usage (bytes) |\n")
+		sb.WriteString("|-------|--------|--------------------|\n")
 		for _, m := range inv.Mailboxes {
 			fmt.Fprintf(sb, "| %s | %s | %d |\n", m.Email, m.Domain, m.DiskUsage)
 		}
@@ -198,8 +198,8 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 
 	fmt.Fprintf(sb, "## Databases (%d)\n\n", len(inv.Databases))
 	if len(inv.Databases) > 0 {
-		sb.WriteString("| Database | Disk Usage | Users |\n")
-		sb.WriteString("|----------|------------|-------|\n")
+		sb.WriteString("| Database | Disk Usage (bytes) | Users |\n")
+		sb.WriteString("|----------|--------------------|-------|\n")
 		for _, db := range inv.Databases {
 			users := strings.Join(db.Users, ", ")
 			if users == "" {

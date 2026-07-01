@@ -13,15 +13,21 @@ type ForwarderEntry struct {
 }
 
 type AutoresponderEntry struct {
-	Email    string `json:"email"`
-	From     string `json:"from"`
-	Subject  string `json:"subject"`
-	Body     string `json:"body"`
-	Domain   string `json:"domain"`
-	Interval int    `json:"interval"`
-	IsHTML   int    `json:"is_html"`
-	Start    int64  `json:"start"`
-	Stop     int64  `json:"stop"`
+	Email   string `json:"email"`
+	From    string `json:"from"`
+	Subject string `json:"subject"`
+	Body    string `json:"body"`
+	Domain  string `json:"domain"`
+	// interval / is_html / start / stop are flexInt64 as defensive hardening:
+	// this exact "int field returned as a quoted string/float" shape has
+	// already broken FTP diskused, email _diskused and MySQL disk_usage on the
+	// live server. These autoresponder fields were not observed non-empty
+	// during the smoke test, so this prevents a future silent section loss
+	// rather than fixing a confirmed break.
+	Interval flexInt64 `json:"interval"`
+	IsHTML   flexInt64 `json:"is_html"`
+	Start    flexInt64 `json:"start"`
+	Stop     flexInt64 `json:"stop"`
 }
 
 func ListForwarders(ctx context.Context, c Runner, domain string) ([]ForwarderEntry, error) {
