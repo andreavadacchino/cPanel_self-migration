@@ -31,6 +31,7 @@ cpanel-self-migration [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db
 | `--output-dir DIR`        | Output directory for all artifacts (default: CWD). Created if missing. |
 | `--json-events`           | Write JSONL events to `<output-dir>/events.jsonl`. Does not suppress stdout. |
 | `--report-json`           | Write JSON summary to `<output-dir>/report.json`. Does not suppress stdout. |
+| `--account-inventory`     | Collect a read-only account inventory (domains, mailboxes, databases) and exit. No migration. |
 | `--version`               | Print version and exit.                                            |
 | `-h`, `--help`            | Show help and exit.                                                |
 
@@ -98,5 +99,8 @@ make build
 | `logs/web_analysis.log`     | `--file`           |
 | `logs/db_analysis.log`      | `--db`             |
 | `logs/migration_report.log` | `--apply`          |
-| `events.jsonl`              | `--json-events`    |
-| `report.json`               | `--report-json`    |
+| `events.jsonl`              | `--json-events`           |
+| `report.json`               | `--report-json`           |
+| `inventory_source.json`     | `--account-inventory`     |
+| `inventory_destination.json`| `--account-inventory` (if dest configured) |
+| `inventory_report.md`       | `--account-inventory`     |

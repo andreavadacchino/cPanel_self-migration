@@ -16,10 +16,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tis24dev/cPanel_self-migration/internal/accountinventory"
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
+	"github.com/tis24dev/cPanel_self-migration/internal/cpanel"
 	"github.com/tis24dev/cPanel_self-migration/internal/events"
 	"github.com/tis24dev/cPanel_self-migration/internal/logx"
 	"github.com/tis24dev/cPanel_self-migration/internal/migrate"
+	"github.com/tis24dev/cPanel_self-migration/internal/sshx"
 	"github.com/tis24dev/cPanel_self-migration/internal/validate"
 	"github.com/tis24dev/cPanel_self-migration/internal/version"
 )
@@ -43,8 +46,9 @@ func main() {
 		showVersion = flag.Bool("version", false, "print the version and exit")
 		runID       = flag.String("run-id", "", "optional run identifier for structured output (default: auto-generated)")
 		outputDir   = flag.String("output-dir", "", "output directory for artifacts (default: current working directory)")
-		jsonEvents  = flag.Bool("json-events", false, "write JSONL events to <output-dir>/events.jsonl")
-		reportJSON  = flag.Bool("report-json", false, "write JSON report to <output-dir>/report.json")
+		jsonEvents       = flag.Bool("json-events", false, "write JSONL events to <output-dir>/events.jsonl")
+		reportJSON       = flag.Bool("report-json", false, "write JSON report to <output-dir>/report.json")
+		accountInventory = flag.Bool("account-inventory", false, "collect a read-only account inventory and exit (no migration)")
 	)
 	flag.Usage = usage
 	flag.Parse()
@@ -75,6 +79,20 @@ func main() {
 	if *apply && *applyMirror {
 		fmt.Fprintln(os.Stderr, "error: --apply and --apply-mirror are mutually exclusive")
 		os.Exit(2)
+	}
+	if *accountInventory {
+		if *apply || *applyMirror {
+			fmt.Fprintln(os.Stderr, "error: --account-inventory is mutually exclusive with --apply/--apply-mirror")
+			os.Exit(2)
+		}
+		if *mailFlag || *fileFlag || *dbFlag {
+			fmt.Fprintln(os.Stderr, "error: --account-inventory collects the full account; do not combine with --mail/--file/--db")
+			os.Exit(2)
+		}
+		if *onlyDomain != "" || *onlyMailbox != "" {
+			fmt.Fprintln(os.Stderr, "error: --account-inventory collects the full account; do not combine with --domain/--mailbox")
+			os.Exit(2)
+		}
 	}
 	if err := validateScopeFilters(*onlyDomain, *onlyMailbox, *mailFlag, *fileFlag, *dbFlag); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -173,6 +191,11 @@ func main() {
 		}}
 	}
 
+	if *accountInventory {
+		runAccountInventory(ctx, cfg, outDir, em)
+		return
+	}
+
 	startedAt := time.Now()
 	opts := migrate.Options{
 		Apply:           *apply || *applyMirror,
@@ -211,6 +234,65 @@ func main() {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+}
+
+func runAccountInventory(ctx context.Context, cfg config.Config, outDir string, em events.Emitter) {
+	em.Send(events.Event{
+		RunID: events.NewRunID(time.Now()), TS: time.Now(),
+		Level: events.LevelInfo, Type: events.EventRunStarted,
+		Message: "account inventory started",
+		Source:  events.HostRef{IP: cfg.Src.IP, User: cfg.Src.SSHUser},
+	})
+
+	pool, err := sshx.DialBoth(ctx, cfg, "")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	defer pool.Close()
+
+	srcInfo := accountinventory.HostInfo{User: cfg.Src.SSHUser, Host: cfg.Src.IP}
+	var destInfo accountinventory.HostInfo
+	var destRunner cpanel.Runner
+	if cfg.DestConfigured() {
+		destInfo = accountinventory.HostInfo{User: cfg.Dest.SSHUser, Host: cfg.Dest.IP}
+		destRunner = pool.Dest
+	}
+
+	result, err := accountinventory.Collect(ctx, pool.Src, destRunner, srcInfo, destInfo)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+
+	srcPath := filepath.Join(outDir, "inventory_source.json")
+	if err := accountinventory.WriteInventoryJSON(srcPath, result.Source); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s\n", srcPath)
+
+	if result.Dest != nil {
+		destPath := filepath.Join(outDir, "inventory_destination.json")
+		if err := accountinventory.WriteInventoryJSON(destPath, *result.Dest); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "wrote %s\n", destPath)
+	}
+
+	reportPath := filepath.Join(outDir, "inventory_report.md")
+	if err := accountinventory.WriteReport(reportPath, result); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s\n", reportPath)
+
+	em.Send(events.Event{
+		RunID: events.NewRunID(time.Now()), TS: time.Now(),
+		Level: events.LevelInfo, Type: events.EventRunCompleted,
+		Message: "account inventory completed",
+	})
 }
 
 func buildRunReport(opts migrate.Options, cfg config.Config, startedAt, finishedAt time.Time, runErr, ctxErr error) events.RunReport {
@@ -366,7 +448,7 @@ func validateScopeFilters(onlyDomain, onlyMailbox string, mailFlag, fileFlag, db
 func usage() {
 	fmt.Fprintf(os.Stderr, `cpanel-self-migration — cPanel email + website-file + database migration tool
 
-Usage: %s [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--domain DOMAIN] [--mailbox ADDR] [--full] [--verify-checksums] [--deep-verify] [--config PATH] [--log-level LEVEL] [--run-id ID] [--output-dir DIR] [--json-events] [--report-json]
+Usage: %s [--apply|--apply-mirror|--dry-run|--account-inventory] [--mail] [--file] [--db] [--domain DOMAIN] [--mailbox ADDR] [--full] [--verify-checksums] [--deep-verify] [--config PATH] [--log-level LEVEL] [--run-id ID] [--output-dir DIR] [--json-events] [--report-json]
 
   (default) dry-run  : analyze + compare SOURCE/DEST, no changes
   --apply            : create missing domains + migrate the selected data
@@ -400,6 +482,8 @@ Usage: %s [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db] [--domain 
                        object per line, append-only; does not suppress stdout)
   --report-json      : write JSON summary to <output-dir>/report.json at the end
                        of the run (does not suppress stdout)
+  --account-inventory: collect a read-only account inventory (domains, mailboxes,
+                       databases) and exit — no migration is performed
 
 The SOURCE host is ALWAYS read-only; all writes target the DESTINATION.
 Mail is normally MERGED into the destination (existing messages are kept, only
