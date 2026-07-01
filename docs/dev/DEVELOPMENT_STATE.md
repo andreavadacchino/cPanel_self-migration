@@ -1,7 +1,7 @@
 # Development State — cPanel Self-Migration (handoff)
 
 Snapshot for starting a fresh development session. Last updated after
-**PR 5C** (collector real-server audit).
+**PR 5D** (`--fail-on-blockers` CI gating flag).
 
 ## What this tool is
 
@@ -29,7 +29,8 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 4A | Offline `inventory diff` subcommand | #4 (contract test), #5 |
 | 5A | Policy engine v0 (`inventory policy`) | #6 |
 | 5B | Real-server hardening: cron `secure=` leak, FTP/SSL parsing | #7 |
-| 5C | Collector audit: email disk usage, autoresponder hardening | (open) |
+| 5C | Collector audit: email disk usage, autoresponder hardening | #8 |
+| 5D | `--fail-on-blockers`: `inventory policy` exits 3 when blocked | #9 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -44,7 +45,10 @@ forwarders, autoresponders, ftp, ssl, php, dns, cron. Diff compares them
 deterministically; policy classifies each difference as
 blocker/review/warning/info → overall `ready|review_required|blocked`.
 None of the three commands connect to a server except
-`--account-inventory` (which reads over SSH).
+`--account-inventory` (which reads over SSH). `inventory policy
+--fail-on-blockers` exits 3 when `overall_status` is `blocked` (reports
+are still fully written first; `review_required` never gates), so the
+pipeline can gate CI without JSON parsing.
 
 ## Architecture map
 
@@ -133,9 +137,8 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
 
 - **PR 6 — DNS import/verifier** (roadmap): the write side of DNS,
   gated behind the policy report. High risk — needs the full backup +
-  rollback protocol from the project CLAUDE.md.
-- **`--fail-on-blockers`** flag for CI gating on the policy status
-  (currently exit is always 0; consumers must parse `overall_status`).
+  rollback protocol from the project CLAUDE.md, a dedicated micro-design
+  document first, and a live session for Orbit approvals.
 - **Policy rule refinement / configurable rules** — only if real usage
   shows the v0 rule table is too aggressive; the smoke test did not show
   false positives (the 24 blockers were legitimate for two *different*
