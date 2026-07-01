@@ -61,6 +61,33 @@ func TestUAPIDNSBase64InvalidEncoding(t *testing.T) {
 	}
 }
 
+func TestUAPIDNSTXTMultiSegmentJoined(t *testing.T) {
+	data := fixture(t, "dns_parse_zone.json")
+	records, err := parseUAPIDNSZone(data)
+	if err != nil {
+		t.Fatalf("parseUAPIDNSZone: %v", err)
+	}
+	// Real servers split long TXT (DKIM) into 255-char segments; RFC 1035
+	// concatenates them. The parser must join all segments, not keep only
+	// the first (which would truncate DKIM keys).
+	found := false
+	for _, r := range records {
+		if r.Type == "TXT" && r.Name == "dkim._domainkey.example.com." {
+			found = true
+			want := "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AQEFAAOCAQ8AMIIBCgKCAQEA"
+			if r.TxtData != want {
+				t.Errorf("multi-segment TXT not joined:\ngot  %q\nwant %q", r.TxtData, want)
+			}
+			if r.Value != want {
+				t.Errorf("multi-segment TXT Value not joined: %q", r.Value)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("multi-segment TXT record not found in fixture")
+	}
+}
+
 func TestUAPIDNSParseError(t *testing.T) {
 	data := []byte(`{"result":{"data":null,"errors":["The function \"parse_zone\" does not exist in module \"DNS\"."],"status":0}}`)
 	_, err := parseUAPIDNSZone(data)
@@ -106,6 +133,8 @@ func TestAPI2DNSRecordFields(t *testing.T) {
 		t.Fatalf("parseAPI2DNSZone: %v", err)
 	}
 
+	// Field values mirror the live-server shape: cPanel api2 omits the
+	// trailing dot on exchange/cname/nsdname and quotes MX preference ("10").
 	tests := []struct {
 		typ     string
 		check   func(DNSRecord) bool
@@ -113,10 +142,10 @@ func TestAPI2DNSRecordFields(t *testing.T) {
 	}{
 		{"A", func(r DNSRecord) bool { return r.Address == "192.168.1.1" }, "address"},
 		{"AAAA", func(r DNSRecord) bool { return r.Address == "2001:db8::1" }, "IPv6 address"},
-		{"CNAME", func(r DNSRecord) bool { return r.Target == "example.com." }, "cname target"},
-		{"MX", func(r DNSRecord) bool { return r.Exchange == "mail.example.com." && r.Priority == 10 }, "exchange+priority"},
+		{"CNAME", func(r DNSRecord) bool { return r.Target == "example.com" }, "cname target"},
+		{"MX", func(r DNSRecord) bool { return r.Exchange == "mail.example.com" && r.Priority == 10 }, "exchange+priority from quoted string"},
 		{"TXT", func(r DNSRecord) bool { return r.TxtData == "v=spf1 include:_spf.google.com ~all" }, "txtdata"},
-		{"NS", func(r DNSRecord) bool { return r.Target == "ns1.example.com." }, "nsdname"},
+		{"NS", func(r DNSRecord) bool { return r.Target == "ns1.example.com" }, "nsdname"},
 	}
 
 	for _, tt := range tests {
@@ -233,7 +262,9 @@ func TestDNSRecordValueField(t *testing.T) {
 	}
 
 	for _, r := range records {
-		if r.Type == ":RAW" || r.Type == "SOA" {
+		// Pseudo-records (:RAW comments, $TTL directive) and SOA carry
+		// their payload in Raw, not Value.
+		if r.Type == ":RAW" || r.Type == "SOA" || r.Type == "$TTL" {
 			continue
 		}
 		if r.Value == "" {
@@ -250,14 +281,12 @@ func TestDNSRecordAllHaveTTLAndName(t *testing.T) {
 	}
 
 	for _, r := range records {
-		if r.Type == ":RAW" {
+		// :RAW comments and the $TTL directive have no owner name.
+		if r.Type == ":RAW" || r.Type == "$TTL" {
 			continue
 		}
 		if r.Name == "" {
 			t.Errorf("record type %s line %d has empty Name", r.Type, r.Line)
-		}
-		if r.TTL == 0 && r.Type != ":RAW" {
-			// SOA TTL can be 0 in some configs, but let's check it exists
 		}
 	}
 }
