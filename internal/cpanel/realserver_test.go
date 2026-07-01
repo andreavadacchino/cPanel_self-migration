@@ -118,6 +118,9 @@ func TestEmailRealServerDiskUsedBytes(t *testing.T) {
 	if got := int64(entries[0].DiskUsedBytes); got != 3779010736 {
 		t.Errorf("disk used = %d, want 3779010736 (from _diskused)", got)
 	}
+	if got := int64(entries[1].DiskUsedBytes); got != 1085280485 {
+		t.Errorf("disk used = %d, want 1085280485", got)
+	}
 	if got := int64(entries[2].DiskUsedBytes); got != 15545469799 {
 		t.Errorf("disk used = %d, want 15545469799", got)
 	}
