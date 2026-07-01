@@ -56,8 +56,18 @@ func newFakeRunnerFromFixtures(t *testing.T) *fakeRunner {
 		"SSL list_certs":                loadFixture(t, "ssl_list_certs.json"),
 		"LangPHP php_get_vhost_versions": loadFixture(t, "php_vhost_versions.json"),
 		"ZoneEdit fetchzone_records":     loadFixture(t, "dns_fetchzone_records.json"),
+		"crontab -l":                     []byte(fakeCrontabOutput),
 	}}
 }
+
+// fakeCrontabOutput mimics the marker-based crontab fetch script output.
+const fakeCrontabOutput = `MAILTO=admin@main.example
+# nightly backup
+0 3 * * * /usr/local/bin/backup.sh --password=supersecret
+@daily /usr/bin/php /home/u/cron.php
+#30 2 * * 0 /bin/disabled-weekly.sh
+__CRONTAB_RC:0__
+`
 
 func wrapAPI2(data string) []byte {
 	return []byte(fmt.Sprintf(`{"cpanelresult":{"data":%s,"event":{"result":1}}}`, data))
@@ -410,6 +420,103 @@ func TestCollectDNSSkipsSubdomains(t *testing.T) {
 				t.Errorf("subdomain %s should not appear as a DNS zone", z.Zone)
 			}
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cron collection tests
+// ---------------------------------------------------------------------------
+
+func TestCollectCronPresent(t *testing.T) {
+	runner := newFakeRunnerFromFixtures(t)
+	ctx := context.Background()
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	cron := result.Source.Cron
+	if !cron.Available {
+		t.Fatal("cron should be available")
+	}
+	if cron.Method != "ssh_crontab_l" {
+		t.Errorf("method = %q, want ssh_crontab_l", cron.Method)
+	}
+	if cron.SourceCommand != "crontab -l" {
+		t.Errorf("source_command = %q", cron.SourceCommand)
+	}
+	if len(cron.Jobs) != 3 {
+		t.Errorf("jobs = %d, want 3 (2 enabled + 1 disabled)", len(cron.Jobs))
+	}
+	if cron.DisabledJobsCount != 1 {
+		t.Errorf("disabled = %d, want 1", cron.DisabledJobsCount)
+	}
+	if cron.CommentsCount != 1 {
+		t.Errorf("comments = %d, want 1", cron.CommentsCount)
+	}
+	if len(cron.Environment) != 1 || cron.Environment[0].Name != "MAILTO" {
+		t.Errorf("environment = %+v", cron.Environment)
+	}
+	for _, j := range cron.Jobs {
+		if contains(j.CommandRedacted, "supersecret") {
+			t.Errorf("secret leaked in job command: %q", j.CommandRedacted)
+		}
+	}
+}
+
+func TestCollectCronNoCrontabForUser(t *testing.T) {
+	runner := newFakeRunnerFromFixtures(t)
+	runner.responses["crontab -l"] = []byte("no crontab for u\n__CRONTAB_RC:1__\n")
+	ctx := context.Background()
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	cron := result.Source.Cron
+	if !cron.Available {
+		t.Error("empty crontab is still 'available'")
+	}
+	if len(cron.Jobs) != 0 {
+		t.Errorf("jobs = %d, want 0", len(cron.Jobs))
+	}
+	if len(cron.Warnings) == 0 {
+		t.Error("expected light warning for empty crontab")
+	}
+}
+
+func TestCollectCronErrorNotFatal(t *testing.T) {
+	runner := newFakeRunnerFromFixtures(t)
+	delete(runner.responses, "crontab -l")
+	ctx := context.Background()
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("cron failure must not block inventory: %v", err)
+	}
+	cron := result.Source.Cron
+	if cron.Available {
+		t.Error("cron should be unavailable")
+	}
+	if cron.Method != "unavailable" {
+		t.Errorf("method = %q, want unavailable", cron.Method)
+	}
+	if len(cron.Warnings) == 0 {
+		t.Error("expected warning")
+	}
+	if len(result.Source.Domains) == 0 {
+		t.Error("rest of inventory must still be collected")
+	}
+}
+
+func TestCollectCronNoNullArrays(t *testing.T) {
+	runner := newFakeRunnerFromFixtures(t)
+	delete(runner.responses, "crontab -l")
+	ctx := context.Background()
+	result, err := Collect(ctx, runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	cron := result.Source.Cron
+	if cron.Jobs == nil || cron.Environment == nil || cron.Warnings == nil || cron.Errors == nil {
+		t.Errorf("cron slices must never be nil: %+v", cron)
 	}
 }
 

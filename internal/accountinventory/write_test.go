@@ -237,6 +237,55 @@ func TestWriteReportWithDNS(t *testing.T) {
 	}
 }
 
+func TestWriteReportWithCron(t *testing.T) {
+	dir := t.TempDir()
+	inv := NewEmptyInventory("u", "h", "source")
+	inv.Cron = CronSection{
+		Available:         true,
+		Method:            "ssh_crontab_l",
+		SourceCommand:     "crontab -l",
+		CommentsCount:     2,
+		DisabledJobsCount: 1,
+		Environment: []CronEnvEntry{
+			{Name: "MAILTO", ValueRedacted: "admin@example.com", LineNumber: 1},
+		},
+		Jobs: []CronJobEntry{
+			{Type: "schedule", Minute: "0", Hour: "3", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+				CommandRedacted: "/bin/backup --password=[REDACTED]", CommandSHA256: "sha256:aa", RawLineSHA256: "sha256:bb",
+				Enabled: true, LineNumber: 2, Warnings: []string{}},
+			{Type: "macro", Macro: "@daily",
+				CommandRedacted: "/usr/bin/php /home/u/cron.php", CommandSHA256: "sha256:cc", RawLineSHA256: "sha256:dd",
+				Enabled: false, LineNumber: 3, Warnings: []string{}},
+		},
+		Warnings: []string{},
+		Errors:   []string{},
+	}
+	result := CollectResult{Source: inv}
+	path := filepath.Join(dir, "report.md")
+	if err := WriteReport(path, result); err != nil {
+		t.Fatalf("WriteReport: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"Cron Jobs (2)", "crontab -l",
+		"0 3 * * *", "@daily",
+		"[REDACTED]", "MAILTO",
+		"Disabled jobs: 1",
+		"| yes |", "| no |",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("report missing %q", want)
+		}
+	}
+	if strings.Contains(s, "sha256:aa") {
+		t.Error("report should show redacted preview, not hashes")
+	}
+}
+
 func TestWriteReportWithDest(t *testing.T) {
 	dir := t.TempDir()
 	dest := NormalizedInventory{
