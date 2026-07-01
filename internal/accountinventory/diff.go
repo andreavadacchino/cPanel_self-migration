@@ -32,10 +32,15 @@ type DiffFieldChange struct {
 }
 
 type SectionDiff struct {
-	Added    []DiffEntry       `json:"added"`
-	Removed  []DiffEntry       `json:"removed"`
-	Changed  []DiffFieldChange `json:"changed"`
-	Warnings []string          `json:"warnings"`
+	Added   []DiffEntry       `json:"added"`
+	Removed []DiffEntry       `json:"removed"`
+	Changed []DiffFieldChange `json:"changed"`
+	// Skipped lists comparisons that could NOT be performed (section or
+	// zone unavailable on either side). It is a structured signal — the
+	// policy engine gates on it, so it must never be folded into the
+	// free-text Warnings.
+	Skipped  []string `json:"skipped"`
+	Warnings []string `json:"warnings"`
 }
 
 func newSectionDiff() SectionDiff {
@@ -43,6 +48,7 @@ func newSectionDiff() SectionDiff {
 		Added:    []DiffEntry{},
 		Removed:  []DiffEntry{},
 		Changed:  []DiffFieldChange{},
+		Skipped:  []string{},
 		Warnings: []string{},
 	}
 }
@@ -102,7 +108,7 @@ func DiffInventories(src, dest NormalizedInventory) InventoryDiff {
 		d.Summary.Added += len(sec.Added)
 		d.Summary.Removed += len(sec.Removed)
 		d.Summary.Changed += len(sec.Changed)
-		d.Summary.Warnings += len(sec.Warnings)
+		d.Summary.Warnings += len(sec.Warnings) + len(sec.Skipped)
 	}
 	d.Summary.Warnings += len(d.Warnings)
 	return d
@@ -187,7 +193,7 @@ func skipUnavailable(name string, srcAvail, destAvail bool) (SectionDiff, bool) 
 		} else if !destAvail {
 			side = "source and destination"
 		}
-		sec.Warnings = append(sec.Warnings,
+		sec.Skipped = append(sec.Skipped,
 			fmt.Sprintf("%s unavailable on %s — comparison skipped", name, side))
 		return sec, true
 	}
@@ -215,6 +221,7 @@ func sortSectionDiff(sec *SectionDiff) {
 		}
 		return sec.Changed[i].Field < sec.Changed[j].Field
 	})
+	sort.Strings(sec.Skipped)
 	sort.Strings(sec.Warnings)
 }
 
@@ -377,7 +384,7 @@ func diffDNS(src, dest DNSSection) SectionDiff {
 			continue
 		}
 		if !sz.Available || !dz.Available {
-			sec.Warnings = append(sec.Warnings,
+			sec.Skipped = append(sec.Skipped,
 				fmt.Sprintf("zone %s unavailable on one side — records not compared", name))
 			continue
 		}
@@ -477,10 +484,15 @@ func diffCron(src, dest CronSection) SectionDiff {
 	// is used as the diff key.
 	keyOf := func(jobs []CronJobEntry) string { return jobs[0].CommandRedacted }
 
+	// Detail always carries the enabled flag: policy rules must be able
+	// to tell a lost ACTIVE job from a lost disabled one.
+	slotDetail := func(j CronJobEntry) string {
+		return cronSchedule(j) + " enabled=" + strconv.FormatBool(j.Enabled)
+	}
 	for sha, jobs := range dg {
 		if _, ok := sg[sha]; !ok {
 			for _, j := range jobs {
-				sec.Added = append(sec.Added, DiffEntry{Key: keyOf(jobs), Detail: cronSchedule(j)})
+				sec.Added = append(sec.Added, DiffEntry{Key: keyOf(jobs), Detail: slotDetail(j)})
 			}
 		}
 	}
@@ -488,7 +500,7 @@ func diffCron(src, dest CronSection) SectionDiff {
 		destJobs, ok := dg[sha]
 		if !ok {
 			for _, j := range srcJobs {
-				sec.Removed = append(sec.Removed, DiffEntry{Key: keyOf(srcJobs), Detail: cronSchedule(j)})
+				sec.Removed = append(sec.Removed, DiffEntry{Key: keyOf(srcJobs), Detail: slotDetail(j)})
 			}
 			continue
 		}
@@ -510,16 +522,13 @@ func diffCron(src, dest CronSection) SectionDiff {
 		}
 		// Same command scheduled multiple times: compare the multiset of
 		// schedule|enabled slots.
-		slot := func(j CronJobEntry) string {
-			return cronSchedule(j) + " enabled=" + strconv.FormatBool(j.Enabled)
-		}
 		srcSlots := map[string]int{}
 		for _, j := range srcJobs {
-			srcSlots[slot(j)]++
+			srcSlots[slotDetail(j)]++
 		}
 		destSlots := map[string]int{}
 		for _, j := range destJobs {
-			destSlots[slot(j)]++
+			destSlots[slotDetail(j)]++
 		}
 		for s, n := range destSlots {
 			for i := srcSlots[s]; i < n; i++ {

@@ -81,13 +81,17 @@ func writeDNSSection(sb *strings.Builder, dns DNSSection) {
 	}
 }
 
-// mdCell makes an arbitrary string safe inside a Markdown table cell
-// (cron commands routinely contain pipes) and truncates it rune-safely.
+// mdCell makes an arbitrary string safe inside a Markdown table cell:
+// pipes are escaped and CR/LF collapsed to spaces (DNS TXT values are
+// attacker-influenced free text and must not break out of their cell),
+// then the result is truncated rune-safely.
+var mdCellReplacer = strings.NewReplacer("|", "\\|", "\n", " ", "\r", " ")
+
 func mdCell(s string, max int) string {
 	if runes := []rune(s); len(runes) > max {
 		s = string(runes[:max-3]) + "..."
 	}
-	return strings.ReplaceAll(s, "|", "\\|")
+	return mdCellReplacer.Replace(s)
 }
 
 func writeCronSection(sb *strings.Builder, cron CronSection) {

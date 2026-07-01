@@ -219,15 +219,18 @@ func TestDiffUnavailableSectionWarnsNotPanics(t *testing.T) {
 
 	d := DiffInventories(src, dest)
 	sec := sectionOf(t, d, "ftp")
-	if len(sec.Warnings) == 0 {
-		t.Error("unavailable ftp must produce a section warning")
+	// A skipped comparison is a STRUCTURED signal, not prose: the policy
+	// engine gates on this field, so wording changes cannot silently
+	// downgrade "incomplete data" to "ready".
+	if len(sec.Skipped) == 0 {
+		t.Error("unavailable ftp must populate skipped")
 	}
 	// The missing items must NOT read as removals.
 	if len(sec.Removed) != 0 {
 		t.Errorf("removed = %+v, want none (section skipped)", sec.Removed)
 	}
 	if d.Summary.Warnings == 0 {
-		t.Error("summary must count warnings")
+		t.Error("summary must count skipped comparisons")
 	}
 }
 
@@ -305,8 +308,8 @@ func TestDiffDNSUnavailableZoneWarns(t *testing.T) {
 
 	d := DiffInventories(src, dest)
 	sec := sectionOf(t, d, "dns")
-	if len(sec.Warnings) == 0 {
-		t.Error("unavailable zone must warn")
+	if len(sec.Skipped) == 0 {
+		t.Error("unavailable zone must populate skipped")
 	}
 	// Records of the skipped zone must NOT read as removed.
 	if len(sec.Removed) != 0 {
@@ -361,6 +364,13 @@ func TestDiffCronDifferentCommand(t *testing.T) {
 	// 1:1 since the hash is computed over the redacted form) — never raw.
 	if !strings.Contains(sec.Added[0].Key, "[REDACTED]") {
 		t.Errorf("added key = %q, want redacted command", sec.Added[0].Key)
+	}
+	// Detail must carry the enabled flag: the policy engine needs it to
+	// distinguish a lost ACTIVE job (blocker) from a lost disabled one.
+	for _, e := range append(append([]DiffEntry{}, sec.Added...), sec.Removed...) {
+		if !strings.Contains(e.Detail, "enabled=") {
+			t.Errorf("cron entry detail %q missing enabled flag", e.Detail)
+		}
 	}
 }
 

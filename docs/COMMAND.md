@@ -130,3 +130,28 @@ command hash — the raw command is never reconstructed. Sections marked
 
 Exit codes: `0` diff generated (differences are NOT an error), `1`
 missing/invalid input or write failure, `2` flag usage error.
+
+## Subcommand: `inventory policy`
+
+Deterministic classification of an `inventory_diff.json` into a
+migration-readiness report (`policy_report.json` + `policy_report.md`).
+Fully offline: it states whether each difference is a blocker, needs
+review, or is informational — it never decides what to do about it.
+
+```bash
+cpanel-self-migration inventory policy \
+  --diff ./inventory_diff.json \
+  [--output-json ./policy_report.json] \
+  [--output-md ./policy_report.md]
+```
+
+Overall status: any blocker → `blocked`; any review → `review_required`;
+otherwise `ready`. Blockers include: removed mailboxes/databases, the
+main domain or a whole DNS zone missing, MX/NS records changed or
+removed, certificates missing for still-present domains, and active cron
+jobs missing on the destination. The full rule table lives in
+`docs/dev/PR5A_POLICY_ENGINE_V0_DESIGN.md`.
+
+Exit codes: `0` report generated (blockers are findings, not process
+errors), `1` missing/invalid input or write failure, `2` flag usage
+error.

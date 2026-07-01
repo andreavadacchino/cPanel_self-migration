@@ -29,10 +29,15 @@ import (
 
 func main() {
 	// Subcommand dispatch happens before the global flag parsing: the
-	// `inventory diff` command is fully offline and shares none of the
+	// `inventory …` commands are fully offline and share none of the
 	// migration flags.
-	if len(os.Args) >= 3 && os.Args[1] == "inventory" && os.Args[2] == "diff" {
-		os.Exit(runInventoryDiffCmd(os.Args[3:]))
+	if len(os.Args) >= 3 && os.Args[1] == "inventory" {
+		switch os.Args[2] {
+		case "diff":
+			os.Exit(runInventoryDiffCmd(os.Args[3:]))
+		case "policy":
+			os.Exit(runInventoryPolicyCmd(os.Args[3:]))
+		}
 	}
 
 	var (
