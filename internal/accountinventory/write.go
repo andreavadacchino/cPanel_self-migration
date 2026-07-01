@@ -81,6 +81,56 @@ func writeDNSSection(sb *strings.Builder, dns DNSSection) {
 	}
 }
 
+// mdCell makes an arbitrary string safe inside a Markdown table cell
+// (cron commands routinely contain pipes) and truncates it rune-safely.
+func mdCell(s string, max int) string {
+	if runes := []rune(s); len(runes) > max {
+		s = string(runes[:max-3]) + "..."
+	}
+	return strings.ReplaceAll(s, "|", "\\|")
+}
+
+func writeCronSection(sb *strings.Builder, cron CronSection) {
+	status := "available"
+	if !cron.Available {
+		status = "unavailable"
+	}
+	fmt.Fprintf(sb, "## Cron Jobs (%d) — %s via %s\n\n", len(cron.Jobs), status, cron.SourceCommand)
+	for _, w := range cron.Warnings {
+		fmt.Fprintf(sb, "> **Warning**: %s\n\n", w)
+	}
+	for _, e := range cron.Errors {
+		fmt.Fprintf(sb, "> **Error**: %s\n\n", e)
+	}
+	if cron.CommentsCount > 0 || cron.DisabledJobsCount > 0 {
+		fmt.Fprintf(sb, "- Comments: %d — Disabled jobs: %d\n\n", cron.CommentsCount, cron.DisabledJobsCount)
+	}
+	if len(cron.Environment) > 0 {
+		sb.WriteString("| Env Var | Value (redacted) |\n")
+		sb.WriteString("|---------|------------------|\n")
+		for _, e := range cron.Environment {
+			fmt.Fprintf(sb, "| %s | %s |\n", mdCell(e.Name, 40), mdCell(e.ValueRedacted, 60))
+		}
+		sb.WriteString("\n")
+	}
+	if len(cron.Jobs) > 0 {
+		sb.WriteString("| Schedule | Command (redacted) | Enabled |\n")
+		sb.WriteString("|----------|--------------------|---------|\n")
+		for _, j := range cron.Jobs {
+			schedule := j.Macro
+			if j.Type == "schedule" {
+				schedule = fmt.Sprintf("%s %s %s %s %s", j.Minute, j.Hour, j.DayOfMonth, j.Month, j.DayOfWeek)
+			}
+			enabled := "yes"
+			if !j.Enabled {
+				enabled = "no"
+			}
+			fmt.Fprintf(sb, "| %s | %s | %s |\n", mdCell(schedule, 40), mdCell(j.CommandRedacted, 60), enabled)
+		}
+		sb.WriteString("\n")
+	}
+}
+
 func writeConfigSection(sb *strings.Builder, title string, sec ConfigSection, count int) {
 	status := "available"
 	if !sec.Available {
@@ -187,6 +237,7 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 	}
 
 	writeDNSSection(sb, inv.DNS)
+	writeCronSection(sb, inv.Cron)
 
 	if len(inv.Warnings) > 0 {
 		fmt.Fprintf(sb, "## Warnings (%d)\n\n", len(inv.Warnings))

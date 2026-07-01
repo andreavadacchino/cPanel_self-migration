@@ -121,6 +121,43 @@ type DNSSection struct {
 	Zones []DNSZoneResult `json:"zones"`
 }
 
+type CronJobEntry struct {
+	Type            string   `json:"type"`
+	Minute          string   `json:"minute,omitempty"`
+	Hour            string   `json:"hour,omitempty"`
+	DayOfMonth      string   `json:"day_of_month,omitempty"`
+	Month           string   `json:"month,omitempty"`
+	DayOfWeek       string   `json:"day_of_week,omitempty"`
+	Macro           string   `json:"macro,omitempty"`
+	CommandRedacted string   `json:"command_redacted"`
+	CommandSHA256   string   `json:"command_sha256"`
+	RawLineSHA256   string   `json:"raw_line_sha256"`
+	Enabled         bool     `json:"enabled"`
+	LineNumber      int      `json:"line_number"`
+	Warnings        []string `json:"warnings"`
+}
+
+type CronEnvEntry struct {
+	Name          string `json:"name"`
+	ValueRedacted string `json:"value_redacted"`
+	LineNumber    int    `json:"line_number"`
+}
+
+// CronSection deviates from ConfigSection on purpose: crontab is fetched by
+// a shell command, not a cPanel API function, so it carries source_command
+// instead of source_function.
+type CronSection struct {
+	Available         bool           `json:"available"`
+	Method            string         `json:"method"` // "ssh_crontab_l" | "unavailable"
+	SourceCommand     string         `json:"source_command"`
+	Jobs              []CronJobEntry `json:"jobs"`
+	Environment       []CronEnvEntry `json:"environment"`
+	CommentsCount     int            `json:"comments_count"`
+	DisabledJobsCount int            `json:"disabled_jobs_count"`
+	Warnings          []string       `json:"warnings"`
+	Errors            []string       `json:"errors"`
+}
+
 type NormalizedInventory struct {
 	Account        AccountInfo          `json:"account"`
 	Domains        []DomainEntry        `json:"domains"`
@@ -132,7 +169,20 @@ type NormalizedInventory struct {
 	SSL            SSLSection           `json:"ssl"`
 	PHP            PHPSection           `json:"php"`
 	DNS            DNSSection           `json:"dns"`
+	Cron           CronSection          `json:"cron"`
 	Warnings       []string             `json:"warnings"`
+}
+
+// NewEmptyCronSection returns a CronSection with every slice initialized so
+// JSON output never contains null arrays.
+func NewEmptyCronSection() CronSection {
+	return CronSection{
+		SourceCommand: "crontab -l",
+		Jobs:          []CronJobEntry{},
+		Environment:   []CronEnvEntry{},
+		Warnings:      []string{},
+		Errors:        []string{},
+	}
 }
 
 func NewEmptyInventory(user, host, side string) NormalizedInventory {
@@ -152,6 +202,7 @@ func NewEmptyInventory(user, host, side string) NormalizedInventory {
 		SSL:            SSLSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []SSLEntry{}},
 		PHP:            PHPSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []PHPEntry{}},
 		DNS:            DNSSection{ConfigSection: ConfigSection{Warnings: []string{}}, Zones: []DNSZoneResult{}},
+		Cron:           NewEmptyCronSection(),
 		Warnings:       []string{},
 	}
 }

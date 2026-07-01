@@ -149,8 +149,59 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 	inv.SSL = collectSSL(ctx, r)
 	inv.PHP = collectPHP(ctx, r)
 	inv.DNS = collectDNS(ctx, r, inv.Domains)
+	inv.Cron = collectCron(ctx, r)
 
 	return inv, nil
+}
+
+func collectCron(ctx context.Context, r cpanel.Runner) CronSection {
+	sec := NewEmptyCronSection()
+
+	res, err := cpanel.FetchCrontab(ctx, r)
+	if err != nil {
+		sec.Available = false
+		sec.Method = "unavailable"
+		// Hard failures land in Errors; Warnings stays for soft conditions
+		// (empty crontab, unparsable lines) so JSON consumers can key off
+		// a non-empty errors array.
+		sec.Errors = append(sec.Errors, fmt.Sprintf("crontab unavailable: %v", err))
+		return sec
+	}
+
+	sec.Available = true
+	sec.Method = "ssh_crontab_l"
+	sec.CommentsCount = res.CommentsCount
+	sec.DisabledJobsCount = res.DisabledJobsCount
+	sec.Warnings = append(sec.Warnings, res.Warnings...)
+	for _, j := range res.Jobs {
+		warnings := j.Warnings
+		if warnings == nil {
+			warnings = []string{}
+		}
+		sec.Jobs = append(sec.Jobs, CronJobEntry{
+			Type:            j.Type,
+			Minute:          j.Minute,
+			Hour:            j.Hour,
+			DayOfMonth:      j.DayOfMonth,
+			Month:           j.Month,
+			DayOfWeek:       j.DayOfWeek,
+			Macro:           j.Macro,
+			CommandRedacted: j.CommandRedacted,
+			CommandSHA256:   j.CommandSHA256,
+			RawLineSHA256:   j.RawLineSHA256,
+			Enabled:         j.Enabled,
+			LineNumber:      j.LineNumber,
+			Warnings:        warnings,
+		})
+	}
+	for _, e := range res.Environment {
+		sec.Environment = append(sec.Environment, CronEnvEntry{
+			Name:          e.Name,
+			ValueRedacted: e.ValueRedacted,
+			LineNumber:    e.LineNumber,
+		})
+	}
+	return sec
 }
 
 func collectFTP(ctx context.Context, r cpanel.Runner) FTPSection {
