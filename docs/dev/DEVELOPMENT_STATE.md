@@ -33,7 +33,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 5D | `--fail-on-blockers`: `inventory policy` exits 3 when blocked | #9 |
 | 6A | DNS import/verifier micro-design (v2 post adversarial review) | #11 |
 | 6B-pre | real-server DNS capability captures (mass_edit_zone OK on v110) | #12 |
-| 6B | `inventory dns-plan`: offline DNS import plan builder | (open) |
+| 6B | `inventory dns-plan`: offline DNS import plan builder | #13 |
 
 ## The full pipeline (all read-only / offline)
 
