@@ -142,7 +142,8 @@ review, or is informational — it never decides what to do about it.
 cpanel-self-migration inventory policy \
   --diff ./inventory_diff.json \
   [--output-json ./policy_report.json] \
-  [--output-md ./policy_report.md]
+  [--output-md ./policy_report.md] \
+  [--fail-on-blockers]
 ```
 
 Overall status: any blocker → `blocked`; any review → `review_required`;
@@ -154,4 +155,15 @@ jobs missing on the destination. The full rule table lives in
 
 Exit codes: `0` report generated (blockers are findings, not process
 errors), `1` missing/invalid input or write failure, `2` flag usage
-error.
+error, `3` `--fail-on-blockers` was set and the overall status is
+`blocked`. The reports are always fully written before the gating exit;
+`review_required` never gates. Without the flag the exit stays `0`
+regardless of status, so existing consumers are unaffected.
+
+`--fail-on-blockers` makes the pipeline usable as a CI / pre-migration
+gate without parsing JSON:
+
+```bash
+cpanel-self-migration inventory policy --diff ./inventory_diff.json --fail-on-blockers \
+  && echo "migration can proceed"
+```
