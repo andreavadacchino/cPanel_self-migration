@@ -24,9 +24,3 @@ func ListEmailAccounts(ctx context.Context, c Runner) ([]EmailAccountEntry, erro
 	return data, nil
 }
 
-func sortEmailAccounts(data []EmailAccountEntry) []EmailAccountEntry {
-	sorted := make([]EmailAccountEntry, len(data))
-	copy(sorted, data)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Email < sorted[j].Email })
-	return sorted
-}

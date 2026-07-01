@@ -3,6 +3,7 @@ package accountinventory
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/cpanel"
@@ -88,7 +89,7 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 			local := a.Email
 			domain := a.Domain
 			user := local
-			if at := findByte(local, '@'); at >= 0 {
+			if at := strings.IndexByte(local, '@'); at >= 0 {
 				user = local[:at]
 			}
 			inv.Mailboxes = append(inv.Mailboxes, MailboxEntry{
@@ -116,11 +117,3 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 	return inv, nil
 }
 
-func findByte(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
-}

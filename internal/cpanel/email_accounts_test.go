@@ -14,20 +14,23 @@ func TestParseListEmailAccounts(t *testing.T) {
 	}
 
 	want := []struct {
-		email string
-		disk  int64
+		email  string
+		domain string
+		disk   int64
 	}{
-		{"admin@main.example", 51200},
-		{"contact@addon.example", 0},
-		{"info@main.example", 2048},
+		{"info@main.example", "main.example", 2048},
+		{"admin@main.example", "main.example", 51200},
+		{"contact@addon.example", "addon.example", 0},
 	}
-	sorted := sortEmailAccounts(data)
 	for i, w := range want {
-		if sorted[i].Email != w.email {
-			t.Errorf("[%d] email = %q, want %q", i, sorted[i].Email, w.email)
+		if data[i].Email != w.email {
+			t.Errorf("[%d] email = %q, want %q", i, data[i].Email, w.email)
 		}
-		if sorted[i].DiskUsedQuota != w.disk {
-			t.Errorf("[%d] disk = %d, want %d", i, sorted[i].DiskUsedQuota, w.disk)
+		if data[i].Domain != w.domain {
+			t.Errorf("[%d] domain = %q, want %q", i, data[i].Domain, w.domain)
+		}
+		if data[i].DiskUsedQuota != w.disk {
+			t.Errorf("[%d] disk = %d, want %d", i, data[i].DiskUsedQuota, w.disk)
 		}
 	}
 }

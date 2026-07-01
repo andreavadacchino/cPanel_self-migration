@@ -192,7 +192,11 @@ func main() {
 	}
 
 	if *accountInventory {
-		runAccountInventory(ctx, cfg, outDir, em)
+		rid := *runID
+		if rid == "" {
+			rid = events.NewRunID(time.Now())
+		}
+		runAccountInventory(ctx, cfg, outDir, rid, em, *reportJSON)
 		return
 	}
 
@@ -236,16 +240,22 @@ func main() {
 	}
 }
 
-func runAccountInventory(ctx context.Context, cfg config.Config, outDir string, em events.Emitter) {
+func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID string, em events.Emitter, writeReportJSON bool) {
+	srcRef := events.HostRef{IP: cfg.Src.IP, User: cfg.Src.SSHUser}
 	em.Send(events.Event{
-		RunID: events.NewRunID(time.Now()), TS: time.Now(),
+		RunID: runID, TS: time.Now(),
 		Level: events.LevelInfo, Type: events.EventRunStarted,
 		Message: "account inventory started",
-		Source:  events.HostRef{IP: cfg.Src.IP, User: cfg.Src.SSHUser},
+		Source:  srcRef,
 	})
 
 	pool, err := sshx.DialBoth(ctx, cfg, "")
 	if err != nil {
+		em.Send(events.Event{
+			RunID: runID, TS: time.Now(),
+			Level: events.LevelError, Type: events.EventRunFailed,
+			Message: fmt.Sprintf("connect failed: %v", err), Source: srcRef,
+		})
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -288,8 +298,24 @@ func runAccountInventory(ctx context.Context, cfg config.Config, outDir string, 
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", reportPath)
 
+	if writeReportJSON {
+		rpt := events.RunReport{
+			RunID:           runID,
+			Version:         version.String(),
+			Mode:            "account-inventory",
+			ExitStatus:      events.ExitSuccess,
+			PhasesCompleted: []events.Phase{},
+			Warnings:        result.Source.Warnings,
+			Errors:          []string{},
+		}
+		rptPath := filepath.Join(outDir, "report.json")
+		if werr := events.WriteReport(rptPath, rpt); werr != nil {
+			fmt.Fprintln(os.Stderr, "warning: could not write report.json:", werr)
+		}
+	}
+
 	em.Send(events.Event{
-		RunID: events.NewRunID(time.Now()), TS: time.Now(),
+		RunID: runID, TS: time.Now(),
 		Level: events.LevelInfo, Type: events.EventRunCompleted,
 		Message: "account inventory completed",
 	})
