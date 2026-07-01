@@ -1,8 +1,12 @@
 // Package accountinventory collects a read-only inventory of a cPanel account:
-// domains, docroots, mailboxes, and databases. It never writes to any server.
+// domains, docroots, mailboxes, databases, and DNS zones.
+// It never writes to any server.
 package accountinventory
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type AccountInfo struct {
 	User        string `json:"user"`
@@ -86,6 +90,37 @@ type PHPSection struct {
 	Items []PHPEntry `json:"items"`
 }
 
+type DNSRecordEntry struct {
+	Type     string          `json:"type"`
+	Name     string          `json:"name"`
+	TTL      int             `json:"ttl"`
+	Value    string          `json:"value"`
+	Priority int             `json:"priority,omitempty"`
+	Exchange string          `json:"exchange,omitempty"`
+	Address  string          `json:"address,omitempty"`
+	Target   string          `json:"target,omitempty"`
+	TxtData  string          `json:"txtdata,omitempty"`
+	Class    string          `json:"class,omitempty"`
+	Line     int             `json:"line,omitempty"`
+	Raw      json.RawMessage `json:"raw,omitempty"`
+}
+
+type DNSZoneResult struct {
+	Available      bool             `json:"available"`
+	Zone           string           `json:"zone"`
+	Method         string           `json:"method"`
+	SourceFunction string           `json:"source_function"`
+	Records        []DNSRecordEntry `json:"records"`
+	Warnings       []string         `json:"warnings"`
+	Errors         []string         `json:"errors"`
+	RawIncluded    bool             `json:"raw_included"`
+}
+
+type DNSSection struct {
+	ConfigSection
+	Zones []DNSZoneResult `json:"zones"`
+}
+
 type NormalizedInventory struct {
 	Account        AccountInfo          `json:"account"`
 	Domains        []DomainEntry        `json:"domains"`
@@ -96,6 +131,7 @@ type NormalizedInventory struct {
 	FTP            FTPSection           `json:"ftp"`
 	SSL            SSLSection           `json:"ssl"`
 	PHP            PHPSection           `json:"php"`
+	DNS            DNSSection           `json:"dns"`
 	Warnings       []string             `json:"warnings"`
 }
 
@@ -115,6 +151,7 @@ func NewEmptyInventory(user, host, side string) NormalizedInventory {
 		FTP:            FTPSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []FTPEntry{}},
 		SSL:            SSLSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []SSLEntry{}},
 		PHP:            PHPSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []PHPEntry{}},
+		DNS:            DNSSection{ConfigSection: ConfigSection{Warnings: []string{}}, Zones: []DNSZoneResult{}},
 		Warnings:       []string{},
 	}
 }

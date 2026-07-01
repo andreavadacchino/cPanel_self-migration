@@ -126,6 +126,19 @@ func (d CreateTokenData) hasUnboundExpiry() bool {
 	return d.ExpiresAt == 0 && (d.Expires != 0 || d.Expiry != 0)
 }
 
+// api2Envelope is the generic API2 response wrapper for cpapi2 CLI calls:
+//
+//	{"cpanelresult":{"data":...,"event":{"result":1},"error":"..."}}
+type api2Envelope[T any] struct {
+	CPanelResult struct {
+		Data  T `json:"data"`
+		Event struct {
+			Result json.Number `json:"result"`
+		} `json:"event"`
+		Error string `json:"error"`
+	} `json:"cpanelresult"`
+}
+
 // api2Response is the legacy api2 wrapper used by AddonDomain::addaddondomain:
 //
 //	{"cpanelresult":{"data":[{"result":1,"reason":"..."}], "event":{"result":1}}}

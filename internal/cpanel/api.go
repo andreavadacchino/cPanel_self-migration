@@ -93,6 +93,64 @@ func RunUAPI[T any](ctx context.Context, c Runner, module, fn string, args map[s
 	return parseUAPI[T](module, fn, out)
 }
 
+// api2ArgsScript builds a tiny bash snippet that invokes `cpapi2` with the
+// given module/function and arg keys, analogous to uapiArgsScript but for the
+// legacy cPanel API2 CLI. Used for read-only API2 calls that have no UAPI
+// equivalent (e.g. ZoneEdit::fetchzone_records on cPanel < v136).
+func api2ArgsScript(module, fn string, args map[string]string) (string, map[string]string) {
+	env := map[string]string{}
+	var b strings.Builder
+	b.WriteString("cpapi2 --output=json ")
+	b.WriteString(module)
+	b.WriteString(" ")
+	b.WriteString(fn)
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for i, k := range keys {
+		ev := fmt.Sprintf("ARG_%d", i)
+		env[ev] = args[k]
+		fmt.Fprintf(&b, " %s=\"$%s\"", k, ev)
+	}
+	return b.String(), env
+}
+
+// RunAPI2 executes an API2 call via the cpapi2 CLI on the host and unmarshals
+// cpanelresult.data into T. It returns an error if the SSH command fails, the
+// JSON is unparseable, or the API2 event.result is not 1.
+func RunAPI2[T any](ctx context.Context, c Runner, module, fn string, args map[string]string) (T, error) {
+	var zero T
+	script, env := api2ArgsScript(module, fn, args)
+	out, err := c.RunScript(ctx, script, env)
+	if err != nil {
+		return zero, fmt.Errorf("cpapi2 %s::%s: %w", module, fn, err)
+	}
+	logx.Debug("cpapi2 %s::%s: API2 call succeeded (%d bytes response)", module, fn, len(out))
+	if rawResponseDebug {
+		logx.Debug("cpapi2 %s::%s: raw response (secrets redacted): %s", module, fn, redactJSONForDebug(out))
+	}
+	return parseAPI2[T](module, fn, out)
+}
+
+// parseAPI2 is the pure parsing half of RunAPI2, exposed for unit testing.
+func parseAPI2[T any](module, fn string, out []byte) (T, error) {
+	var zero T
+	var env api2Envelope[T]
+	if err := json.Unmarshal(out, &env); err != nil {
+		return zero, fmt.Errorf("cpapi2 %s::%s: parse JSON (%d bytes): %w", module, fn, len(out), err)
+	}
+	if env.CPanelResult.Event.Result.String() != "1" {
+		errMsg := env.CPanelResult.Error
+		if errMsg == "" {
+			errMsg = "unknown API2 error"
+		}
+		return zero, fmt.Errorf("cpapi2 %s::%s: event.result=%s error=%s", module, fn, env.CPanelResult.Event.Result, errMsg)
+	}
+	return env.CPanelResult.Data, nil
+}
+
 // parseUAPI is the pure parsing half of RunUAPI, exposed for unit testing
 // against fixture bytes.
 func parseUAPI[T any](module, fn string, out []byte) (T, error) {
