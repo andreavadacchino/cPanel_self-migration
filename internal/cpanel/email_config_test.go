@@ -51,8 +51,8 @@ func TestParseListAutoresponders(t *testing.T) {
 	if data[0].Subject != "Out of office" {
 		t.Errorf("subject = %q", data[0].Subject)
 	}
-	if data[0].Interval != 24 {
-		t.Errorf("interval = %d, want 24", data[0].Interval)
+	if int(data[0].Interval) != 24 {
+		t.Errorf("interval = %d, want 24", int(data[0].Interval))
 	}
 }
 

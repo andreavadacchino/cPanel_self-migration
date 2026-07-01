@@ -29,8 +29,8 @@ func TestParseListEmailAccounts(t *testing.T) {
 		if data[i].Domain != w.domain {
 			t.Errorf("[%d] domain = %q, want %q", i, data[i].Domain, w.domain)
 		}
-		if data[i].DiskUsedQuota != w.disk {
-			t.Errorf("[%d] disk = %d, want %d", i, data[i].DiskUsedQuota, w.disk)
+		if int64(data[i].DiskUsedBytes) != w.disk {
+			t.Errorf("[%d] disk = %d, want %d", i, int64(data[i].DiskUsedBytes), w.disk)
 		}
 	}
 }

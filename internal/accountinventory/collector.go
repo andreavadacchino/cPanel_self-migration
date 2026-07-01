@@ -98,7 +98,7 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 				Email:     a.Email,
 				Domain:    domain,
 				User:      user,
-				DiskUsage: a.DiskUsedQuota,
+				DiskUsage: int64(a.DiskUsedBytes),
 			})
 		}
 	}
@@ -140,7 +140,7 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 				Email:    a.Email + "@" + a.Domain,
 				Domain:   a.Domain,
 				Subject:  a.Subject,
-				Interval: a.Interval,
+				Interval: int(a.Interval),
 			})
 		}
 	}
