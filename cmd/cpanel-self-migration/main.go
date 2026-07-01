@@ -196,7 +196,10 @@ func main() {
 		if rid == "" {
 			rid = events.NewRunID(time.Now())
 		}
-		runAccountInventory(ctx, cfg, outDir, rid, em, *reportJSON)
+		if err := runAccountInventory(ctx, cfg, outDir, rid, em, *reportJSON); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -240,7 +243,7 @@ func main() {
 	}
 }
 
-func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID string, em events.Emitter, writeReportJSON bool) {
+func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID string, em events.Emitter, writeReportJSON bool) error {
 	srcRef := events.HostRef{IP: cfg.Src.IP, User: cfg.Src.SSHUser}
 	em.Send(events.Event{
 		RunID: runID, TS: time.Now(),
@@ -249,15 +252,18 @@ func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID s
 		Source:  srcRef,
 	})
 
-	pool, err := sshx.DialBoth(ctx, cfg, "")
-	if err != nil {
+	fail := func(err error) error {
 		em.Send(events.Event{
 			RunID: runID, TS: time.Now(),
 			Level: events.LevelError, Type: events.EventRunFailed,
-			Message: fmt.Sprintf("connect failed: %v", err), Source: srcRef,
+			Message: err.Error(), Source: srcRef,
 		})
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		return err
+	}
+
+	pool, err := sshx.DialBoth(ctx, cfg, "")
+	if err != nil {
+		return fail(err)
 	}
 	defer pool.Close()
 
@@ -271,30 +277,26 @@ func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID s
 
 	result, err := accountinventory.Collect(ctx, pool.Src, destRunner, srcInfo, destInfo)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("inventory collection: %w", err))
 	}
 
 	srcPath := filepath.Join(outDir, "inventory_source.json")
 	if err := accountinventory.WriteInventoryJSON(srcPath, result.Source); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("write source inventory: %w", err))
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", srcPath)
 
 	if result.Dest != nil {
 		destPath := filepath.Join(outDir, "inventory_destination.json")
 		if err := accountinventory.WriteInventoryJSON(destPath, *result.Dest); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			os.Exit(1)
+			return fail(fmt.Errorf("write dest inventory: %w", err))
 		}
 		fmt.Fprintf(os.Stderr, "wrote %s\n", destPath)
 	}
 
 	reportPath := filepath.Join(outDir, "inventory_report.md")
 	if err := accountinventory.WriteReport(reportPath, result); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("write report: %w", err))
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", reportPath)
 
@@ -319,6 +321,7 @@ func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID s
 		Level: events.LevelInfo, Type: events.EventRunCompleted,
 		Message: "account inventory completed",
 	})
+	return nil
 }
 
 func buildRunReport(opts migrate.Options, cfg config.Config, startedAt, finishedAt time.Time, runErr, ctxErr error) events.RunReport {
