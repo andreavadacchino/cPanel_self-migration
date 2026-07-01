@@ -134,6 +134,45 @@ func TestWriterNoSecretsInOutput(t *testing.T) {
 	}
 }
 
+func TestWriterRedactsDataSecrets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ev := Event{
+		RunID:   "test",
+		TS:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Level:   LevelInfo,
+		Phase:   PhaseConnect,
+		Type:    EventPhaseCompleted,
+		Message: "done",
+		Data:    map[string]any{"password": "s3cr3t", "user": "admin"},
+	}
+	if err := w.Write(ev); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	s := string(b)
+	if strings.Contains(s, "s3cr3t") {
+		t.Errorf("written event contains unredacted password: %s", s)
+	}
+	if !strings.Contains(s, "admin") {
+		t.Errorf("written event missing non-secret value 'admin': %s", s)
+	}
+	if !strings.Contains(s, "<redacted>") {
+		t.Errorf("written event missing redaction placeholder: %s", s)
+	}
+}
+
 func TestWriterCreatesParentDir(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "subdir", "events.jsonl")

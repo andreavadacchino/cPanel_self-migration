@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -162,9 +163,17 @@ func main() {
 			os.Exit(1)
 		}
 		defer ew.Close()
-		em = events.Emitter{Emit: func(e events.Event) { _ = ew.Write(e) }}
+		var evWriteErr sync.Once
+		em = events.Emitter{Emit: func(e events.Event) {
+			if err := ew.Write(e); err != nil {
+				evWriteErr.Do(func() {
+					fmt.Fprintln(os.Stderr, "warning: events.jsonl write error:", err)
+				})
+			}
+		}}
 	}
 
+	startedAt := time.Now()
 	opts := migrate.Options{
 		Apply:           *apply || *applyMirror,
 		ForceSync:       *full || *forceSync,
@@ -179,9 +188,8 @@ func main() {
 		OutputDir:       outDir,
 		RunID:           *runID,
 		Events:          em,
+		Now:             startedAt,
 	}
-
-	startedAt := time.Now()
 	runErr := migrate.Run(ctx, cfg, opts)
 	finishedAt := time.Now()
 

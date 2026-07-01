@@ -32,7 +32,11 @@ func NewWriter(path string) (*Writer, error) {
 func (w *Writer) Write(ev Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err := w.enc.Encode(ev); err != nil {
+	safe := ev
+	if m, ok := safe.Data.(map[string]any); ok {
+		safe.Data = RedactMap(m)
+	}
+	if err := w.enc.Encode(safe); err != nil {
 		return fmt.Errorf("events: write: %w", err)
 	}
 	return nil
