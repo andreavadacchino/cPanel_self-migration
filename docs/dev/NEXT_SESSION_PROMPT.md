@@ -5,55 +5,118 @@ Copia il blocco qui sotto come primo messaggio della nuova sessione.
 ---
 
 Stai lavorando sul tool Go **cpanel-self-migration** (migrazione read-only-source
-tra due account cPanel via SSH user-level), directory
+tra due account cPanel via SSH user-level password-auth; il binario gira dal Mac
+dell'operatore come bridge SRC→relay→DEST), directory
 `/Users/andreavadacchino/Desktop/pADV/cPanel_self-migration`.
 
-Leggi PRIMA di toccare codice:
-1. `docs/dev/DEVELOPMENT_STATE.md` — roadmap, mappa architettura, fatti reali del server (flexInt64/flexStringList, metodo smoke via Orbit con capture base64 + verifica md5 server-side fail-safe).
-2. Linea DNS: `PR6A_DNS_IMPORT_DESIGN.md` (contratto 6D), `PR6B_PRE_CAPTURES.md` (fatti write-API: mass_edit_zone line_index-addressed, serial guard), `PR6C_DNS_VERIFY_DESIGN.md`.
-3. Linea 7E: `PR7E_PRE_CAPTURES.md` (capture byte-verificate) e `PR7E_DESIGN.md` (incluso "Post-review hardening").
-4. UI: `UI2A_CONNECTIONS_RUN_DESIGN.md`, `UI2B_ACCEPT_DESIGN.md`, `UI3_APPLY_MONITOR_DESIGN.md`.
+Leggi PRIMA di toccare qualsiasi cosa:
+1. `docs/dev/MASTER_PLAN_COMPLETION.md` — il piano di completamento (Fasi 0-5) con le decisioni aperte.
+2. `docs/dev/DEVELOPMENT_STATE.md` — roadmap (ultimo merge: **#38**), mappa architettura, fatti reali del server.
+3. `docs/dev/PR7E_REAL_SMOKE.md` — metodo replay offline e risultati dello smoke 7E.
 
-Contesto in una riga: pipeline read-only completa (inventario SSH → diff → policy → dns-plan → checklist) con catena provenienza sha256, evidenza per_item (7C), accettazioni operatore (7D), dns verify (6C), UI web locale zero-JS monitor-only; da PR 7E le quattro aree ex-cieche (email_routing, default_address, email_filters, redirects) sono sezioni reali con azioni mirate. `--apply` e la futura scrittura DNS restano SOLO da terminale.
+## Stato al 2026-07-02 sera
 
-Stato del fork (ultimo merge: #35, main 7feaf89):
-- #32 — dispatch: `inventory` senza/con subcommand ignoto → exit 2 + usage (prima cadeva nel flusso migrazione); test E2E via TestMain re-exec del vero main().
-- #33 — 7E-pre: capture reali (routing local doctorbike / remote italplant; default address copre i subdomini in una chiamata; filtri vuoti ovunque, shape non-vuota docs-derived; Mime::list_redirects = harvest .htaccess, rumore CMS dominante, 1 solo 301 vero). Metodo transfer migliorato: md5 LOCALI verificati dal server con `md5sum -c` (corruzione trascrizione → falso FAILED, mai falso OK).
-- #34 — 7E-1 collectors: 4 chiamate UAPI read-only + 4 sezioni inventario. Filtri: SOLO conteggi (rules/actions restano json.RawMessage nel layer cpanel, mai negli artefatti). Tie-break deterministici completi (l'ordine array del backend Perl non è stabile). Warning scope-ridotto quando la lista mailbox fallisce ma list_filters riesce.
-- #35 — 7E-2 pipeline: diff (routing confronta SOLO routing+always_accept; detail redirect = `kind/type/status → destination` come canale di classificazione), policy (POL-MAILROUTE/DEFAULTADDR/EMAILFILTER via evalSimple; evalRedirects separa rumore CMS→info da redirect veri→review), checklist (azioni per-item: CONFIRM_EMAIL_ROUTING blocking, MANUAL_CHECK_REQUIRED default address blocking, RECREATE_EMAIL_FILTERS nuovo tipo blocking acceptable, CONFIRM_REDIRECT nuovo tipo non-blocking; rewrite CMS rimossi = expected difference). DKIM: plan replace su TXT `._domainkey` → azione CONFIRM_DNS_RECORD non-blocking (finding 3 smoke 7A chiuso). buildNotInventoriedSection rimossa (stato not_inventoried resta nello schema per artefatti vecchi).
+**Fase 0.1 CHIUSA (PR #38 mergiata):** smoke 7E passato al 100% in replay
+offline (zero contatto server, zero TOTP): 20 rewrite CMS → expected
+differences senza azioni finte; blocking 11→8 (i 3 check ciechi sostituiti
+dalla logica per-item); DKIM → 4 CONFIRM_DNS_RECORD non bloccanti; SPF ancora
+0 manual; guardia dest-stantia regge (4× POL-SECTION-UNAVAILABLE, mai ok
+silenzioso); italplant routing remote pulito + il 301 genuino → esattamente
+una CONFIRM_REDIRECT non bloccante. Bonus: le 11 sezioni pre-7E sono
+multiset-identiche al source del 7A → zero drift dei collector da #32-#35.
 
-Hardening post-review #35 (2 HIGH riprodotti empiricamente dal reviewer, corretti e pinnati):
-1. POL-SECTION-MISSING (review) per ogni sezione attesa assente dal diff — un artefatto pre-7E non può più nascondere una divergenza dietro SectionOK/READY_TO_CUTOVER (chiuso buco PREESISTENTE su tutte le sezioni). Test: TestChecklistStaleDiffMissingSectionNeverReadsOK.
-2. Predicato CMS = rewrite+temporary+no-status E destinazione NON-URL (tutte le 34 rewrite CMS catturate puntano a path relativi `%{ENV:REWRITEBASE}`; i redirect operatore puntano sempre a URL assolute). Un temporary operatore senza statuscode resta genuino.
-3. Warning "MX exchangers non verificati" scopato alle zone che ospitano domini di routing (dnsSkipTouchesRouting).
+**Capture archiviate** (gli scratchpad /private/tmp NON sopravvivono ai
+riavvii) in `~/Desktop/pADV/cPanel_self-migration-captures/`:
+`doctorbike-full-setA` (autoritativo, zona DNS 61 record; setB scartato,
+parse_zone parziale 19 record), `cap7e/{doctorbike,italplant}`,
+`7a-artifacts` (incl. destination simulata .78 e report.json apply),
+`italplant-scaffold` (list_domains/domains_data SINTETICI, solo scaffold).
+Harness di replay: ricostruirlo al bisogno come `cmd/replay-smoke/main.go`
+(mai committato — vedi PR7E_REAL_SMOKE.md per il contratto: Runner che
+serve le capture per module::func + ARG_0).
 
-Lezioni di sessione (valgono oro):
-- Il go-reviewer multi-giro ha trovato HIGH veri anche su #35 (giro 1: 2 HIGH con repro empirici — falso READY_TO_CUTOVER da diff stantio, falso negativo CMS; giro 2 APPROVE + 1 MEDIUM sul fix; giro 3 APPROVE). Su superfici critiche NON fermarsi al primo APPROVE: i giri continuano finché non escono puliti, e i fix tornano allo STESSO reviewer.
-- Metodo capture: MAI trascrivere indici md5 a mano (un carattere corrotto passa inosservato); trascrivere solo i blob contenuto e far verificare gli md5 LOCALI al server con `md5sum -c` — la direzione fail-safe è l'unica accettabile.
+**Analisi a 4 agenti completata (in MASTER_PLAN_COMPLETION.md):** motore
+upstream maturo (test>codice, fail-closed, fault-sim) ma MAI eseguito da noi;
+17 aree account non inventariate e oggi silenziose; ~27/32 aree
+automatizzabili user-level (SSL::show_key esporta le chiavi private; filtri
+email round-trip 1:1; routing solo API2 setmxcheck; cron meglio via crontab
+SSH); nessuna capacità multi-account (config a coppia singola). Limiti motore:
+CMS rewrite 8/24, PrestaShop 1.7+ NON rilevato, DB_HOST mai riscritto,
+CHECKSUM cross-version degradato (rilevante: CentOS7→CL9.8).
 
-Workflow (OBBLIGATORIO):
-- SOLO fork andreavadacchino/cPanel_self-migration; push su `fork`, MAI su origin (tis24dev). PR verso il main del fork, merge con `gh pr merge N --merge`.
+## Obiettivo della sessione: FASE 0.2 — primo `--apply` reale
+
+Il milestone mancante dell'intero progetto. Account sacrificale SCELTO:
+**giorginisposi** (giorginisposi.it su .193 = 194.76.118.193). Verificato da
+fuori: WordPress 6.6.5 + WPBakery + CF7 + EventON, **niente WooCommerce**,
+sito vetrina vivo (apex 301 → www 200) — caso ideale: wp-config rewrite è il
+percorso più maturo del motore. Il candidato `carrozzeriaberto` è stato
+scartato (dominio senza DNS, non verificabile da fuori).
+NON ancora verificato (interrotto): numeri via Orbit.
+
+Sequenza:
+1. **Sessione Orbit** (chiedi TOTP; l'utente ha già usato "524932 yolo" il
+   02/07 ~20:54 UTC, sessione 2h con YOLO — probabilmente scaduta: chiedine
+   uno nuovo). Poi verifica giorginisposi: `whm_list_servers` →
+   `whm_list_accounts` (search user/domain) per username esatto, disco, plan,
+   suspended; `superadmin_find_site` → cpanel_list_databases /
+   list_email_accounts / list_cron_jobs / list_forwarders. Vuoi: disco
+   contenuto (<5-10GB), almeno 1 DB + qualche mailbox (senò il test prova
+   poco), shell abilitata.
+2. **Prerequisiti dall'utente**: password cPanel di giorginisposi su .193
+   (o reset da WHM); creazione account destinazione su .78 via WHM (root
+   disponibile: `ssh keliweb2`, WHM 136) con stesso dominio, shell abilitata.
+3. **host.yaml** (mode 600, `configs/host.yaml` accanto al binario): src=
+   .193/giorginisposi, dest=.78/nuovo account. Il tool gira dal Mac,
+   password-auth, TOFU host-key. `make build`.
+4. **Dry-run PRIMA** (`./cpanel-self-migration --json-events --report-json`):
+   analizza+confronta, zero scritture. Esamina logs/mail_analysis.log,
+   web_analysis.log, db_analysis.log. Aspettati sorprese ambiente
+   (CentOS7 source: versioni tar/mysqldump, jailshell, GTID assente=MariaDB?).
+5. **`--apply`** con l'utente presente, poi le verify del tool; poi pipeline
+   inventario completa (source+dest reali) → diff → policy → checklist con
+   il report.json REALE: prima checklist con evidenza vera non simulata.
+6. **Documentare**: `docs/dev/FASE0_2_FIRST_APPLY.md` stile PR7A_REAL_SMOKE
+   (divergenze osservate = oro per la Fase 5), riga roadmap, PR docs sul
+   fork; `create_intervention` su Orbit (site_id WordPress, MAI cPanel).
+
+Classificazione rischio (CLAUDE.md Server-VPS): **medio** — source
+strettamente read-only per costruzione; le scritture vanno SOLO sull'account
+destinazione nuovo e vuoto su .78 dove nessun DNS punta; NESSUN cutover in
+questo test. Rollback: l'account dest si butta e si ricrea.
+
+## Workflow (OBBLIGATORIO, invariato)
+
+- SOLO fork andreavadacchino/cPanel_self-migration; push su `fork`, MAI su
+  origin (tis24dev). PR verso il main del fork, merge `gh pr merge N --merge`
+  (attendi che Sourcery/mergeability si sblocchi: subito dopo il push la PR
+  può risultare UNSTABLE per qualche secondo).
 - Branch nuovo per PR: `git checkout main && git pull fork main && git checkout -b <branch>`.
-- TDD rigoroso: scenario reale → RED → fix minimo → GREEN.
-- Per OGNI PR con codice: go-reviewer (agent everything-claude-code:go-reviewer) con prompt che gli fa ATTACCARE le proprietà critiche con controesempi concreti; multi-giro fino ad APPROVE via SendMessage. Storico HIGH veri: #23, #26, #27, #30, #35.
-- Sourcery rate-limited fino a ~09/07/2026: gate sostitutivo = go-reviewer multi-giro + suite Docker. Dichiararlo nel commento di merge.
+- TDD rigoroso per OGNI modifica al codice; go-reviewer multi-giro
+  (everything-claude-code:go-reviewer) fino ad APPROVE pulito; Sourcery
+  rate-limited fino a ~09/07/2026 → gate sostitutivo = go-reviewer + suite
+  Docker, dichiararlo nel commento di merge.
+- Verifiche: `go test ./... && go vet ./... && go build ./cmd/cpanel-self-migration`;
+  i 4 package macOS noti (dbmig, maildir, migrate, webfiles) falliscono su
+  macOS solo per bash/GNU — `git diff main -- <pkg>` deve essere vuoto; suite
+  completa in Docker prima di ogni merge:
+  `docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=1 golang:1.25 bash -c "go test ./... && go vet ./... && echo LINUX_ALL_GREEN"`.
+- Perimetro protetto: `internal/migrate/runner.go` off-limits; scritture DNS
+  vietate fino a PR 6D; la Fase 0.2 NON modifica codice (solo esecuzione +
+  docs), salvo bug bloccanti trovati dal dry-run (in tal caso: PR separata
+  con TDD).
 
-Verifiche finali di ogni PR:
-go test ./internal/webui/ ./internal/accountinventory/ ./cmd/... ./internal/sshx/ ./internal/cpanel/ -race
-go test ./...   &&   go vet ./...   &&   go build ./cmd/cpanel-self-migration
-gofmt -l SOLO sui file toccati (violazioni PREESISTENTI su main in vari file, tra cui main.go, diff_write_test.go, dnsplan_test.go, dnsplan_write_test.go — verificate col confronto su main, NON riformattarle).
-I 4 package macOS noti (dbmig, maildir, migrate, webfiles) falliscono su macOS solo per bash/sed GNU — verificare `git diff main -- <pkg>` vuoto. La CI del fork non gira: replica la suite in Docker prima di ogni merge:
-docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=1 golang:1.25 bash -c "go test ./... && go vet ./... && go test -race ./internal/webui/ ./internal/accountinventory/ ./cmd/... && echo LINUX_ALL_GREEN"
-Golden: UPDATE_GOLDEN=1, poi rileggere il diff hunk per hunk.
+## Dopo la 0.2 (ordine dal MASTER_PLAN)
 
-Perimetro protetto: `internal/migrate/runner.go` off-limits. Scritture sui server VIETATE fino a PR 6D. La UI non apre SSH e non lancia --apply; dns verify apre SSH READ-ONLY verso il solo destination. I safety test DNS (lexical module-wide + strutturale literal-names in dns_safety_test.go) sono il lucchetto di 6D: 6D dovrà emendarli CONSAPEVOLMENTE con una allowlist per i propri file.
+0.3 censimento di massa (inventory source-only su tutti gli account dei
+server sorgente — decide le priorità di Fase 1-2 con dati), poi 1A coverage
+manifest, 1B collector batch 1. Decisioni aperte da sciogliere con l'utente:
+meccanismo credenziali di massa, taglio minimo vs piano completo, postura
+redaction sulle regole filtri (servono in chiaro per il round-trip 2B).
 
-Prossimi obiettivi (proponi tu quale, motiva, aspetta la mia conferma prima di scrivere codice):
-1. **PR 6D — dns apply**: il PRIMO comando che scrive. L'unico obiettivo sostanziale rimasto. Alto rischio — sessione dedicata con l'utente presente: protocollo completo del CLAUDE.md (backup, rollback <60s), zona sacrificale su principiadv.online, approvazioni Orbit live (o yolo esplicito). Contratto: mass_edit_zone atomica serial-guarded, mai delete di record destination, mai NS/SOA, backup-file-o-niente-write. 6C fornisce già la certificazione post-apply (`dns verify --fail-on-drift`).
-2. **Smoke reale 7E** (~1h, read-only, richiede TOTP Orbit): rigirare la pipeline completa su capture fresche doctorbike/italplant per validare le nuove sezioni su dati veri (le 15 rewrite CMS di doctorbike devono produrre expected differences, zero azioni finte; il routing remote di italplant deve restare pulito).
-3. Follow-up LOW dei reviewer #34/#35 (riempitivi): chiavi diff NUL-framed invece di separatori spazio/slash; esenzione CMS anche per redirect Changed (oggi solo Removed, asimmetrica); azione dedicata per filtri -CHANGED.
-4. UI rifiniture (basso valore, zero blocchi): revoca accettazione dal browser, persistenza nome operatore, download artefatti.
-
-Consiglio: la 2 è il primo passo naturale della prossima sessione con TOTP (validare 7E su dati reali prima di costruirci sopra); la 1 va pianificata come sessione dedicata con te presente dall'inizio alla fine.
-
-Analizza in modo investigativo; quando trovi una soluzione rimettila in esame per assicurarti al 100% che sia corretta. NON supporre, NON inventare, NON prendere scorciatoie, NON fare regressioni. Testa prima, durante e dopo. Riusa l'implementazione esistente il più possibile. Usa un team di agenti specializzati in parallelo e tutti gli strumenti disponibili. Sii brutalmente onesto e sincero, ma critico e scettico. Feedback non verboso.
+Analizza in modo investigativo; quando trovi una soluzione rimettila in esame
+per assicurarti al 100% che sia corretta. NON supporre, NON inventare, NON
+prendere scorciatoie, NON fare regressioni. Testa prima, durante e dopo.
+Riusa l'implementazione esistente il più possibile. Usa un team di agenti
+specializzati in parallelo e tutti gli strumenti disponibili. Sii brutalmente
+onesto e sincero, ma critico e scettico. Feedback non verboso.
