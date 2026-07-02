@@ -19,6 +19,7 @@
 package webui
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -91,6 +92,10 @@ type Options struct {
 	// Runner overrides the pipeline step execution — tests only. Nil uses
 	// the production subprocess runner.
 	Runner StepRunner
+	// BaseContext is the parent of every analysis run's context. Cancel it
+	// (e.g. from a signal handler) to stop an in-flight run and kill its
+	// subprocess. Nil defaults to context.Background().
+	BaseContext context.Context
 }
 
 type server struct {
@@ -114,15 +119,22 @@ func New(o Options) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("webui: parse templates: %w", err)
 	}
-	tok := make([]byte, 16)
+	tok := make([]byte, 32)
 	if _, err := rand.Read(tok); err != nil {
 		return nil, fmt.Errorf("webui: csrf token: %w", err)
+	}
+	// Sweep any leftover credential temp files from a previous crash
+	// (host.yaml.*.tmp are 0600 but should not linger).
+	if matches, _ := filepath.Glob(filepath.Join(o.Dir, "host.yaml.*.tmp")); matches != nil {
+		for _, m := range matches {
+			_ = os.Remove(m)
+		}
 	}
 	s := &server{
 		dir:  o.Dir,
 		tpl:  tpl,
 		csrf: hex.EncodeToString(tok),
-		job:  newJobManager(o.Dir, o.Runner),
+		job:  newJobManager(o.Dir, o.Runner, o.BaseContext),
 	}
 	// No ServeMux on purpose: its path canonicalization would answer
 	// traversal-looking requests with a 307 redirect instead of a plain
@@ -283,27 +295,20 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 // writeValidatedConfig writes the candidate to a UNIQUE temp file, lets
 // config.Load (the CLI's own validator) accept or reject it, and only then
 // renames it over host.yaml — the UI can never write a config the CLI
-// would refuse. cfgMu serializes concurrent saves (double-submit, two
-// tabs) so they cannot race on the shared target; os.CreateTemp gives each
-// save its own 0600 file so an interleaving can never rename or remove
-// another save's candidate.
+// would refuse. The caller (saveConfig) holds cfgMu, which serializes the
+// full read-modify-write; os.CreateTemp already creates each file 0600, so
+// there is no permission-widening window and no shared-name race.
 func (s *server) writeValidatedConfig(c yamlConfig) error {
 	b, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
-	s.cfgMu.Lock()
-	defer s.cfgMu.Unlock()
 	f, err := os.CreateTemp(s.dir, "host.yaml.*.tmp")
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
 	defer func() { _ = os.Remove(tmp) }() // no-op after a successful rename
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return err
-	}
 	if _, err := f.Write(b); err != nil {
 		_ = f.Close()
 		return err

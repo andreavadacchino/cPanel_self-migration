@@ -34,7 +34,9 @@ that wraps every route:
    local origin — blocks cross-origin form posts.
 3. **CSRF token**: random 32-byte value generated per server start,
    embedded as a hidden field in every form; POSTs without it are 403.
-   Constant-time comparison.
+   Constant-time comparison. The run context descends from a base context
+   the ui cancels on interrupt (kills the SSH subprocess, no orphan); the
+   job goroutine recovers panics into a failed run instead of crashing.
 4. Existing gates stay: loopback bind, GET/HEAD/POST only, single-page
    routing, no raw file serving.
 

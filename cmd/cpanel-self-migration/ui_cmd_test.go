@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,14 +13,14 @@ import (
 func TestNewUIServerValidation(t *testing.T) {
 	dir := t.TempDir()
 
-	if _, err := newUIServer(dir, "0.0.0.0:0"); err == nil {
+	if _, err := newUIServer(context.Background(), dir, "0.0.0.0:0"); err == nil {
 		t.Error("non-loopback listen address must be rejected")
 	}
-	if _, err := newUIServer(dir+"/missing", "127.0.0.1:0"); err == nil {
+	if _, err := newUIServer(context.Background(), dir+"/missing", "127.0.0.1:0"); err == nil {
 		t.Error("a missing artifact directory must be rejected")
 	}
 
-	srv, err := newUIServer(dir, "127.0.0.1:0")
+	srv, err := newUIServer(context.Background(), dir, "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("newUIServer: %v", err)
 	}
