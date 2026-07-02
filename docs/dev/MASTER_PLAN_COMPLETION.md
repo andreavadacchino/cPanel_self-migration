@@ -71,13 +71,19 @@ mai volato. Nessuna fase successiva parte finché la 0 non è chiusa.
   Sequenza: dry-run → `--apply` → verify → checklist con report.json reale.
   Criterio di uscita: report scritto delle divergenze osservate (aspettarsi
   sorprese su MySQL 5.x→MariaDB/MySQL8, GNU tools CentOS 7, jailshell).
-- **0.3 Censimento di massa source-only** (riuso 100% dell'esistente):
-  `--account-inventory` su tutti gli account dei server sorgente
-  (.193=55, .205=67, .41=49). Output: matrice "quanti account usano
-  forwarder / filtri / boxtrapper / git / passenger / webdisk / mailing
-  list / team users". **Le priorità delle Fasi 1-2 si decidono con questi
-  dati, non a intuito.** Richiede di risolvere l'accesso di massa (vedi 4D):
-  con root sui source si possono iniettare chiavi SSH per-account.
+- **0.3 Censimento di massa source-only — SALTATO (decisione utente,
+  2026-07-03).** Motivazione: le priorità del taglio minimo sono già
+  dimostrate da evidenza REALE, non servono statistiche di flotta — la
+  checklist vera di giorginisposi (Fase 0.2) ha flaggato come bloccanti
+  forwarder e catch-all (= writer 2B), lo smoke 7A aveva 6 blocker cron
+  (= writer 2A). Mitigazione della perdita: il coverage manifest (1A, #42)
+  rende OGNI area non collezionata una riga visibile nella checklist di
+  ogni account — nulla passa inosservato account-per-account. La questione
+  credenziali di massa si sposta al momento della migrazione di ciascun
+  account (una password alla volta, come in 0.2). Fatti utili raccolti:
+  nessun root sui source dal Mac; Orbit copre 102 account cPanel su ~167
+  (55+68+44); il tool supporta solo `ssh_pass` (una PR `ssh_key` resta
+  utile se si tornerà all'iniezione chiavi via `cpanel_authorize_ssh_key`).
 
 ## FASE 1 — Inventario completo (nessuna assenza silenziosa)
 
