@@ -338,12 +338,30 @@ func (b *checklistBuilder) evalSSLSection(sec *ChecklistSection, findings []Poli
 				continue
 			}
 			for _, d := range strings.Split(e.Domains, ",") {
-				if strings.TrimSpace(d) == dom {
+				if certDomainCovers(strings.TrimSpace(d), dom) {
 					return true
 				}
 			}
 		}
 		return false
+	}
+	// sourceGroupExpired reports whether the source inventory holds at least
+	// one certificate under this diff key and ALL of them are provably
+	// expired at Now. Unknown expiry (ValidUntil <= 0) is never proof of
+	// expiry, and one still-valid generation keeps the whole group live —
+	// both fail-safe: when in doubt the removal keeps gating.
+	sourceGroupExpired := func(key string) bool {
+		found := false
+		for _, e := range b.in.Source.SSL.Items {
+			if e.Domains != key {
+				continue
+			}
+			if e.ValidUntil <= 0 || e.ValidUntil > now {
+				return false
+			}
+			found = true
+		}
+		return found
 	}
 	certByKey := func(key string) (SSLEntry, bool) {
 		for _, e := range b.in.Destination.SSL.Items {
@@ -402,6 +420,23 @@ func (b *checklistBuilder) evalSSLSection(sec *ChecklistSection, findings []Poli
 				}
 				continue
 			}
+			// A group that was ALREADY expired on the source carries nothing
+			// valid to migrate: its absence on the destination is expected,
+			// not a cutover gate (real-smoke finding 2 — old wildcard
+			// generations kept blocking forever).
+			if sourceGroupExpired(key) {
+				downgraded[i] = true
+				if !expectedKeys[key] {
+					expectedKeys[key] = true
+					sec.ExpectedDifferences = append(sec.ExpectedDifferences, ExpectedDifference{
+						Key: key, Reason: "every source certificate for these domains was already expired — nothing valid to migrate",
+					})
+					b.addAction(sec.Section, MActionAcceptExpectedDiff, false, f,
+						"Acknowledge the expired source certificate for "+key,
+						"All source certificates for these domains were already expired before the migration; issue a destination certificate only if the domains must serve HTTPS.")
+				}
+				continue
+			}
 			if !reissueKeys[key] {
 				reissueKeys[key] = true
 				b.addAction(sec.Section, MActionReissueSSL, true, f,
@@ -410,6 +445,23 @@ func (b *checklistBuilder) evalSSLSection(sec *ChecklistSection, findings []Poli
 			}
 		}
 	}
+}
+
+// certDomainCovers reports whether one certificate domain entry covers dom:
+// exact match, or RFC 6125-style wildcard matching — "*.base" covers exactly
+// one extra non-empty label ("shop.base" yes; "base" itself and "a.b.base"
+// no). A wildcard query is only ever covered by the identical literal
+// wildcard entry, never synthesized from per-host coverage.
+func certDomainCovers(certDom, dom string) bool {
+	if certDom == dom {
+		return true
+	}
+	base, isWild := strings.CutPrefix(certDom, "*.")
+	if !isWild || base == "" || strings.Contains(dom, "*") {
+		return false
+	}
+	label, matched := strings.CutSuffix(dom, "."+base)
+	return matched && label != "" && !strings.Contains(label, ".")
 }
 
 func (b *checklistBuilder) evalPHPSection(sec *ChecklistSection, findings []PolicyFinding) {
