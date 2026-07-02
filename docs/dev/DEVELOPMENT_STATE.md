@@ -53,6 +53,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | fix | dispatch: `inventory` missing/unknown subcommand → exit 2 + usage (was: silent fall-through to the migration flow); E2E dispatch tests via TestMain re-exec | #32 |
 | 7E-pre | real-server captures for email routing / default address / filters / redirects (`PR7E_PRE_CAPTURES.md`: list_mxs local+remote pair, list_default_address covers subdomains, filters empty everywhere, Mime::list_redirects = .htaccess harvest with CMS noise) | #33 |
 | 7E-1 | inventory sections email_routing / default_address / email_filters / redirects (4 read-only UAPI calls, filter bodies never in artifacts, deterministic tie-breaks, narrowed-scope warning); diff/policy/checklist unchanged until 7E-2 | #34 |
+| 7E-2 | diff/policy/checklist wiring for the four 7E sections (per-item actions replace the blanket not_inventoried checks, CMS rewrite recognition, RECREATE_EMAIL_FILTERS + CONFIRM_REDIRECT action types) + DKIM CONFIRM_DNS_RECORD on plan replace (7A finding 3) | #35 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -84,9 +85,14 @@ rollup; `--fail-on-not-ready` exits 3 unless READY_*. Honesty invariants
 apply report; evidence is `per_item` when the report's
 `phases_completed` proves both the migrate and the verify phase of the
 flow completed (PR 7C), `run_level` otherwise; a dns-plan proves "expected" only via action `skip`;
+root-only areas (quota/package, server config) surface as explicit
+sections instead of silently reading ok. Since PR 7E the former
 non-inventoried areas (email routing, default address, filters,
-redirects) and root-only areas (quota/package, server config) surface as
-explicit sections instead of silently reading ok.
+redirects) are real inventoried sections: per-item actions replace the
+blanket manual checks, CMS `.htaccess` rewrites are recognized as
+expected differences, and a regenerated DKIM key (plan `replace` on a
+`_domainkey` TXT) raises a dedicated non-blocking CONFIRM_DNS_RECORD
+action (7A smoke finding 3).
 
 Provenance chain (PR 7B): `inventory diff` records
 `source_sha256`/`destination_sha256`, `inventory policy` records
@@ -194,14 +200,6 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
   perimeter). The per-item lines already exist in
   `logs/migration_report.log`; the checklist upgrade does NOT depend on
   this.
-- **PR 7E — inventory expansion wave 1** (captures DONE, see
-  `PR7E_PRE_CAPTURES.md`): collectors for email routing, default
-  address, email filters, redirects + diff/policy/checklist wiring +
-  the DKIM `CONFIRM_DNS_RECORD` action (7A smoke finding 3).
-- **Real-smoke refinements** (`PR7A_REAL_SMOKE.md`, findings 1 and 2
-  already fixed — #18 and the SSL-expired/wildcard follow-up): (3)
-  regenerated-DKIM reviews are silent — deserve a dedicated operator
-  action (fits 7E).
 - **PR 6D — `dns apply`**: the only writer. High risk — full backup +
   rollback protocol from the project CLAUDE.md, sacrificial-zone smoke
   first, and a live session for Orbit approvals. Contract in

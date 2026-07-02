@@ -118,10 +118,10 @@ func TestProvenanceChainEndToEnd(t *testing.T) {
 
 	// Tamper: regenerate the source inventory with different content but
 	// do NOT regenerate diff/policy/plan → the chain must break and the
-	// overall must be capped (fixture is READY_WITH_MANUAL_NOTES when
-	// intact).
-	if c.OverallStatus != accountinventory.OverallReadyWithManualNotes {
-		t.Fatalf("fixture contract: intact overall = %q, want READY_WITH_MANUAL_NOTES", c.OverallStatus)
+	// overall must be capped (fixture is READY_TO_CUTOVER when intact —
+	// PR 7E removed the blanket manual notes).
+	if c.OverallStatus != accountinventory.OverallReadyToCutover {
+		t.Fatalf("fixture contract: intact overall = %q, want READY_TO_CUTOVER", c.OverallStatus)
 	}
 	var inv accountinventory.NormalizedInventory
 	b, err := os.ReadFile(src)

@@ -342,18 +342,25 @@ Honesty rules:
 - A DNS plan (`--dns-plan`) proves a DNS difference is expected **only**
   when the destination already matches the desired translation (plan
   action `skip`). Pending plan work (`add`/`replace`) is still work.
-- Areas the inventory cannot see are reported as their own sections
-  instead of silently reading as ok: `email_routing`, `default_address`,
-  `email_filters`, `redirects` are `not_inventoried` (with explicit
-  manual checks); `quota_package` and `server_level_config` are
+- `email_routing`, `default_address`, `email_filters` and `redirects`
+  are real inventoried sections (PR 7E): actions are generated only on
+  actual differences (a routing-mode change or a lost filter is
+  blocking; a genuine redirect difference is a non-blocking
+  confirmation; CMS-generated `.htaccess` rewrites are recognized as
+  expected — they travel with the web files). Root-only areas
+  (`quota_package`, `server_level_config`) remain
   `not_accessible_without_root`.
 
 Section statuses: `ok`, `expected_difference`, `manual_required`,
 `review_required`, `blocked`, `not_migrated_by_tool`,
-`not_inventoried`, `not_accessible_without_root`, `not_applicable`.
-Expected differences recognized in v0: regenerated SOA, docroot layout,
-A/AAAA already translated per the DNS plan, and a certificate that
-differs but is currently valid for the same domains.
+`not_accessible_without_root`, `not_applicable` (`not_inventoried`
+remains in the schema for artifacts produced by older builds).
+Expected differences recognized: regenerated SOA, docroot layout,
+A/AAAA already translated per the DNS plan, a certificate that
+differs but is currently valid for the same domains, and CMS-generated
+rewrites missing on a destination whose web files are not synced yet.
+A regenerated DKIM key (dns-plan `replace` on a `_domainkey` TXT) now
+raises a dedicated non-blocking `CONFIRM_DNS_RECORD` action.
 
 Manual actions carry a stable ID (`MA-001`…), a type
 (`RECREATE_CRON`, `ADAPT_CRON_PATH`, `CONFIRM_MX_EXTERNAL`,

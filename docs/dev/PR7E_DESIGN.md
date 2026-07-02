@@ -75,8 +75,13 @@ byte-verified empty envelope.
   - filter removed → review "recreate on destination"; changed → review;
     added → info.
   - redirects: entries matching the CMS-noise predicate → info
-    (`POL-REDIRECT-CMS`, they travel with webfiles); genuine redirect
-    removed/changed → review.
+    (`POL-REDIRECT-CMS-REMOVED`, they travel with webfiles); genuine
+    redirect removed/changed → review. The predicate requires
+    rewrite+temporary+no-status **AND a non-URL destination**: every CMS
+    rewrite captured live targets a relative path
+    (`%{ENV:REWRITEBASE}…`) while operator redirects always target an
+    absolute URL, so an operator "temporary" redirect reporting no
+    status code still classifies as genuine (round-1 review HIGH).
 - Checklist: the four names move from `buildNotInventoriedSection` to
   `buildInventoriedSection` (+ `inventorySectionCount`). Section
   evaluators emit targeted actions only on real differences:
@@ -112,3 +117,14 @@ byte-verified empty envelope.
    forces literal module/function names on every new RunUAPI call).
 5. Determinism: every new list sorted (domain, then account/filtername,
    then source).
+
+## Post-review hardening (round 1 findings)
+
+1. `POL-SECTION-MISSING` (review): a diff artifact lacking an expected
+   section key — e.g. produced by a pre-7E binary — can no longer read
+   as ok downstream; the policy emits a review per missing section
+   (closes a pre-existing silence that 7E would have widened).
+2. The CMS-noise predicate requires a non-URL destination (above).
+3. When the dns comparison is skipped but mail routing has data, the
+   checklist warns explicitly that the MX exchangers behind the routing
+   were never verified.
