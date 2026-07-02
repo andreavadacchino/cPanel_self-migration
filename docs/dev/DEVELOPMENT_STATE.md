@@ -47,7 +47,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 7C | apply evidence: phase events (+per-item data), report.json `phases_completed`/`artifacts`, checklist `per_item` | #22 |
 | 7D | operator acceptances: stable action keys, acceptances.json, `--acceptances` (gate clearing, fail-safe) | #23 |
 | UI-1 | `ui` subcommand: local read-only dashboard (checklist + staleness + artifacts), loopback-only | #24 |
-| UI-2a | connections form (host.yaml) + run-from-browser (CLI subprocess pipeline), CSRF/rebinding gates | #25 |
+| UI-2a | connections form (host.yaml) + run-from-browser (CLI subprocess pipeline), CSRF/rebinding gates | #25, #26 |
 
 ## The full pipeline (all read-only / offline)
 
