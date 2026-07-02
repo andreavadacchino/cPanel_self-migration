@@ -34,7 +34,22 @@ func ListEmailFilters(ctx context.Context, c Runner, account string) ([]EmailFil
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(data, func(i, j int) bool { return data[i].FilterName < data[j].FilterName })
+	// Tie-break beyond the name: duplicate filter names are possible in
+	// a hand-edited filter file and the backend order is not proven
+	// stable across invocations.
+	sort.SliceStable(data, func(i, j int) bool {
+		a, b := data[i], data[j]
+		if a.FilterName != b.FilterName {
+			return a.FilterName < b.FilterName
+		}
+		if a.Enabled != b.Enabled {
+			return a.Enabled < b.Enabled
+		}
+		if len(a.Rules) != len(b.Rules) {
+			return len(a.Rules) < len(b.Rules)
+		}
+		return len(a.Actions) < len(b.Actions)
+	})
 	logx.Debug("ListEmailFilters(%q): %d filter(s)", account, len(data))
 	return data, nil
 }

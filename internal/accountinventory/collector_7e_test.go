@@ -81,7 +81,7 @@ func TestCollectEmailFilters(t *testing.T) {
 		{Email: "info@doctorbike.it"},
 		{Email: "doctorbike"}, // Main Account pseudo-entry
 	}
-	sec := collectEmailFilters(context.Background(), runner, mailboxes)
+	sec := collectEmailFilters(context.Background(), runner, mailboxes, false)
 	if !sec.Available || sec.SourceFunction != "Email::list_filters" {
 		t.Fatalf("section meta = %+v", sec.ConfigSection)
 	}
@@ -102,9 +102,35 @@ func TestCollectEmailFilters(t *testing.T) {
 }
 
 func TestCollectEmailFiltersUnavailable(t *testing.T) {
-	sec := collectEmailFilters(context.Background(), &fakeRunner{responses: map[string][]byte{}}, nil)
+	sec := collectEmailFilters(context.Background(), &fakeRunner{responses: map[string][]byte{}}, nil, false)
 	if sec.Available || sec.Method != "unavailable" || len(sec.Warnings) == 0 {
 		t.Fatalf("section = %+v, want unavailable with warning", sec.ConfigSection)
+	}
+}
+
+// The interleaving the review flagged: the mailbox list itself failed
+// but the account-level filter call succeeds. The section must stay
+// available AND record the narrowed scope — never a silent coverage
+// loss.
+func TestCollectEmailFiltersMailboxListUnavailable(t *testing.T) {
+	runner := &fakeRunner{responses: map[string][]byte{
+		"Email list_filters": loadFixture(t, "email_list_filters.json"),
+	}}
+	sec := collectEmailFilters(context.Background(), runner, nil, true)
+	if !sec.Available {
+		t.Fatalf("section = %+v, want available (account-level succeeded)", sec.ConfigSection)
+	}
+	if len(sec.Items) != 2 {
+		t.Errorf("got %d items, want 2 account-level ones", len(sec.Items))
+	}
+	found := false
+	for _, w := range sec.Warnings {
+		if contains(w, "account-level") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing narrowed-scope warning, got: %v", sec.Warnings)
 	}
 }
 

@@ -84,8 +84,10 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 		}
 	}
 
+	mailboxesUnavailable := false
 	accounts, err := cpanel.ListEmailAccounts(ctx, r)
 	if err != nil {
+		mailboxesUnavailable = true
 		inv.Warnings = append(inv.Warnings, fmt.Sprintf("Email accounts unavailable: %v", err))
 	} else {
 		for _, a := range accounts {
@@ -153,7 +155,7 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 	inv.Cron = collectCron(ctx, r)
 	inv.EmailRouting = collectEmailRouting(ctx, r)
 	inv.DefaultAddresses = collectDefaultAddresses(ctx, r)
-	inv.EmailFilters = collectEmailFilters(ctx, r, inv.Mailboxes)
+	inv.EmailFilters = collectEmailFilters(ctx, r, inv.Mailboxes, mailboxesUnavailable)
 	inv.Redirects = collectRedirects(ctx, r)
 
 	return inv, nil
@@ -446,8 +448,11 @@ func collectDefaultAddresses(ctx context.Context, r cpanel.Runner) DefaultAddres
 // per-mailbox set per real mailbox (the Main Account pseudo-entry has
 // no "@" and is skipped). A failing per-mailbox call degrades to a
 // warning; only the account-level failure marks the whole section
-// unavailable.
-func collectEmailFilters(ctx context.Context, r cpanel.Runner, mailboxes []MailboxEntry) EmailFilterSection {
+// unavailable. mailboxesUnavailable distinguishes "the mailbox list
+// itself failed" from "the account has no mailboxes": in the former
+// case the section stays available but records that only the
+// account-level scope was collected — never a silent coverage loss.
+func collectEmailFilters(ctx context.Context, r cpanel.Runner, mailboxes []MailboxEntry, mailboxesUnavailable bool) EmailFilterSection {
 	sec := EmailFilterSection{
 		ConfigSection: ConfigSection{Method: "uapi", SourceFunction: "Email::list_filters", Warnings: []string{}},
 		Items:         []EmailFilterEntry{},
@@ -472,6 +477,10 @@ func collectEmailFilters(ctx context.Context, r cpanel.Runner, mailboxes []Mailb
 	}
 	sec.Available = true
 	appendFilters("", accountLevel)
+	if mailboxesUnavailable {
+		sec.Warnings = append(sec.Warnings,
+			"mailbox list unavailable: only the account-level filter scope was collected")
+	}
 	for _, mb := range mailboxes {
 		if !strings.Contains(mb.Email, "@") {
 			continue // Main Account pseudo-mailbox
@@ -483,11 +492,24 @@ func collectEmailFilters(ctx context.Context, r cpanel.Runner, mailboxes []Mailb
 		}
 		appendFilters(mb.Email, filters)
 	}
+	// Full tie-break: the UAPI backend's array order is not proven
+	// stable across invocations, so identical Account+FilterName pairs
+	// must still order deterministically.
 	sort.SliceStable(sec.Items, func(i, j int) bool {
-		if sec.Items[i].Account != sec.Items[j].Account {
-			return sec.Items[i].Account < sec.Items[j].Account
+		a, b := sec.Items[i], sec.Items[j]
+		if a.Account != b.Account {
+			return a.Account < b.Account
 		}
-		return sec.Items[i].FilterName < sec.Items[j].FilterName
+		if a.FilterName != b.FilterName {
+			return a.FilterName < b.FilterName
+		}
+		if a.Enabled != b.Enabled {
+			return !a.Enabled && b.Enabled
+		}
+		if a.RuleCount != b.RuleCount {
+			return a.RuleCount < b.RuleCount
+		}
+		return a.ActionCount < b.ActionCount
 	})
 	return sec
 }

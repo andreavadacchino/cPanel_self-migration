@@ -29,11 +29,27 @@ func ListRedirects(ctx context.Context, c Runner) ([]RedirectEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Full tie-break: the backend harvests .htaccess per docroot and its
+	// array order is not proven stable across invocations, so entries
+	// sharing Domain+Source must still order deterministically.
 	sort.SliceStable(data, func(i, j int) bool {
-		if data[i].Domain != data[j].Domain {
-			return data[i].Domain < data[j].Domain
+		a, b := data[i], data[j]
+		if a.Domain != b.Domain {
+			return a.Domain < b.Domain
 		}
-		return data[i].Source < data[j].Source
+		if a.Source != b.Source {
+			return a.Source < b.Source
+		}
+		if a.Destination != b.Destination {
+			return a.Destination < b.Destination
+		}
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Type != b.Type {
+			return a.Type < b.Type
+		}
+		return a.StatusCode < b.StatusCode
 	})
 	logx.Debug("ListRedirects: %d redirect(s)", len(data))
 	return data, nil
