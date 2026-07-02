@@ -29,8 +29,11 @@ import (
 
 func main() {
 	// Subcommand dispatch happens before the global flag parsing: the
-	// `inventory …` commands are fully offline and share none of the
-	// migration flags.
+	// `inventory …` commands and the local `ui` dashboard are fully
+	// offline and share none of the migration flags.
+	if len(os.Args) >= 2 && os.Args[1] == "ui" {
+		os.Exit(runUICmd(os.Args[2:]))
+	}
 	if len(os.Args) >= 3 && os.Args[1] == "inventory" {
 		switch os.Args[2] {
 		case "diff":
@@ -647,5 +650,8 @@ Databases are dumped read-only (mysqldump --single-transaction), recreated on
 the destination with the destination account prefix, and each site's
 wp-config.php is rewritten to point at the new database. Logs are written under
 logs/.
+
+Offline subcommands (each has its own --help): inventory diff | policy |
+dns-plan | checklist, and ui (local read-only dashboard over the artifacts).
 `, os.Args[0])
 }

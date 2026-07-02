@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cpanel-self-migration — dashboard</title>
+<style>
+  :root { color-scheme: light; }
+  body { font: 15px/1.5 -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #1a2233; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #e3e8f0; vertical-align: top; }
+  th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: #5b6575; }
+  .banner { padding: .8rem 1rem; border-radius: .5rem; margin: 1rem 0; }
+  .banner.stale { background: #fde8e8; border: 2px solid #c81e1e; color: #771d1d; font-size: 1.05rem; }
+  .banner.warn { background: #fdf6b2; border: 1px solid #c27803; color: #633112; }
+  .verdict { font-weight: 700; padding: .15rem .5rem; border-radius: .3rem; background: #e3e8f0; }
+  .verdict.ok { background: #def7ec; color: #03543f; }
+  .verdict.bad { background: #fde8e8; color: #9b1c1c; }
+  .verdict.warn { background: #fdf6b2; color: #633112; }
+  .muted { color: #7a8598; }
+  .yes { color: #9b1c1c; font-weight: 600; }
+  .accepted { color: #03543f; }
+  .warning { color: #633112; margin: .2rem 0; }
+  .absent { color: #a0a8b8; }
+</style>
+</head>
+<body>
+<h1>cpanel-self-migration — migration dashboard</h1>
+<p class="muted">Artifact directory: <code>{{.Dir}}</code> — read-only viewer; refresh the page to re-read the artifacts.</p>
+
+{{if .Stale}}
+<div class="banner stale">
+  <strong>STALE — do not trust this page.</strong>
+  The checklist was generated from inputs that no longer match what is on disk:
+  <ul>
+  {{range .Stale}}<li>{{.Name}} — <code>{{.File}}</code>: {{.Reason}}</li>{{end}}
+  </ul>
+  Re-run the pipeline (diff → policy → checklist) and reload.
+</div>
+{{end}}
+
+{{if .ChecklistErr}}<div class="banner warn">{{.ChecklistErr}}</div>{{end}}
+
+{{if .Checklist}}
+  {{with .Checklist}}
+  <h2>Verdict:
+    {{if or (eq .OverallStatus "READY_TO_CUTOVER") (eq .OverallStatus "READY_WITH_MANUAL_NOTES")}}<span class="verdict ok">{{.OverallStatus}}</span>
+    {{else if eq .OverallStatus "BLOCKED"}}<span class="verdict bad">{{.OverallStatus}}</span>
+    {{else}}<span class="verdict warn">{{.OverallStatus}}</span>{{end}}
+  </h2>
+  <p>Account <strong>{{.Account}}</strong> — generated {{.GeneratedAt}} —
+    chain verified: {{if .ChainVerified}}yes{{else}}<strong>no</strong>{{end}} —
+    {{.Summary.ManualActions}} manual action(s), {{.Summary.Accepted}} accepted, {{.Summary.Blocked}} blocked section(s)</p>
+
+  {{range .Warnings}}<p class="warning">&#9888; {{.}}</p>{{end}}
+
+  <h2>Sections</h2>
+  <table>
+    <tr><th>Section</th><th>Status</th><th>Migrated by tool</th><th>Evidence</th><th>Blockers</th><th>Actions</th><th>Accepted</th></tr>
+    {{range .Sections}}
+    <tr>
+      <td><code>{{.Section}}</code></td>
+      <td>{{.Status}}</td>
+      <td>{{if .MigratedByTool}}yes{{else}}<span class="muted">no</span>{{end}}</td>
+      <td>{{.MigrationEvidence}}</td>
+      <td>{{len .Blockers}}</td>
+      <td>{{len .ManualActionRefs}}</td>
+      <td>{{len .AcceptedByOperator}}</td>
+    </tr>
+    {{end}}
+  </table>
+
+  {{if .ManualActions}}
+  <h2>Manual actions</h2>
+  <p class="muted">The <strong>Key</strong> column is the stable handle acceptances.json entries bind to.</p>
+  <table>
+    <tr><th>ID</th><th>Key</th><th>Blocking</th><th>Section</th><th>Type</th><th>Action</th></tr>
+    {{range .ManualActions}}
+    <tr>
+      <td class="mono">{{.ID}}</td>
+      <td class="mono">{{.Key}}</td>
+      <td>{{if .Accepted}}<span class="accepted">accepted by {{.AcceptedBy}} ({{.AcceptedAt}})</span>{{else if .BlockingCutover}}<span class="yes">yes</span>{{else}}no{{end}}</td>
+      <td><code>{{.Section}}</code></td>
+      <td class="mono">{{.Type}}</td>
+      <td>{{.Title}} — {{.OperatorAction}}{{if .AcceptedReason}}<br><span class="muted">acceptance note: {{.AcceptedReason}}</span>{{end}}</td>
+    </tr>
+    {{end}}
+  </table>
+  {{end}}
+  {{end}}
+{{else if not .ChecklistErr}}
+  <div class="banner warn">
+    No <code>migration_checklist.json</code> found in this directory.
+    Generate it first:
+    <pre>cpanel-self-migration inventory checklist --source … --destination … --diff … --policy …</pre>
+  </div>
+{{end}}
+
+<h2>Artifacts</h2>
+<table>
+  <tr><th>File</th><th>State</th></tr>
+  {{range .Artifacts}}
+  <tr>
+    <td><code>{{.Name}}</code></td>
+    <td>{{if .Present}}present — {{.ModTime}}, {{.Size}} bytes{{else}}<span class="absent">absent</span>{{end}}</td>
+  </tr>
+  {{end}}
+</table>
+</body>
+</html>

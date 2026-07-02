@@ -46,6 +46,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 7A-ssl-fix | checklist SSL: expired source cert groups → expected, RFC 6125 wildcard coverage | #21 |
 | 7C | apply evidence: phase events (+per-item data), report.json `phases_completed`/`artifacts`, checklist `per_item` | #22 |
 | 7D | operator acceptances: stable action keys, acceptances.json, `--acceptances` (gate clearing, fail-safe) | #23 |
+| UI-1 | `ui` subcommand: local read-only dashboard (checklist + staleness + artifacts), loopback-only | #24 |
 
 ## The full pipeline (all read-only / offline)
 

@@ -339,3 +339,31 @@ failure, `2` flag usage error, `3` `--fail-on-not-ready` was set and the
 overall status is neither `READY_TO_CUTOVER` nor
 `READY_WITH_MANUAL_NOTES`. The reports are always fully written before
 the gating exit.
+
+## Subcommand: `ui`
+
+A LOCAL, read-only web dashboard over the pipeline artifacts: the operator
+opens a browser instead of reading raw JSON. It renders the migration
+checklist (verdict, sections, manual actions with their stable acceptance
+keys, warnings) plus an artifact presence table, and re-hashes every input
+the checklist records — a mismatch renders a dominant **STALE** banner.
+
+```bash
+cpanel-self-migration ui [--dir ./run-artifacts] [--listen 127.0.0.1:8422]
+# then open http://127.0.0.1:8422/
+```
+
+Safety, by construction:
+
+- binds to **loopback only** (`127.0.0.1`, `::1` or `localhost`; anything
+  else is rejected);
+- read-only: it never opens SSH connections and never writes anything;
+- it serves rendered pages only — no raw-file serving, no other routes;
+- no readiness logic is re-implemented in the UI: it displays decisions
+  the offline pipeline already computed. Refresh the page to re-read the
+  artifacts from disk.
+
+This is phase 1 of the embedded UI (artifact browser). The acceptance
+workstation (writing `acceptances.json` from the browser through the same
+validated library code) and the live `events.jsonl` run monitor are the
+next phases.
