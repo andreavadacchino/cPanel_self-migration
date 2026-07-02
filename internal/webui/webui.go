@@ -1,5 +1,6 @@
 // Package webui serves the LOCAL web workstation for the migration
-// pipeline (UI phases 1+2a).
+// pipeline (UI phases 1-3: dashboard, connections+run, accept,
+// apply/run monitor).
 //
 // Trust boundary, by construction:
 //   - the UI process never opens SSH itself and never mutates servers: the
@@ -37,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/accountinventory"
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
@@ -384,6 +386,8 @@ type page struct {
 	Cfg          cfgView
 	Job          jobStatus
 	JobRunning   bool
+	Monitor      *runMonitor
+	MonitorLive  bool
 	Checklist    *accountinventory.MigrationChecklist
 	ChecklistErr string
 	Stale        []staleEntry
@@ -405,6 +409,8 @@ func (s *server) buildPage() page {
 	p := page{Dir: s.dir, CSRF: s.csrf}
 	p.Job = s.job.snapshot()
 	p.JobRunning = p.Job.State == "running"
+	p.Monitor = loadRunMonitor(s.dir, time.Now())
+	p.MonitorLive = p.Monitor != nil && p.Monitor.Live
 	if cfg, err := config.Load(s.hostYAMLPath()); err == nil {
 		p.Cfg = cfgView{
 			Present: true,

@@ -1,7 +1,7 @@
 # Development State — cPanel Self-Migration (handoff)
 
 Snapshot for starting a fresh development session. Last updated after
-**PR 6C** (`dns verify` — read-only per-op plan verification).
+**UI-3** (apply/run monitor from events.jsonl, monitor-only).
 
 **PR numbering note:** the 6x series is the DNS track (6C = `dns verify`,
 merged; 6D = `dns apply`, not started — the only writer); the 7x series
@@ -49,6 +49,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | UI-2a | connections form (host.yaml) + run-from-browser (CLI subprocess pipeline), CSRF/rebinding gates | #25, #26 |
 | UI-2b | accept manual actions from the browser (acceptances.json upsert + checklist regen) | #27 |
 | 6C | `dns verify`: read-only per-op verification of destination zones against a dns plan (`--fail-on-drift`, stale-plan sha256 gate, `sshx.DialDest`, structural literal-names safety test) | #29 |
+| UI-3 | apply/run monitor: dashboard tails events.jsonl (monitor-only, zero-JS, stall detection, bounded parse/render) | #30 |
 
 ## The full pipeline (all read-only / offline)
 

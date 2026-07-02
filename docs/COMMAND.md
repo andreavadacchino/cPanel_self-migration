@@ -408,6 +408,14 @@ From the page you can:
   and regenerates the checklist immediately, so the verdict updates
   without a full re-run. Non-acceptable actions (lost active cron, MX to
   confirm) are refused — they must be resolved.
+- **monitor a migration run** (UI phase 3, monitor-only): when the
+  terminal run was started with `--json-events`, the dashboard tails
+  `events.jsonl` and shows the LAST run — phase by phase, with the
+  per-item apply evidence (failed/unverified mailboxes, migrated
+  databases, divergence counts) — auto-refreshing while the run is
+  live. A run with no terminal event and no events for over 10 minutes
+  is shown as **stalled** and stops refreshing. The UI never launches
+  `--apply`: it only reads the file.
 
 ```bash
 cpanel-self-migration ui [--dir ./run-artifacts] [--listen 127.0.0.1:8422]
@@ -426,6 +434,5 @@ Safety, by construction:
 - no readiness logic is re-implemented in the UI: it displays decisions
   the offline pipeline already computed.
 
-Next phases: accepting actions from the browser (writing
-`acceptances.json` through the same validated library code) and the live
-`events.jsonl` run monitor.
+Possible next refinements: revoking an acceptance from the browser,
+operator-name persistence, artifact downloads.
