@@ -43,6 +43,14 @@ type WebPlanItem struct {
 
 	Notes []string // human warnings (no dest match, empty/absent docroot, ...)
 	Skip  bool     // true => do not transfer this domain
+
+	// AllowDestPublicHTMLRoot marks the 1:1 account-migration layout (source
+	// MAIN domain -> destination account rebuilt with the SAME main domain),
+	// where the destination docroot legitimately IS ~/public_html. It is the
+	// per-item opt-in that lets the destination containment guard accept the
+	// public_html root as a target (ALLOW_PUBLIC_HTML_ROOT=1); every other
+	// guard check still applies. Set by BuildPlan, never by hand.
+	AllowDestPublicHTMLRoot bool
 }
 
 // BuildPlan joins the source and destination docroots by domain name. It
@@ -96,6 +104,17 @@ func BuildPlan(src, dest []DocrootEntry) []WebPlanItem {
 			logx.Debug("webfiles plan: %s has no dest docroot match — will skip", s.Domain)
 		} else {
 			item.DestDocroot = d.DocumentRoot
+			// Same-FQDN main→main (the join above already matched by canonical
+			// name): the destination main docroot is the intended target of this
+			// migration, so the containment guard may accept ~/public_html itself.
+			//
+			// KEEP IN LOCKSTEP with sameNameMainToMain in
+			// internal/migrate/domain_type_issues.go: that predicate is the actual
+			// authorization checkpoint (applyWebFiles refuses BlockWeb items before
+			// they ever reach CopyDocroot); this flag only relaxes the filesystem
+			// guard for items that already cleared it. Loosening either predicate
+			// without the other silently changes what the pair authorizes.
+			item.AllowDestPublicHTMLRoot = s.Type == "main_domain" && d.Type == "main_domain"
 		}
 		out = append(out, item)
 	}

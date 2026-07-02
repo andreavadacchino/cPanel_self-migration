@@ -366,6 +366,15 @@ guard_dest_docroot() {
   d_real="$(guard_under_public_html_or_root "$raw")" || return $?
   ph_real="$(canon_existing_path "$HOME/public_html")" || { echo "GUARD: cannot resolve public_html root ($HOME/public_html)" >&2; return 10; }
   if [ "$d_real" = "$ph_real" ]; then
+    # ALLOW_PUBLIC_HTML_ROOT=1 is the explicit per-docroot opt-in for the 1:1
+    # account migration layout (source main domain -> destination account with
+    # the SAME main domain), where the destination docroot legitimately IS
+    # ~/public_html. It relaxes ONLY this exact-equality refusal; every other
+    # containment check above still applies.
+    if [ "${ALLOW_PUBLIC_HTML_ROOT:-0}" = "1" ]; then
+      printf '%s\n' "$d_real"
+      return 0
+    fi
     echo "GUARD: refuse public_html root ($raw -> $d_real)" >&2
     return 11
   fi
@@ -449,6 +458,16 @@ func backupDestScript() string {
 	return fmt.Sprintf(`set -u
 %s
 raw_d="$(guard_dest_docroot "$DEST_DOCROOT")" || exit $?
+# The backup path renames the docroot aside and recreates it. That can NEVER be
+# done to ~/public_html itself, even under ALLOW_PUBLIC_HTML_ROOT=1: once the
+# root is renamed, the guard's $HOME/public_html anchor no longer resolves and
+# the fresh docroot could not be recreated, leaving the account with no web
+# root. Refuse BEFORE any mutation (fail closed).
+ph_guard="$(canon_existing_path "$HOME/public_html")" || { echo "GUARD: cannot resolve public_html root ($HOME/public_html)" >&2; exit 10; }
+if [ "$raw_d" = "$ph_guard" ]; then
+  echo "GUARD: refuse to back up the public_html root itself ($raw_d)" >&2
+  exit 11
+fi
 if [ ! -e "$raw_d" ]; then
   ensure_guarded_dest_docroot_dir "$raw_d" || exit $?
   echo "NOBAK"

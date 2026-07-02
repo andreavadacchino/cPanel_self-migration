@@ -38,7 +38,7 @@ func TestCanonicalDestDocrootGuard(t *testing.T) {
 	r := localRunner{home: home}
 	t.Run("allows missing leaf under public_html", func(t *testing.T) {
 		raw := filepath.Join(ph, "newsite.example")
-		got, err := CanonicalDestDocroot(context.Background(), r, raw)
+		got, err := CanonicalDestDocroot(context.Background(), r, raw, false)
 		if err != nil {
 			t.Fatalf("CanonicalDestDocroot: %v", err)
 		}
@@ -59,7 +59,7 @@ func TestCanonicalDestDocrootGuard(t *testing.T) {
 	}
 	for name, raw := range rejects {
 		t.Run(name, func(t *testing.T) {
-			if got, err := CanonicalDestDocroot(context.Background(), r, raw); err == nil {
+			if got, err := CanonicalDestDocroot(context.Background(), r, raw, false); err == nil {
 				t.Fatalf("CanonicalDestDocroot(%q) = %q, want error", raw, got)
 			}
 		})
