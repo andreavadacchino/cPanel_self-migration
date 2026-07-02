@@ -149,7 +149,9 @@ func TestDNSAPICallsUseLiteralNames(t *testing.T) {
 				return true
 			}
 			name := calleeBaseName(call.Fun)
-			if name != "RunUAPI" && name != "RunAPI2" {
+			// RunUAPIRaw (PR 2B-1) is the same executor returning also the
+			// raw bytes — same literal-name contract.
+			if name != "RunUAPI" && name != "RunAPI2" && name != "RunUAPIRaw" {
 				return true
 			}
 			if len(call.Args) < 4 {

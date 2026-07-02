@@ -47,11 +47,13 @@ func main() {
 				os.Exit(runInventoryPolicyCmd(os.Args[3:]))
 			case "dns-plan":
 				os.Exit(runInventoryDNSPlanCmd(os.Args[3:]))
+			case "email-plan":
+				os.Exit(runInventoryEmailPlanCmd(os.Args[3:]))
 			case "checklist":
 				os.Exit(runInventoryChecklistCmd(os.Args[3:]))
 			}
 		}
-		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory <diff|policy|dns-plan|checklist> … (each has its own --help)")
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory <diff|policy|dns-plan|email-plan|checklist> … (each has its own --help)")
 		os.Exit(2)
 	}
 	// The `dns` namespace never falls through to the migration flow: before
@@ -63,6 +65,22 @@ func main() {
 			os.Exit(runDNSVerifyCmd(os.Args[3:]))
 		}
 		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration dns verify --plan dns_import_plan.json …")
+		os.Exit(2)
+	}
+	// The `email` namespace (PR 2B-1) mirrors `dns`: apply is the email
+	// config writer (destination only), verify the read-only
+	// re-certification; an unknown subcommand is an error, never a
+	// fall-through to the migration flow.
+	if len(os.Args) >= 2 && os.Args[1] == "email" {
+		if len(os.Args) >= 3 {
+			switch os.Args[2] {
+			case "apply":
+				os.Exit(runEmailApplyCmd(os.Args[3:]))
+			case "verify":
+				os.Exit(runEmailVerifyCmd(os.Args[3:]))
+			}
+		}
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration email <apply|verify> … (each has its own --help)")
 		os.Exit(2)
 	}
 
@@ -671,6 +689,8 @@ wp-config.php is rewritten to point at the new database. Logs are written under
 logs/.
 
 Offline subcommands (each has its own --help): inventory diff | policy |
-dns-plan | checklist, and ui (local read-only dashboard over the artifacts).
+dns-plan | email-plan | checklist, and ui (local read-only dashboard over the
+artifacts). Writer subcommands: email apply (destination-only email-config
+writer, dry-run by default) and email verify (read-only re-certification).
 `, os.Args[0])
 }
