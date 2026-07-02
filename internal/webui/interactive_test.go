@@ -368,3 +368,73 @@ func TestRunRequiresConfig(t *testing.T) {
 		t.Error("no step may run without a configuration")
 	}
 }
+
+// TestConfigConcurrentSavesNoRace (reviewer HIGH): many valid concurrent
+// POST /config must all succeed and land a config config.Load accepts —
+// no shared-temp-file race dropping saves or crossing content.
+func TestConfigConcurrentSavesNoRace(t *testing.T) {
+	dir := t.TempDir()
+	h := newTestHandler(t, dir, nil)
+	csrf := fetchCSRF(t, h)
+
+	const n = 20
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			form := validConfigForm(csrf)
+			form.Set("src_user", fmt.Sprintf("user%02d", i))
+			codes[i] = doReq(h, http.MethodPost, "/config", form).Code
+		}(i)
+	}
+	wg.Wait()
+
+	for i, c := range codes {
+		if c != http.StatusSeeOther {
+			t.Errorf("save %d = %d, want 303 (no save may lose the shared-temp race)", i, c)
+		}
+	}
+	cfg, err := config.Load(filepath.Join(dir, "host.yaml"))
+	if err != nil {
+		t.Fatalf("final host.yaml is not loadable: %v", err)
+	}
+	if !strings.HasPrefix(cfg.Src.SSHUser, "user") {
+		t.Errorf("final src user = %q, want one of the concurrent submissions", cfg.Src.SSHUser)
+	}
+}
+
+// TestSecurityHardeningHeaders (reviewer MEDIUM): every response denies
+// framing (clickjacking), forbids sniffing and caching.
+func TestSecurityHardeningHeaders(t *testing.T) {
+	h := newTestHandler(t, t.TempDir(), nil)
+	rr := doReq(h, http.MethodGet, "/", nil)
+	for k, want := range map[string]string{
+		"X-Frame-Options":         "DENY",
+		"Content-Security-Policy": "frame-ancestors 'none'",
+		"X-Content-Type-Options":  "nosniff",
+		"Cache-Control":           "no-store",
+	} {
+		if got := rr.Header().Get(k); got != want {
+			t.Errorf("%s = %q, want %q", k, got, want)
+		}
+	}
+}
+
+// TestSecurityOriginNullRejected (reviewer LOW): a sandboxed-iframe form
+// post yields Origin: null and must be rejected, not fall back to CSRF.
+func TestSecurityOriginNullRejected(t *testing.T) {
+	h := newTestHandler(t, t.TempDir(), nil)
+	csrf := fetchCSRF(t, h)
+	form := validConfigForm(csrf)
+	req := httptest.NewRequest(http.MethodPost, "/config", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "null")
+	req.Host = testHost
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("Origin: null post = %d, want 403", rr.Code)
+	}
+}

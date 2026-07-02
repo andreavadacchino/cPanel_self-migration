@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/accountinventory"
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
@@ -93,10 +94,11 @@ type Options struct {
 }
 
 type server struct {
-	dir  string
-	tpl  *template.Template
-	csrf string
-	job  *jobManager
+	dir   string
+	tpl   *template.Template
+	csrf  string
+	job   *jobManager
+	cfgMu sync.Mutex // serializes config writes (shared host.yaml target)
 }
 
 // New returns the workstation handler for the given options.
@@ -138,6 +140,13 @@ func NewHandler(dir string) (http.Handler, error) {
 // route applies the request-level security gates, then dispatches the
 // fixed routes.
 func (s *server) route(w http.ResponseWriter, r *http.Request) {
+	// Framing + sniffing + caching hardening on EVERY response: the page
+	// carries the live CSRF token and the stored endpoints, and a framed
+	// same-origin request would otherwise pass every gate (clickjacking).
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	if !s.requestIsLocal(r) {
 		http.Error(w, "forbidden: this ui only answers local requests", http.StatusForbidden)
 		return
@@ -170,7 +179,7 @@ func (s *server) requestIsLocal(r *http.Request) bool {
 	if !isLocalHostname(host) {
 		return false
 	}
-	if origin := r.Header.Get("Origin"); origin != "" && origin != "null" {
+	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
 		if err != nil {
 			return false
@@ -193,6 +202,7 @@ func (s *server) post(w http.ResponseWriter, r *http.Request, fn func(http.Respo
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16) // 64 KiB — a config/run form is tiny
 	tok := r.FormValue("csrf")
 	if subtle.ConstantTimeCompare([]byte(tok), []byte(s.csrf)) != 1 {
 		http.Error(w, "forbidden: missing or invalid csrf token — reload the dashboard and retry", http.StatusForbidden)
@@ -270,21 +280,38 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// writeValidatedConfig writes the candidate to a temp file, lets
+// writeValidatedConfig writes the candidate to a UNIQUE temp file, lets
 // config.Load (the CLI's own validator) accept or reject it, and only then
 // renames it over host.yaml — the UI can never write a config the CLI
-// would refuse.
+// would refuse. cfgMu serializes concurrent saves (double-submit, two
+// tabs) so they cannot race on the shared target; os.CreateTemp gives each
+// save its own 0600 file so an interleaving can never rename or remove
+// another save's candidate.
 func (s *server) writeValidatedConfig(c yamlConfig) error {
 	b, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
-	tmp := s.hostYAMLPath() + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	f, err := os.CreateTemp(s.dir, "host.yaml.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // no-op after a successful rename
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	if _, err := config.Load(tmp); err != nil {
-		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, s.hostYAMLPath())

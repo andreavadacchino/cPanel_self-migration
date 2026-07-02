@@ -43,7 +43,12 @@ that wraps every route:
 - Fields: src/dest × (ip, port, ssh_user, ssh_pass); defaults port 22,
   timeout 15s (not exposed in v1).
 - Empty password on edit keeps the stored one (no need to re-type; the
-  page never echoes passwords back).
+  page never echoes passwords back). **Security invariant**: because a
+  blank password inherits the stored one while ip/user are editable in
+  the same form, the CSRF + Origin + anti-framing gates are load-bearing
+  for credential CONFIDENTIALITY (not just "no unwanted run"): bypassing
+  them could redirect src to an attacker host and replay the stored
+  password to it. Changes to the security middleware need extra scrutiny.
 - Validation is delegated to the AUTHORITY: the handler marshals the
   Config, writes it to a temp file, runs `config.Load` on it, and only
   on success renames it over `<dir>/host.yaml` (0600, atomic). The UI
