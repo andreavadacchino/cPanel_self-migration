@@ -30,8 +30,8 @@ var emailWriteForbidden = []string{
 // 6D will introduce its own the same way). Amending this list is a
 // conscious, reviewed act: that is the point of the test.
 var emailWriteAllowlist = map[string]bool{
-	"internal/cpanel/email_apply.go":                true,
-	"cmd/cpanel-self-migration/email_apply_cmd.go":  true,
+	"internal/cpanel/email_apply.go":               true,
+	"cmd/cpanel-self-migration/email_apply_cmd.go": true,
 }
 
 // TestNoEmailWritePatternsModuleWide extends the email write-verb scan to

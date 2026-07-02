@@ -17,13 +17,13 @@ import (
 
 // Apply op statuses.
 const (
-	EmailOpApplied  = "applied"         // written and verified present after the write
-	EmailOpAlready  = "already_present" // the op's outcome was already on the destination
-	EmailOpRefused  = "refused_precondition"
-	EmailOpFailed   = "failed"
-	EmailOpSkipped  = "skipped" // plan action skip: nothing to do
-	EmailOpManual   = "manual"  // plan action manual: terminal, never applied
-	EmailOpPlanned  = "planned" // dry-run only: would write
+	EmailOpApplied = "applied"         // written and verified present after the write
+	EmailOpAlready = "already_present" // the op's outcome was already on the destination
+	EmailOpRefused = "refused_precondition"
+	EmailOpFailed  = "failed"
+	EmailOpSkipped = "skipped" // plan action skip: nothing to do
+	EmailOpManual  = "manual"  // plan action manual: terminal, never applied
+	EmailOpPlanned = "planned" // dry-run only: would write
 )
 
 // Apply-time decisions for an actionable (create/set) op.
@@ -197,19 +197,19 @@ type EmailApplySummary struct {
 // pairing, because the rollback needs the report to know which ops were
 // ACTUALLY performed (a create can resolve to already_present).
 type EmailApplyReport struct {
-	Mode            string            `json:"mode"` // "email-apply-report"
-	FormatVersion   int               `json:"format_version"`
-	RunMode         string            `json:"run_mode"` // "apply" | "rollback"
-	GeneratedAt     string            `json:"generated_at"`
-	DestinationUser string            `json:"destination_user"`
-	PlanFile        string            `json:"plan_file,omitempty"`
-	PlanSHA256      string            `json:"plan_sha256,omitempty"`
-	BackupFile      string            `json:"backup_file,omitempty"`
-	BackupSHA256    string            `json:"backup_sha256,omitempty"`
+	Mode            string `json:"mode"` // "email-apply-report"
+	FormatVersion   int    `json:"format_version"`
+	RunMode         string `json:"run_mode"` // "apply" | "rollback"
+	GeneratedAt     string `json:"generated_at"`
+	DestinationUser string `json:"destination_user"`
+	PlanFile        string `json:"plan_file,omitempty"`
+	PlanSHA256      string `json:"plan_sha256,omitempty"`
+	BackupFile      string `json:"backup_file,omitempty"`
+	BackupSHA256    string `json:"backup_sha256,omitempty"`
 	// BackupNote documents WHY no backup exists when BackupFile is empty
 	// (e.g. zero writes decided) — an empty path with no note is invalid.
-	BackupNote string          `json:"backup_note,omitempty"`
-	Results    []EmailOpResult `json:"results"`
+	BackupNote string            `json:"backup_note,omitempty"`
+	Results    []EmailOpResult   `json:"results"`
 	Summary    EmailApplySummary `json:"summary"`
 }
 
@@ -320,9 +320,9 @@ func ComputeEmailRollback(report EmailApplyReport, backup EmailBackup) ([]EmailR
 		switch {
 		case r.Section == EmailSectionForwarders && r.Action == EmailActionCreate:
 			out = append(out, EmailRollbackOp{
-				Kind:    EmailRollbackForwarderRemove,
-				Domain:  r.Domain,
-				Address: r.Key,
+				Kind:      EmailRollbackForwarderRemove,
+				Domain:    r.Domain,
+				Address:   r.Key,
 				Forwarder: r.Forward,
 			})
 		case r.Section == EmailSectionDefaultAddress && r.Action == EmailActionSet:

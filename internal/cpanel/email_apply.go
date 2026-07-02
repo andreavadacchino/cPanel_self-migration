@@ -55,12 +55,20 @@ func DeleteForwarder(ctx context.Context, c Runner, address, forwarder string) e
 }
 
 // SetDefaultAddress sets a domain's default (catch-all) address:
-// Email::set_default_address domain= fwdopt= [fwdemail=|failmsgs=]
-// (2B-pre finding 5 verified fwdopt=fwd). The fwdopt is derived from the
-// value's shape: `:fail:`/`:blackhole:` system forms (prefix-matched —
-// the human-readable tail is locale-dependent) map to their own fwdopt,
-// anything else is forwarded verbatim via fwdopt=fwd (a bare username is
-// cPanel's deliver-to-account form).
+// Email::set_default_address domain= fwdopt= [fwdemail=|failmsgs=].
+// The fwdopt is derived from the value's shape: `:fail:`/`:blackhole:`
+// system forms (prefix-matched — the human-readable tail is
+// locale-dependent) map to their own fwdopt, anything else goes verbatim
+// via fwdopt=fwd.
+//
+// Byte-verified on the sacrificial dest: fwdopt=fwd with a real address
+// (2B-pre finding 5) AND with a bare account username — the rollback
+// restore shape — whose stored value round-trips identical to the
+// fresh-account default (PR2B_1_SMOKE.md, go-review finding 1). NOT yet
+// byte-verified: the fwdopt=fail/failmsgs and fwdopt=blackhole shapes
+// (no such source exists in the current bench; the caller's
+// verify-after re-list bounds a wrong write). Verification here means
+// list round-trip, not delivery behavior.
 func SetDefaultAddress(ctx context.Context, c Runner, domain, value string) error {
 	v := strings.TrimSpace(value)
 	args := map[string]string{"domain": domain}

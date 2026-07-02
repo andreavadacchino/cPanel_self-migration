@@ -55,4 +55,11 @@ Artifacts: `pipeline2/` next to the Fase 0.2 captures.
   non-identical-collision case, which was not probed).
 - Not probed (out of 2B-1 scope, probe before their PRs): multi-target
   forward round-trip behavior on ADD (only observed on LIST fixtures),
-  `add_auto_responder`, `store_filter`, API2 `setmxcheck`.
+  `add_auto_responder`, `store_filter`, API2 `setmxcheck`, and the
+  `set_default_address` `fwdopt=fail`/`fwdopt=blackhole` shapes (only
+  `fwdopt=fwd` was exercised here).
+- 2B-1 smoke addendum (2026-07-03, `PR2B_1_SMOKE.md`): the bare-username
+  RESTORE shape (`fwdopt=fwd fwdemail=<account user>` — the rollback path
+  for a fresh-account default) was byte-verified separately after the
+  go-review flagged it: the stored value round-trips identical to the
+  fresh-account default of finding 4.
