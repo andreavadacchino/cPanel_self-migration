@@ -650,5 +650,8 @@ Databases are dumped read-only (mysqldump --single-transaction), recreated on
 the destination with the destination account prefix, and each site's
 wp-config.php is rewritten to point at the new database. Logs are written under
 logs/.
+
+Offline subcommands (each has its own --help): inventory diff | policy |
+dns-plan | checklist, and ui (local read-only dashboard over the artifacts).
 `, os.Args[0])
 }

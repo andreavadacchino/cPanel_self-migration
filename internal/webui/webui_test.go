@@ -170,6 +170,12 @@ func TestValidateLoopback(t *testing.T) {
 		{":8080", false}, // empty host binds every interface
 		{"example.com:80", false},
 		{"nonsense", false},
+		{"LOCALHOST:80", true},         // case variants of the literal are still loopback
+		{"[::1%en0]:80", false},        // IPv6 zone identifiers are not parseable IPs
+		{"2130706433:80", false},       // decimal-obfuscated 127.0.0.1
+		{"0177.0.0.1:80", false},       // octal-looking IPv4
+		{"127.1:80", false},            // short-form IPv4
+		{"[0:0:0:0:0:0:0:1]:80", true}, // expanded ::1 is genuinely loopback
 	}
 	for _, tc := range cases {
 		err := ValidateLoopback(tc.addr)
@@ -197,5 +203,65 @@ func TestHandlerListsPresentArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(body, "dns_import_plan.json") {
 		t.Error("artifact list must show known artifacts even when absent (present/absent state)")
+	}
+}
+
+// TestHandlerMutatingMethodsRejected: the dashboard is read-only — anything
+// but GET/HEAD is a 405 with the Allow header.
+func TestHandlerMutatingMethodsRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixtureChecklist(t, dir, false)
+	h, err := NewHandler(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(method, "/", nil))
+		if rr.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s / = %d, want 405", method, rr.Code)
+		}
+		if allow := rr.Header().Get("Allow"); !strings.Contains(allow, "GET") {
+			t.Errorf("%s Allow header = %q, want GET, HEAD", method, allow)
+		}
+	}
+}
+
+// TestHandlerAbsoluteInputRefNeverLeaksContent (reviewer §1b): a tampered
+// checklist can point an input ref at an arbitrary absolute path; the
+// handler re-hashes it, but the file CONTENT must never reach the page —
+// only the recorded path string and the match/mismatch verdict.
+func TestHandlerAbsoluteInputRefNeverLeaksContent(t *testing.T) {
+	dir := t.TempDir()
+	secretDir := t.TempDir()
+	secretPath := filepath.Join(secretDir, "secret.txt")
+	const marker = "TOP-SECRET-CONTENT-MARKER"
+	if err := os.WriteFile(secretPath, []byte(marker), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := accountinventory.MigrationChecklist{
+		Mode: "migration-checklist", FormatVersion: 1, Account: "srcacct",
+		OverallStatus: accountinventory.OverallBlocked,
+		Inputs: accountinventory.ChecklistInputs{
+			Policy: accountinventory.ChecklistInputRef{File: secretPath, SHA256: strings.Repeat("0", 64), Present: true},
+		},
+	}
+	b, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "migration_checklist.json"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rr, body := getIndex(t, dir)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if strings.Contains(body, marker) {
+		t.Fatal("SECURITY: file content from an absolute input ref reached the rendered page")
+	}
+	if !strings.Contains(body, "STALE") || !strings.Contains(body, "secret.txt") {
+		t.Error("the mismatch must still be reported as a stale entry (path + verdict only)")
 	}
 }

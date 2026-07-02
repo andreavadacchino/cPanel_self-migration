@@ -55,5 +55,7 @@ func newUIServer(dir, listen string) (*http.Server, error) {
 		Addr:              listen,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}, nil
 }

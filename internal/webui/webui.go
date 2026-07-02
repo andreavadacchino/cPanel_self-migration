@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/accountinventory"
 )
@@ -49,7 +50,7 @@ func ValidateLoopback(addr string) error {
 	if err != nil {
 		return fmt.Errorf("webui: invalid listen address %q: %w", addr, err)
 	}
-	if host == "localhost" {
+	if strings.EqualFold(host, "localhost") {
 		return nil
 	}
 	ip := net.ParseIP(host)
@@ -113,18 +114,24 @@ type page struct {
 }
 
 func (h *handler) index(w http.ResponseWriter, r *http.Request) {
-	// The mux routes every path here; anything but the exact dashboard
-	// path is a 404 — this handler never serves files.
+	// Anything but the exact dashboard path is a 404 — this handler never
+	// serves files; anything but a read is a 405 — it never mutates.
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	p := h.buildPage()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tpl.Execute(w, p); err != nil {
-		// Headers are already gone; log-less best effort is fine for a
-		// local, single-operator viewer.
+		// Headers are already gone; surface the failure both in-page and
+		// on stderr so a template regression is debuggable.
 		fmt.Fprintf(w, "\n<!-- template error: %v -->", err)
+		fmt.Fprintf(os.Stderr, "webui: template error: %v\n", err)
 	}
 }
 
@@ -157,6 +164,10 @@ func (h *handler) buildPage() page {
 		p.ChecklistErr = fmt.Sprintf("%s is not a migration checklist (mode %q)", path, c.Mode)
 		return p
 	}
+	if c.FormatVersion != 1 {
+		p.ChecklistErr = fmt.Sprintf("%s uses checklist format_version %d — this build renders version 1 only; regenerate or upgrade", path, c.FormatVersion)
+		return p
+	}
 	p.Checklist = &c
 	p.Stale = h.staleInputs(c.Inputs)
 	return p
@@ -175,7 +186,11 @@ func (h *handler) staleInputs(in accountinventory.ChecklistInputs) []staleEntry 
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(h.dir, filepath.Base(ref.File))
 		}
-		b, err := os.ReadFile(path) // #nosec G304 -- path recorded by our own pipeline, read-only
+		// #nosec G304 -- the path comes from the checklist ON DISK, which is
+		// exactly the artifact this feature distrusts: the read is bounded
+		// to an existence/hash-match oracle — file CONTENT never reaches
+		// the rendered page, only the recorded path string and the verdict.
+		b, err := os.ReadFile(path)
 		if err != nil {
 			out = append(out, staleEntry{Name: name, File: ref.File, Reason: "file missing or unreadable"})
 			return
