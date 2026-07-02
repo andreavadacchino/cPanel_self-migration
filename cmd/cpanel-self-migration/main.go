@@ -34,17 +34,25 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "ui" {
 		os.Exit(runUICmd(os.Args[2:]))
 	}
-	if len(os.Args) >= 3 && os.Args[1] == "inventory" {
-		switch os.Args[2] {
-		case "diff":
-			os.Exit(runInventoryDiffCmd(os.Args[3:]))
-		case "policy":
-			os.Exit(runInventoryPolicyCmd(os.Args[3:]))
-		case "dns-plan":
-			os.Exit(runInventoryDNSPlanCmd(os.Args[3:]))
-		case "checklist":
-			os.Exit(runInventoryChecklistCmd(os.Args[3:]))
+	// Like the `dns` namespace below, `inventory` never falls through to
+	// the migration flow: a missing or unknown subcommand used to be
+	// silently ignored by flag.Parse and, with a resolvable config,
+	// started a full migration dry-run.
+	if len(os.Args) >= 2 && os.Args[1] == "inventory" {
+		if len(os.Args) >= 3 {
+			switch os.Args[2] {
+			case "diff":
+				os.Exit(runInventoryDiffCmd(os.Args[3:]))
+			case "policy":
+				os.Exit(runInventoryPolicyCmd(os.Args[3:]))
+			case "dns-plan":
+				os.Exit(runInventoryDNSPlanCmd(os.Args[3:]))
+			case "checklist":
+				os.Exit(runInventoryChecklistCmd(os.Args[3:]))
+			}
 		}
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory <diff|policy|dns-plan|checklist> … (each has its own --help)")
+		os.Exit(2)
 	}
 	// The `dns` namespace never falls through to the migration flow: before
 	// PR 6C these tokens were silently ignored by flag.Parse and, with a
