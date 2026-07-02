@@ -128,6 +128,17 @@ func EvaluatePolicy(d InventoryDiff) PolicyReport {
 			evalDNS(sec, emit)
 		case "cron":
 			evalCron(sec, emit)
+		case "email_routing":
+			evalSimple(sec, emit, "email_routing", "POL-MAILROUTE",
+				"Mail routing", SeverityReview, "Confirm the destination mail routing (local/remote) matches where this domain's mail is really hosted; a wrong value silently breaks delivery.")
+		case "default_address":
+			evalSimple(sec, emit, "default_address", "POL-DEFAULTADDR",
+				"Default address", SeverityReview, "Recreate the default (catch-all) address on the destination or confirm the difference is intended; a lost catch-all silently drops mail.")
+		case "email_filters":
+			evalSimple(sec, emit, "email_filters", "POL-EMAILFILTER",
+				"Email filter", SeverityReview, "Recreate the filter on the destination or confirm it is obsolete.")
+		case "redirects":
+			evalRedirects(sec, emit)
 		}
 		evalSectionWarnings(name, sec, emit)
 	}
@@ -557,6 +568,60 @@ func evalCron(sec SectionDiff, emit func(PolicyFinding)) {
 		emit(PolicyFinding{
 			ID: "POL-CRON-ADDED", Section: "cron", Severity: SeverityInfo,
 			Title:          "Cron job present only on destination",
+			Detail:         e.Detail,
+			Recommendation: "No action needed unless unexpected.",
+			DestinationRef: e.Key,
+		})
+	}
+}
+
+// cmsRewriteDetailPrefix marks a redirect whose diff detail identifies
+// it as a CMS-generated .htaccess RewriteRule (kind=rewrite,
+// type=temporary, no status code — PR7E_PRE_CAPTURES.md fact 4). Those
+// rules travel with the web files, so their absence on a not-yet-synced
+// destination is expected, not operator work.
+const cmsRewriteDetailPrefix = "rewrite/temporary/- "
+
+func isCMSRewriteDetail(detail string) bool {
+	return strings.HasPrefix(detail, cmsRewriteDetailPrefix)
+}
+
+// evalRedirects: CMS-generated rewrites are informational (they live in
+// .htaccess and migrate with the web files); genuine redirects follow
+// the uniform removed→review / changed→review / added→info policy.
+func evalRedirects(sec SectionDiff, emit func(PolicyFinding)) {
+	for _, e := range sec.Removed {
+		if isCMSRewriteDetail(e.Detail) {
+			emit(PolicyFinding{
+				ID: "POL-REDIRECT-CMS-REMOVED", Section: "redirects", Severity: SeverityInfo,
+				Title:          "CMS rewrite not on destination yet",
+				Detail:         e.Detail,
+				Recommendation: "No action: .htaccess RewriteRules travel with the web files migration.",
+				SourceRef:      e.Key,
+			})
+			continue
+		}
+		emit(PolicyFinding{
+			ID: "POL-REDIRECT-REMOVED", Section: "redirects", Severity: SeverityReview,
+			Title:          "Redirect missing on destination",
+			Detail:         e.Detail,
+			Recommendation: "Recreate the redirect on the destination (or confirm the web files migration carries its .htaccess rule).",
+			SourceRef:      e.Key,
+		})
+	}
+	for _, c := range sec.Changed {
+		emit(PolicyFinding{
+			ID: "POL-REDIRECT-CHANGED", Section: "redirects", Severity: SeverityReview,
+			Title:          fmt.Sprintf("Redirect %s differs", c.Field),
+			Detail:         fmt.Sprintf("%s: %s → %s", c.Field, c.Source, c.Destination),
+			Recommendation: "Confirm the destination redirect is intended.",
+			SourceRef:      c.Key, DestinationRef: c.Key,
+		})
+	}
+	for _, e := range sec.Added {
+		emit(PolicyFinding{
+			ID: "POL-REDIRECT-ADDED", Section: "redirects", Severity: SeverityInfo,
+			Title:          "Redirect present only on destination",
 			Detail:         e.Detail,
 			Recommendation: "No action needed unless unexpected.",
 			DestinationRef: e.Key,

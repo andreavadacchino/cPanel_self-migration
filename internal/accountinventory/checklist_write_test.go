@@ -97,9 +97,6 @@ func TestWriteChecklistMarkdown(t *testing.T) {
 			t.Errorf("markdown missing %q", want)
 		}
 	}
-	if !strings.Contains(md, "not inventoried") {
-		t.Error("markdown must spell out the not-inventoried state for the operator")
-	}
 	if info, err := os.Stat(path); err != nil {
 		t.Fatal(err)
 	} else if perm := info.Mode().Perm(); perm != 0o600 {

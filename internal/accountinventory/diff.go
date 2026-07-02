@@ -84,6 +84,7 @@ type InventoryDiff struct {
 var diffSectionNames = []string{
 	"domains", "mailboxes", "databases", "forwarders", "autoresponders",
 	"ftp", "ssl", "php", "dns", "cron",
+	"email_routing", "default_address", "email_filters", "redirects",
 }
 
 // DiffInventories compares two inventories section by section. It is pure
@@ -108,6 +109,18 @@ func DiffInventories(src, dest NormalizedInventory) InventoryDiff {
 		phpItems(src.PHP.Items), phpItems(dest.PHP.Items))
 	d.Sections["dns"] = diffDNS(src.DNS, dest.DNS)
 	d.Sections["cron"] = diffCron(src.Cron, dest.Cron)
+	d.Sections["email_routing"] = diffConfigKeyed("email_routing",
+		src.EmailRouting.ConfigSection, dest.EmailRouting.ConfigSection,
+		emailRoutingItems(src.EmailRouting.Items), emailRoutingItems(dest.EmailRouting.Items))
+	d.Sections["default_address"] = diffConfigKeyed("default_address",
+		src.DefaultAddresses.ConfigSection, dest.DefaultAddresses.ConfigSection,
+		defaultAddressItems(src.DefaultAddresses.Items), defaultAddressItems(dest.DefaultAddresses.Items))
+	d.Sections["email_filters"] = diffConfigKeyed("email_filters",
+		src.EmailFilters.ConfigSection, dest.EmailFilters.ConfigSection,
+		emailFilterItems(src.EmailFilters.Items), emailFilterItems(dest.EmailFilters.Items))
+	d.Sections["redirects"] = diffConfigKeyed("redirects",
+		src.Redirects.ConfigSection, dest.Redirects.ConfigSection,
+		redirectItems(src.Redirects.Items), redirectItems(dest.Redirects.Items))
 
 	d.Summary.SectionsCompared = len(d.Sections)
 	for _, sec := range d.Sections {
@@ -550,4 +563,84 @@ func diffCron(src, dest CronSection) SectionDiff {
 
 	sortSectionDiff(&sec)
 	return sec
+}
+
+// --- PR 7E adapters --------------------------------------------------------
+
+// emailRoutingItems compares only the operator-set facts (routing mode
+// and always_accept). `detected` is cPanel's runtime detection and the
+// MX rrsets are already diffed by the dns section — comparing them here
+// would double-report; they stay visible in the human detail.
+func emailRoutingItems(in []EmailRoutingEntry) []keyedItem {
+	out := make([]keyedItem, 0, len(in))
+	for _, e := range in {
+		mx := make([]string, 0, len(e.MXRecords))
+		for _, m := range e.MXRecords {
+			mx = append(mx, fmt.Sprintf("%d %s", m.Priority, m.Exchange))
+		}
+		out = append(out, keyedItem{
+			key:    e.Domain,
+			detail: fmt.Sprintf("detected=%s; mx=%s", e.Detected, strings.Join(mx, ", ")),
+			fields: map[string]string{
+				"routing":       e.Routing,
+				"always_accept": strconv.FormatBool(e.AlwaysAccept),
+			},
+		})
+	}
+	return out
+}
+
+func defaultAddressItems(in []DefaultAddressEntry) []keyedItem {
+	out := make([]keyedItem, 0, len(in))
+	for _, e := range in {
+		out = append(out, keyedItem{
+			key:    e.Domain,
+			fields: map[string]string{"default_address": e.DefaultAddress},
+		})
+	}
+	return out
+}
+
+func emailFilterItems(in []EmailFilterEntry) []keyedItem {
+	out := make([]keyedItem, 0, len(in))
+	for _, e := range in {
+		account := e.Account
+		if account == "" {
+			account = "(account-level)"
+		}
+		out = append(out, keyedItem{
+			key: account + "/" + e.FilterName,
+			fields: map[string]string{
+				"enabled":      strconv.FormatBool(e.Enabled),
+				"rule_count":   strconv.Itoa(e.RuleCount),
+				"action_count": strconv.Itoa(e.ActionCount),
+			},
+		})
+	}
+	return out
+}
+
+// redirectItems encodes the classification facts in the detail
+// (`kind/type/status → destination`): the policy layer recognizes
+// CMS-generated .htaccess rewrites by the `rewrite/temporary/-` prefix,
+// the same detail-string channel evalDomains uses for `main`.
+func redirectItems(in []RedirectEntry) []keyedItem {
+	out := make([]keyedItem, 0, len(in))
+	for _, e := range in {
+		status := "-"
+		if e.StatusCode != 0 {
+			status = strconv.FormatInt(e.StatusCode, 10)
+		}
+		out = append(out, keyedItem{
+			key:    e.Domain + " " + e.Source,
+			detail: fmt.Sprintf("%s/%s/%s → %s", e.Kind, e.Type, status, e.Destination),
+			fields: map[string]string{
+				"destination": e.Destination,
+				"kind":        e.Kind,
+				"type":        e.Type,
+				"status_code": status,
+			},
+		})
+	}
+	return out
 }

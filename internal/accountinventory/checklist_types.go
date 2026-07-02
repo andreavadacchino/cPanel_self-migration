@@ -59,7 +59,10 @@ const (
 	MActionVerifyExternalSvc   = "VERIFY_EXTERNAL_SERVICE"
 	MActionConfirmEmailRouting = "CONFIRM_EMAIL_ROUTING"
 	MActionManualCheckRequired = "MANUAL_CHECK_REQUIRED"
-	MActionAcceptExpectedDiff  = "ACCEPT_EXPECTED_DIFFERENCE"
+	// PR 7E: the four former not_inventoried areas became real sections.
+	MActionRecreateEmailFilters = "RECREATE_EMAIL_FILTERS"
+	MActionConfirmRedirect      = "CONFIRM_REDIRECT"
+	MActionAcceptExpectedDiff   = "ACCEPT_EXPECTED_DIFFERENCE"
 	// MActionRegeneratePassword is part of the taxonomy but has no
 	// deterministic trigger in v0 (the inventory carries no password
 	// state); it is reserved for future evidence-driven generation.

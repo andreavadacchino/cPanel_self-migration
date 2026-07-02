@@ -29,8 +29,8 @@ func chainRefs(withPlan bool) ChecklistInputs {
 	return refs
 }
 
-// chainInput builds a no-mail input (no blocking synthetics) with full
-// apply evidence, so the un-capped overall is READY_WITH_MANUAL_NOTES:
+// chainInput builds a no-mail input (no blocking actions) with full
+// apply evidence, so the un-capped overall is READY_TO_CUTOVER:
 // the chain cap is observable.
 func chainInput(t *testing.T, mutate func(in *ChecklistInput)) ChecklistInput {
 	t.Helper()
@@ -73,8 +73,8 @@ func TestChecklistChainVerified(t *testing.T) {
 	if c.Inputs != in.InputRefs {
 		t.Error("checklist inputs must carry the caller's refs verbatim")
 	}
-	if c.OverallStatus != OverallReadyWithManualNotes {
-		t.Errorf("overall = %q, want %q (fixture contract)", c.OverallStatus, OverallReadyWithManualNotes)
+	if c.OverallStatus != OverallReadyToCutover {
+		t.Errorf("overall = %q, want %q (fixture contract)", c.OverallStatus, OverallReadyToCutover)
 	}
 }
 
@@ -138,8 +138,8 @@ func TestChecklistChainNotVerifiableOnOldArtifacts(t *testing.T) {
 		t.Errorf("want a 'not verifiable' chain warning, got %v", c.Warnings)
 	}
 	// Missing hashes are tolerated (old artifacts): no overall cap.
-	if c.OverallStatus != OverallReadyWithManualNotes {
-		t.Errorf("overall = %q, want %q (absence must not cap)", c.OverallStatus, OverallReadyWithManualNotes)
+	if c.OverallStatus != OverallReadyToCutover {
+		t.Errorf("overall = %q, want %q (absence must not cap)", c.OverallStatus, OverallReadyToCutover)
 	}
 }
 
@@ -214,8 +214,8 @@ func TestChecklistChainPartialRefs(t *testing.T) {
 	if !found {
 		t.Errorf("want a 'no reference hash' warning for the missing diff ref, got %v", c.Warnings)
 	}
-	if c.OverallStatus != OverallReadyWithManualNotes {
-		t.Errorf("overall = %q, want %q (a missing ref is absence, not mismatch)", c.OverallStatus, OverallReadyWithManualNotes)
+	if c.OverallStatus != OverallReadyToCutover {
+		t.Errorf("overall = %q, want %q (a missing ref is absence, not mismatch)", c.OverallStatus, OverallReadyToCutover)
 	}
 
 	// Same partial refs, but the still-checkable diff→source link
@@ -253,7 +253,7 @@ func TestChecklistChainEmptyRefsStaysUnverified(t *testing.T) {
 	if len(chainWarnings(c)) != 0 {
 		t.Errorf("programmatic use without refs must not warn, got %v", c.Warnings)
 	}
-	if c.OverallStatus != OverallReadyWithManualNotes {
-		t.Errorf("overall = %q, want %q (no refs must not cap)", c.OverallStatus, OverallReadyWithManualNotes)
+	if c.OverallStatus != OverallReadyToCutover {
+		t.Errorf("overall = %q, want %q (no refs must not cap)", c.OverallStatus, OverallReadyToCutover)
 	}
 }

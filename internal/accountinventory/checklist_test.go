@@ -49,6 +49,19 @@ func chkInventory(side, host, user string) NormalizedInventory {
 		CommandSHA256:   "sha256:aaa", RawLineSHA256: "sha256:bbb", Enabled: true, LineNumber: 1,
 		Warnings: []string{},
 	}}
+	inv.EmailRouting.Available = true
+	inv.EmailRouting.Items = []EmailRoutingEntry{{
+		Domain: "main.example", Routing: "local", Detected: "local", AlwaysAccept: true,
+		MXRecords: []MXRecordEntry{{Priority: 0, Exchange: "main.example"}},
+	}}
+	inv.DefaultAddresses.Available = true
+	inv.DefaultAddresses.Items = []DefaultAddressEntry{{
+		Domain: "main.example", DefaultAddress: `":fail: No Such User Here"`,
+	}}
+	inv.EmailFilters.Available = true
+	inv.EmailFilters.Items = []EmailFilterEntry{}
+	inv.Redirects.Available = true
+	inv.Redirects.Items = []RedirectEntry{}
 	return inv
 }
 
@@ -62,6 +75,10 @@ func chkEmptyInventory(side, host, user string) NormalizedInventory {
 	inv.PHP.Available = true
 	inv.DNS.Available = true
 	inv.Cron.Available = true
+	inv.EmailRouting.Available = true
+	inv.DefaultAddresses.Available = true
+	inv.EmailFilters.Available = true
+	inv.Redirects.Available = true
 	return inv
 }
 
@@ -151,12 +168,13 @@ func TestBuildChecklistOverallBlocked(t *testing.T) {
 	}
 }
 
-func TestBuildChecklistManualActionRequiredFromSyntheticEmailRouting(t *testing.T) {
-	// Identical inventories, full apply evidence: nothing is blocked, but
-	// the account HAS mailboxes and email routing is not inventoried —
-	// the operator must confirm it by hand before cutover.
+func TestBuildChecklistManualActionRequiredFromEmailRoutingChange(t *testing.T) {
+	// PR 7E: email routing is a real section now. A routing-mode change
+	// (local → remote) silently breaks delivery, so it must produce a
+	// blocking per-domain confirmation.
 	src := chkInventory("source", "1.2.3.4", "srcacct")
 	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	dest.EmailRouting.Items[0].Routing = "remote"
 
 	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
 
@@ -164,8 +182,8 @@ func TestBuildChecklistManualActionRequiredFromSyntheticEmailRouting(t *testing.
 		t.Fatalf("overall = %q, want %q", c.OverallStatus, OverallManualActionRequired)
 	}
 	er := chkSection(t, c, "email_routing")
-	if er.Status != SectionNotInventoried {
-		t.Errorf("email_routing status = %q, want %q", er.Status, SectionNotInventoried)
+	if er.Status != SectionManualRequired {
+		t.Errorf("email_routing status = %q, want %q", er.Status, SectionManualRequired)
 	}
 	if acts := chkActionsOf(c, "email_routing", MActionConfirmEmailRouting); len(acts) != 1 || !acts[0].BlockingCutover {
 		t.Errorf("CONFIRM_EMAIL_ROUTING = %+v, want exactly 1 blocking action", acts)
@@ -198,8 +216,8 @@ func TestBuildChecklistNotReadyWithoutMigrationEvidence(t *testing.T) {
 }
 
 func TestBuildChecklistReadyWithManualNotes(t *testing.T) {
-	// Same no-mail account WITH full apply evidence: only the non-blocking
-	// redirects note remains.
+	// Same no-mail account WITH full apply evidence: only a non-blocking
+	// redirect confirmation remains.
 	src := chkInventory("source", "1.2.3.4", "srcacct")
 	src.Mailboxes = []MailboxEntry{}
 	src.Forwarders = []ForwarderEntry{}
@@ -207,14 +225,28 @@ func TestBuildChecklistReadyWithManualNotes(t *testing.T) {
 	dest.Mailboxes = []MailboxEntry{}
 	dest.Forwarders = []ForwarderEntry{}
 
+	// A genuine (non-CMS) redirect whose destination differs: the only
+	// remaining note is the non-blocking CONFIRM_REDIRECT.
+	src.Redirects.Items = []RedirectEntry{{
+		Domain: "main.example", Source: "/old", Destination: "https://a.example/",
+		Kind: "redirect", Type: "permanent", StatusCode: 301,
+	}}
+	dest.Redirects.Items = []RedirectEntry{{
+		Domain: "main.example", Source: "/old", Destination: "https://b.example/",
+		Kind: "redirect", Type: "permanent", StatusCode: 301,
+	}}
+
 	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
 
 	if c.OverallStatus != OverallReadyWithManualNotes {
 		t.Fatalf("overall = %q, want %q", c.OverallStatus, OverallReadyWithManualNotes)
 	}
 	rd := chkSection(t, c, "redirects")
-	if rd.Status != SectionNotInventoried {
-		t.Errorf("redirects status = %q, want %q", rd.Status, SectionNotInventoried)
+	if rd.Status != SectionManualRequired {
+		t.Errorf("redirects status = %q, want %q", rd.Status, SectionManualRequired)
+	}
+	if acts := chkActionsOf(c, "redirects", MActionConfirmRedirect); len(acts) != 1 || acts[0].BlockingCutover {
+		t.Errorf("CONFIRM_REDIRECT = %+v, want exactly 1 non-blocking", acts)
 	}
 	for _, a := range c.ManualActions {
 		if a.BlockingCutover {
@@ -960,17 +992,20 @@ func TestBuildChecklistPHPChangeYieldsCompatCheck(t *testing.T) {
 // Synthetic sections, structure, determinism
 // ---------------------------------------------------------------------------
 
-func TestBuildChecklistSyntheticSectionsAlwaysPresent(t *testing.T) {
+func TestBuildChecklistFormerSyntheticSectionsInventoried(t *testing.T) {
+	// PR 7E: the four former not_inventoried areas are real sections.
+	// With identical data on both sides they resolve like any other
+	// section — NO blanket manual checks survive.
 	src := chkInventory("source", "1.2.3.4", "srcacct")
 	dest := chkInventory("destination", "5.6.7.8", "srcacct")
 
 	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
 
 	want := map[string]string{
-		"email_routing":       SectionNotInventoried,
-		"default_address":     SectionNotInventoried,
-		"email_filters":       SectionNotInventoried,
-		"redirects":           SectionNotInventoried,
+		"email_routing":       SectionOK,
+		"default_address":     SectionOK,
+		"email_filters":       SectionNotApplicable, // zero filters on both sides
+		"redirects":           SectionNotApplicable, // zero redirects on both sides
 		"quota_package":       SectionNotAccessibleWithoutRoot,
 		"server_level_config": SectionNotAccessibleWithoutRoot,
 	}
@@ -979,11 +1014,13 @@ func TestBuildChecklistSyntheticSectionsAlwaysPresent(t *testing.T) {
 			t.Errorf("%s status = %q, want %q", name, s.Status, status)
 		}
 	}
-	if acts := chkActionsOf(c, "email_filters", MActionManualCheckRequired); len(acts) != 1 || !acts[0].BlockingCutover {
-		t.Errorf("email_filters MANUAL_CHECK_REQUIRED = %+v, want exactly 1 blocking", acts)
+	for _, sec := range []string{"email_routing", "default_address", "email_filters", "redirects"} {
+		if acts := chkActionsOf(c, sec, MActionManualCheckRequired); len(acts) != 0 {
+			t.Errorf("%s: blanket MANUAL_CHECK_REQUIRED survived: %+v", sec, acts)
+		}
 	}
-	if acts := chkActionsOf(c, "redirects", MActionManualCheckRequired); len(acts) != 1 || acts[0].BlockingCutover {
-		t.Errorf("redirects MANUAL_CHECK_REQUIRED = %+v, want exactly 1 non-blocking", acts)
+	if c.Summary.NotInventoried != 0 {
+		t.Errorf("summary.not_inventoried = %d, want 0", c.Summary.NotInventoried)
 	}
 }
 
@@ -1111,6 +1148,19 @@ func chkInputWithAcceptances(src, dest NormalizedInventory, rep *MigrationReport
 	return in
 }
 
+// chkDivergeMailConfig makes the destination diverge on the three 7E
+// mail areas, producing exactly three ACCEPTABLE blocking actions
+// (CONFIRM_EMAIL_ROUTING, MANUAL_CHECK_REQUIRED on the default address,
+// RECREATE_EMAIL_FILTERS) — the acceptance tests' baseline since the
+// blanket not_inventoried actions no longer exist.
+func chkDivergeMailConfig(src, dest *NormalizedInventory) {
+	dest.EmailRouting.Items[0].Routing = "remote"
+	dest.DefaultAddresses.Items[0].DefaultAddress = "info@main.example"
+	src.EmailFilters.Items = []EmailFilterEntry{{
+		Account: "", FilterName: "spam-to-junk", Enabled: true, RuleCount: 1, ActionCount: 1,
+	}}
+}
+
 // TestManualActionKeysStableAndUnique pins the acceptance handle: every
 // action carries a content-derived key (AK-<12 hex>) that is IDENTICAL
 // across regenerations from the same inputs and unique per action, while
@@ -1118,12 +1168,13 @@ func chkInputWithAcceptances(src, dest NormalizedInventory, rep *MigrationReport
 func TestManualActionKeysStableAndUnique(t *testing.T) {
 	src := chkInventory("source", "1.2.3.4", "srcacct")
 	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	chkDivergeMailConfig(&src, &dest)
 
 	c1 := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
 	c2 := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
 
 	if len(c1.ManualActions) == 0 {
-		t.Fatal("want at least the not-inventoried synthetic actions")
+		t.Fatal("want the three divergence-driven actions")
 	}
 	keyRe := regexp.MustCompile(`^AK-[0-9a-f]{12}$`)
 	seen := map[string]bool{}
@@ -1142,13 +1193,14 @@ func TestManualActionKeysStableAndUnique(t *testing.T) {
 }
 
 // TestBuildChecklistAcceptanceClearsManualGate: accepting every blocking
-// (and acceptable) synthetic check moves the verdict from
-// MANUAL_ACTION_REQUIRED to READY_WITH_MANUAL_NOTES, populates
-// accepted_by_operator on the owning sections and summary.accepted — while
-// the not_inventoried sections KEEP their honest status.
+// (and acceptable) action moves the verdict from MANUAL_ACTION_REQUIRED to
+// READY_WITH_MANUAL_NOTES, populates accepted_by_operator on the owning
+// sections and summary.accepted — while the underlying policy reviews KEEP
+// gating the section status.
 func TestBuildChecklistAcceptanceClearsManualGate(t *testing.T) {
 	src := chkInventory("source", "1.2.3.4", "srcacct")
 	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	chkDivergeMailConfig(&src, &dest)
 
 	base := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
 	if base.OverallStatus != OverallManualActionRequired {
@@ -1176,8 +1228,8 @@ func TestBuildChecklistAcceptanceClearsManualGate(t *testing.T) {
 		t.Errorf("summary.accepted = %d, want %d", c.Summary.Accepted, len(accs))
 	}
 	er := chkSection(t, c, "email_routing")
-	if er.Status != SectionNotInventoried {
-		t.Errorf("email_routing status = %q, want %q: acceptance clears the gate, not the honesty", er.Status, SectionNotInventoried)
+	if er.Status != SectionReviewRequired {
+		t.Errorf("email_routing status = %q, want %q: acceptance clears the gate, not the underlying review", er.Status, SectionReviewRequired)
 	}
 	if len(er.AcceptedByOperator) != 1 {
 		t.Errorf("email_routing accepted_by_operator = %v, want the accepted action id", er.AcceptedByOperator)
@@ -1250,6 +1302,7 @@ func TestBuildChecklistAcceptanceNonAcceptableIgnored(t *testing.T) {
 func TestBuildChecklistAcceptanceUnknownKeyWarns(t *testing.T) {
 	src := chkInventory("source", "1.2.3.4", "srcacct")
 	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	chkDivergeMailConfig(&src, &dest)
 
 	c := BuildChecklist(chkInputWithAcceptances(src, dest, chkApplyReport(),
 		[]OperatorAcceptance{chkAcceptance("AK-000000000000")}))
@@ -1276,6 +1329,7 @@ func TestBuildChecklistAcceptanceUnknownKeyWarns(t *testing.T) {
 func TestBuildChecklistAcceptanceDuplicateFirstWins(t *testing.T) {
 	src := chkInventory("source", "1.2.3.4", "srcacct")
 	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	chkDivergeMailConfig(&src, &dest)
 
 	base := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
 	var key string
@@ -1360,6 +1414,7 @@ func TestBuildChecklistAcceptanceDuplicateIdenticalActionsWarn(t *testing.T) {
 func TestBuildChecklistAllAcceptedNeverReadyToCutover(t *testing.T) {
 	src := chkInventory("source", "1.2.3.4", "srcacct")
 	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	chkDivergeMailConfig(&src, &dest)
 
 	base := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
 	var accs []OperatorAcceptance

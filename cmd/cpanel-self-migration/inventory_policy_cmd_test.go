@@ -26,6 +26,10 @@ func writeDiffFileFor(t *testing.T, dir string, mutate func(dest *accountinvento
 	src.PHP.Available = true
 	src.DNS.Available = true
 	src.Cron.Available = true
+	src.EmailRouting.Available = true
+	src.DefaultAddresses.Available = true
+	src.EmailFilters.Available = true
+	src.Redirects.Available = true
 	dest := src
 	dest.Mailboxes = append([]accountinventory.MailboxEntry{}, src.Mailboxes...)
 	dest.Forwarders = append([]accountinventory.ForwarderEntry{}, src.Forwarders...)

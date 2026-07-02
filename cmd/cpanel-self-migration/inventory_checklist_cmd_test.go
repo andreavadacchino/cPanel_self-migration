@@ -26,6 +26,17 @@ func checklistFixtureFiles(t *testing.T, dir string, withMail bool, mutate func(
 	s.PHP.Available = true
 	s.DNS.Available = true
 	s.Cron.Available = true
+	s.EmailRouting.Available = true
+	s.EmailRouting.Items = []accountinventory.EmailRoutingEntry{{
+		Domain: "main.example", Routing: "local", Detected: "local", AlwaysAccept: true,
+		MXRecords: []accountinventory.MXRecordEntry{{Priority: 0, Exchange: "main.example"}},
+	}}
+	s.DefaultAddresses.Available = true
+	s.DefaultAddresses.Items = []accountinventory.DefaultAddressEntry{{
+		Domain: "main.example", DefaultAddress: `":fail: No Such User Here"`,
+	}}
+	s.EmailFilters.Available = true
+	s.Redirects.Available = true
 
 	// Every slice is re-allocated so a mutate callback can never corrupt
 	// the source fixture through a shared backing array.
@@ -41,6 +52,10 @@ func checklistFixtureFiles(t *testing.T, dir string, withMail bool, mutate func(
 	d.PHP.Items = append([]accountinventory.PHPEntry{}, s.PHP.Items...)
 	d.DNS.Zones = append([]accountinventory.DNSZoneResult{}, s.DNS.Zones...)
 	d.Cron.Jobs = append([]accountinventory.CronJobEntry{}, s.Cron.Jobs...)
+	d.EmailRouting.Items = append([]accountinventory.EmailRoutingEntry{}, s.EmailRouting.Items...)
+	d.DefaultAddresses.Items = append([]accountinventory.DefaultAddressEntry{}, s.DefaultAddresses.Items...)
+	d.EmailFilters.Items = append([]accountinventory.EmailFilterEntry{}, s.EmailFilters.Items...)
+	d.Redirects.Items = append([]accountinventory.RedirectEntry{}, s.Redirects.Items...)
 	if mutate != nil {
 		mutate(&d)
 	}
@@ -122,10 +137,10 @@ func TestInventoryChecklistCmdHappyPath(t *testing.T) {
 	if c.Account != "srcacct" {
 		t.Errorf("account = %q, want srcacct", c.Account)
 	}
-	// A mail-bearing account in v0 can never be READY_*: email routing is
-	// not inventoried and must be confirmed by hand.
-	if c.OverallStatus != accountinventory.OverallManualActionRequired {
-		t.Errorf("overall = %q, want %q", c.OverallStatus, accountinventory.OverallManualActionRequired)
+	// PR 7E: the mail areas are real sections now — with identical data
+	// and full apply evidence nothing gates.
+	if c.OverallStatus != accountinventory.OverallReadyToCutover {
+		t.Errorf("overall = %q, want %q", c.OverallStatus, accountinventory.OverallReadyToCutover)
 	}
 	if !c.Inputs.SourceInventory.Present || c.Inputs.SourceInventory.SHA256 == "" {
 		t.Error("source inventory input ref missing sha256")
@@ -186,9 +201,9 @@ func TestInventoryChecklistCmdFailOnNotReadyPassesWhenReady(t *testing.T) {
 		t.Fatalf("exit = %d, want 0", code)
 	}
 	c := readChecklistJSON(t, outJSON)
-	if c.OverallStatus != accountinventory.OverallReadyWithManualNotes {
+	if c.OverallStatus != accountinventory.OverallReadyToCutover {
 		t.Fatalf("fixture produced overall %q, want %q (test would be vacuous)",
-			c.OverallStatus, accountinventory.OverallReadyWithManualNotes)
+			c.OverallStatus, accountinventory.OverallReadyToCutover)
 	}
 }
 
@@ -324,7 +339,9 @@ func writeAcceptances(t *testing.T, dir, checklistPath, sha string, keys []strin
 // visible in the output, and --fail-on-not-ready passes.
 func TestInventoryChecklistCmdAcceptancesFlow(t *testing.T) {
 	dir := t.TempDir()
-	src, dest, diff, policy := checklistFixtureFiles(t, dir, true, nil)
+	src, dest, diff, policy := checklistFixtureFiles(t, dir, true, func(d *accountinventory.NormalizedInventory) {
+		d.EmailRouting.Items[0].Routing = "remote" // blocking, acceptable CONFIRM_EMAIL_ROUTING
+	})
 	rep := writeApplyReport(t, dir)
 	outJSON := filepath.Join(dir, "checklist.json")
 	outMD := filepath.Join(dir, "checklist.md")
@@ -380,7 +397,9 @@ func TestInventoryChecklistCmdAcceptancesFlow(t *testing.T) {
 // the WHOLE acceptance file is rejected (warning) — nothing is accepted.
 func TestInventoryChecklistCmdAcceptancesHashMismatchRejected(t *testing.T) {
 	dir := t.TempDir()
-	src, dest, diff, policy := checklistFixtureFiles(t, dir, true, nil)
+	src, dest, diff, policy := checklistFixtureFiles(t, dir, true, func(d *accountinventory.NormalizedInventory) {
+		d.EmailRouting.Items[0].Routing = "remote" // blocking, acceptable CONFIRM_EMAIL_ROUTING
+	})
 	rep := writeApplyReport(t, dir)
 	outJSON := filepath.Join(dir, "checklist.json")
 	outMD := filepath.Join(dir, "checklist.md")

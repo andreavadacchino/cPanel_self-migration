@@ -223,8 +223,6 @@ func (b *checklistBuilder) buildSection(name string) ChecklistSection {
 	switch name {
 	case "web_files":
 		return b.buildWebFilesSection()
-	case "email_routing", "default_address", "email_filters", "redirects":
-		return b.buildNotInventoriedSection(name)
 	case "quota_package", "server_level_config":
 		return b.buildRootOnlySection(name)
 	default:
@@ -278,6 +276,14 @@ func (b *checklistBuilder) buildInventoriedSection(name string) ChecklistSection
 		b.evalDNSSection(&sec, findings, downgraded)
 	case "cron":
 		b.evalCronSection(&sec, findings)
+	case "email_routing":
+		b.evalEmailRoutingSection(&sec, findings)
+	case "default_address":
+		b.evalDefaultAddressSection(&sec, findings)
+	case "email_filters":
+		b.evalEmailFiltersSection(&sec, findings)
+	case "redirects":
+		b.evalRedirectsSection(&sec, findings)
 	}
 
 	blockers, reviews := 0, 0
@@ -381,6 +387,76 @@ func (b *checklistBuilder) evalRecreateSection(sec *ChecklistSection, name strin
 		b.addAction(sec.Section, MActionCreateOnDestination, blocking, f,
 			fmt.Sprintf("Recreate %s %s on the destination", noun, f.SourceRef),
 			fmt.Sprintf("Recreate the %s on the destination or confirm it is obsolete.", noun))
+	}
+}
+
+// --- PR 7E section evaluators ----------------------------------------------
+
+// evalEmailRoutingSection: a routing difference (or a domain whose
+// routing entry disappeared) silently breaks mail delivery — blocking
+// per-domain confirmation, replacing the old blanket not_inventoried
+// check.
+func (b *checklistBuilder) evalEmailRoutingSection(sec *ChecklistSection, findings []PolicyFinding) {
+	for _, f := range findings {
+		switch f.ID {
+		case "POL-MAILROUTE-REMOVED":
+			b.addAction(sec.Section, MActionConfirmEmailRouting, true, f,
+				"Confirm mail routing for "+f.SourceRef,
+				"The domain has no routing entry on the destination; set cPanel Email Routing (local/remote) before cutover.")
+		case "POL-MAILROUTE-CHANGED":
+			b.addAction(sec.Section, MActionConfirmEmailRouting, true, f,
+				"Confirm mail routing for "+f.SourceRef,
+				"Email Routing differs between source and destination; a wrong local/remote value silently breaks delivery.")
+		}
+	}
+}
+
+func (b *checklistBuilder) evalDefaultAddressSection(sec *ChecklistSection, findings []PolicyFinding) {
+	for _, f := range findings {
+		switch f.ID {
+		case "POL-DEFAULTADDR-REMOVED", "POL-DEFAULTADDR-CHANGED":
+			ref := f.SourceRef
+			if ref == "" {
+				ref = f.DestinationRef
+			}
+			b.addAction(sec.Section, MActionManualCheckRequired, true, f,
+				"Check the default (catch-all) address for "+ref,
+				"The default address differs or is missing on the destination; a lost catch-all silently drops mail.")
+		}
+	}
+}
+
+func (b *checklistBuilder) evalEmailFiltersSection(sec *ChecklistSection, findings []PolicyFinding) {
+	for _, f := range findings {
+		if f.ID != "POL-EMAILFILTER-REMOVED" {
+			continue
+		}
+		b.addAction(sec.Section, MActionRecreateEmailFilters, true, f,
+			"Recreate email filter "+f.SourceRef,
+			"The filter exists only on the source; recreate it on the destination or confirm it is obsolete — filters change mail handling silently.")
+	}
+}
+
+// evalRedirectsSection: CMS rewrites travel with the web files, so
+// their absence on a not-yet-synced destination is an expected
+// difference; only genuine redirects get an operator action
+// (non-blocking — the .htaccess rule still migrates with webfiles).
+func (b *checklistBuilder) evalRedirectsSection(sec *ChecklistSection, findings []PolicyFinding) {
+	for _, f := range findings {
+		switch f.ID {
+		case "POL-REDIRECT-CMS-REMOVED":
+			sec.ExpectedDifferences = append(sec.ExpectedDifferences, ExpectedDifference{
+				Key: f.SourceRef, Reason: "CMS-generated .htaccess rewrite — travels with the web files migration",
+			})
+		case "POL-REDIRECT-REMOVED", "POL-REDIRECT-CHANGED":
+			ref := f.SourceRef
+			if ref == "" {
+				ref = f.DestinationRef
+			}
+			b.addAction(sec.Section, MActionConfirmRedirect, false, f,
+				"Confirm redirect "+ref,
+				"A genuine redirect differs or is missing on the destination; verify it after the web files migration (its .htaccess rule travels with the files).")
+		}
 	}
 }
 
@@ -550,14 +626,26 @@ func (b *checklistBuilder) evalDNSSection(sec *ChecklistSection, findings []Poli
 			})
 		case f.ID == "POL-DNS-RECORD-CHANGED" || f.ID == "POL-DNS-RECORD-REMOVED":
 			sawDNSChange = true
-			if op, ok := b.planOpForFindingRef(ref); ok && op.Action == ActionSkip {
+			op, planned := b.planOpForFindingRef(ref)
+			switch {
+			case planned && op.Action == ActionSkip:
 				// The destination ALREADY matches the plan's desired
 				// translation: the difference is the intended one.
 				downgraded[i] = true
 				sec.ExpectedDifferences = append(sec.ExpectedDifferences, ExpectedDifference{
 					Key: ref, Reason: "destination already matches the DNS plan translation (plan action: skip)",
 				})
-			} else if !hasPlan && f.ID == "POL-DNS-RECORD-CHANGED" && dnsKeyType(f.SourceRef) == "TXT" {
+			case planned && op.Action == ActionReplace && f.ID == "POL-DNS-RECORD-CHANGED" &&
+				strings.Contains(op.Name, "._domainkey"):
+				// 7A smoke finding 3: a regenerated DKIM key produces a
+				// pending plan replace and a policy review, but the
+				// old-key-vs-regenerated-key choice is a human decision —
+				// surface it instead of staying silent. Non-blocking: the
+				// replace itself is already tracked as plan work.
+				b.addAction(sec.Section, MActionConfirmDNSRecord, false, f,
+					"Confirm the regenerated DKIM key "+ref,
+					"The destination regenerated this DKIM TXT (plan: replace). Decide which key is authoritative: keep the destination's regenerated key (and update any external DNS copies) or restore the source key via the plan.")
+			case !hasPlan && f.ID == "POL-DNS-RECORD-CHANGED" && dnsKeyType(f.SourceRef) == "TXT":
 				b.addAction(sec.Section, MActionVerifyExternalSvc, false, f,
 					"Verify the changed TXT record "+f.SourceRef,
 					"TXT records often bind external services (SPF/DKIM/verification); confirm the destination value is intended.")
@@ -671,57 +759,6 @@ func (b *checklistBuilder) buildWebFilesSection() ChecklistSection {
 		sec.Status = SectionNotMigratedByTool
 	}
 	b.addPostCutoverChecks(&sec)
-	return sec
-}
-
-// buildNotInventoriedSection reports the account-accessible areas the
-// inventory has no collector for yet (PR 7E). They surface as explicit
-// manual checks instead of silently reading as "ok".
-func (b *checklistBuilder) buildNotInventoriedSection(name string) ChecklistSection {
-	sec := newChecklistSection(name)
-	mailData := len(b.in.Source.Mailboxes) > 0 || len(b.in.Source.Forwarders) > 0
-	switch name {
-	case "email_routing":
-		if !mailData {
-			sec.Status = SectionNotApplicable
-			return sec
-		}
-		sec.Status = SectionNotInventoried
-		b.addActionRaw(name, MActionConfirmEmailRouting, true, []string{"checklist:not_inventoried"},
-			"Confirm the email routing setting on both servers",
-			"local/remote mail exchanger configuration is not inventoried",
-			"Compare cPanel Email Routing (local / remote / automatic) between source and destination; a wrong value silently breaks delivery.", nil)
-	case "default_address":
-		if !mailData {
-			sec.Status = SectionNotApplicable
-			return sec
-		}
-		sec.Status = SectionNotInventoried
-		b.addActionRaw(name, MActionManualCheckRequired, true, []string{"checklist:not_inventoried"},
-			"Check the default (catch-all) address",
-			"default/catch-all address configuration is not inventoried",
-			"Compare the default address setting per domain; a lost catch-all silently drops mail.", nil)
-	case "email_filters":
-		if !mailData {
-			sec.Status = SectionNotApplicable
-			return sec
-		}
-		sec.Status = SectionNotInventoried
-		b.addActionRaw(name, MActionManualCheckRequired, true, []string{"checklist:not_inventoried"},
-			"Check account and per-mailbox email filters",
-			"email filter configuration is not inventoried",
-			"Review Email Filters on the source and recreate any that matter on the destination.", nil)
-	case "redirects":
-		if len(b.in.Source.Domains) == 0 {
-			sec.Status = SectionNotApplicable
-			return sec
-		}
-		sec.Status = SectionNotInventoried
-		b.addActionRaw(name, MActionManualCheckRequired, false, []string{"checklist:not_inventoried"},
-			"Check cPanel redirects",
-			"cPanel-managed redirects are not inventoried (.htaccess rules travel with the web files)",
-			"Review cPanel > Redirects on the source and recreate any that matter on the destination.", nil)
-	}
 	return sec
 }
 
@@ -1036,6 +1073,14 @@ func inventorySectionCount(inv NormalizedInventory, name string) int {
 		return len(inv.DNS.Zones)
 	case "cron":
 		return len(inv.Cron.Jobs)
+	case "email_routing":
+		return len(inv.EmailRouting.Items)
+	case "default_address":
+		return len(inv.DefaultAddresses.Items)
+	case "email_filters":
+		return len(inv.EmailFilters.Items)
+	case "redirects":
+		return len(inv.Redirects.Items)
 	}
 	return 0
 }

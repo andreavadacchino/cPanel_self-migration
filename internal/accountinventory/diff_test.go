@@ -62,6 +62,32 @@ func baseInventory() NormalizedInventory {
 		}},
 		Environment: []CronEnvEntry{}, Warnings: []string{}, Errors: []string{},
 	}
+	inv.EmailRouting = EmailRoutingSection{
+		ConfigSection: ConfigSection{Available: true, Method: "uapi", SourceFunction: "Email::list_mxs", Warnings: []string{}},
+		Items: []EmailRoutingEntry{{
+			Domain: "main.example", Routing: "local", Detected: "local", AlwaysAccept: true,
+			MXRecords: []MXRecordEntry{{Priority: 0, Exchange: "main.example"}},
+		}},
+	}
+	inv.DefaultAddresses = DefaultAddressSection{
+		ConfigSection: ConfigSection{Available: true, Method: "uapi", SourceFunction: "Email::list_default_address", Warnings: []string{}},
+		Items: []DefaultAddressEntry{{
+			Domain: "main.example", DefaultAddress: `":fail: No Such User Here"`,
+		}},
+	}
+	inv.EmailFilters = EmailFilterSection{
+		ConfigSection: ConfigSection{Available: true, Method: "uapi", SourceFunction: "Email::list_filters", Warnings: []string{}},
+		Items: []EmailFilterEntry{{
+			Account: "", FilterName: "spam-to-junk", Enabled: true, RuleCount: 1, ActionCount: 1,
+		}},
+	}
+	inv.Redirects = RedirectSection{
+		ConfigSection: ConfigSection{Available: true, Method: "uapi", SourceFunction: "Mime::list_redirects", Warnings: []string{}},
+		Items: []RedirectEntry{{
+			Domain: "addon.example", Source: "/", Destination: "https://main.example/",
+			Kind: "rewrite", Type: "permanent", StatusCode: 301, Wildcard: true, MatchWWW: true,
+		}},
+	}
 	return inv
 }
 
@@ -90,8 +116,8 @@ func TestDiffIdenticalInventories(t *testing.T) {
 	if d.Mode != "inventory-diff" {
 		t.Errorf("mode = %q", d.Mode)
 	}
-	if d.Summary.SectionsCompared != 10 {
-		t.Errorf("sections compared = %d, want 10", d.Summary.SectionsCompared)
+	if d.Summary.SectionsCompared != 14 {
+		t.Errorf("sections compared = %d, want 14", d.Summary.SectionsCompared)
 	}
 	assertClean(t, d)
 }
