@@ -29,8 +29,11 @@ import (
 
 func main() {
 	// Subcommand dispatch happens before the global flag parsing: the
-	// `inventory …` commands are fully offline and share none of the
-	// migration flags.
+	// `inventory …` commands and the local `ui` dashboard are fully
+	// offline and share none of the migration flags.
+	if len(os.Args) >= 2 && os.Args[1] == "ui" {
+		os.Exit(runUICmd(os.Args[2:]))
+	}
 	if len(os.Args) >= 3 && os.Args[1] == "inventory" {
 		switch os.Args[2] {
 		case "diff":
