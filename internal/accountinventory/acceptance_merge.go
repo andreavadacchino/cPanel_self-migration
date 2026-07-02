@@ -13,6 +13,9 @@ package accountinventory
 //     checklistSHA256, so the strict hash check in loadAcceptancesFile
 //     keeps matching after the checklist is regenerated with these
 //     acceptances applied.
+//
+// A caller MUST pass a non-empty acc.ActionKey; an empty key would coalesce
+// with any other empty-key entry via the first-match upsert.
 func MergeAcceptance(existing *AcceptanceFile, checklistFile, checklistSHA256 string, acc OperatorAcceptance) AcceptanceFile {
 	out := AcceptanceFile{
 		Mode:            AcceptanceFileMode,

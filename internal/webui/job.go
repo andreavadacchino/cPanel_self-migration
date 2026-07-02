@@ -138,6 +138,28 @@ func (j *jobManager) running() bool {
 	return j.busy
 }
 
+// tryReserve atomically claims the single-writer slot (returns false if a
+// run or another reservation already holds it). It is the SAME busy flag
+// start() checks, so a full analysis run and a browser accept — both of
+// which write migration_checklist.json — are mutually exclusive, not just
+// TOCTOU-guarded. Pair every true return with release().
+func (j *jobManager) tryReserve() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.busy {
+		return false
+	}
+	j.busy = true
+	return true
+}
+
+// release frees a slot claimed by tryReserve.
+func (j *jobManager) release() {
+	j.mu.Lock()
+	j.busy = false
+	j.mu.Unlock()
+}
+
 // snapshot returns a copy of the current status for rendering.
 func (j *jobManager) snapshot() jobStatus {
 	j.mu.Lock()

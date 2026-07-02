@@ -173,3 +173,60 @@ func TestAcceptRequiresCSRF(t *testing.T) {
 		t.Errorf("no csrf = %d, want 403", rr.Code)
 	}
 }
+
+// TestAcceptCorruptAcceptancesRefused (reviewer HIGH-1): a non-JSON
+// acceptances.json must NOT be silently overwritten (erasing the audit
+// trail) — the accept is refused and the file left untouched.
+func TestAcceptCorruptAcceptancesRefused(t *testing.T) {
+	dir := t.TempDir()
+	writeChecklistWithActions(t, dir)
+	corrupt := []byte("{ this is not valid json")
+	if err := os.WriteFile(filepath.Join(dir, "acceptances.json"), corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHandler(t, dir, okRunner)
+	csrf := fetchCSRF(t, h)
+
+	rr := doReq(h, http.MethodPost, "/accept", acceptForm(csrf, "AK-accept01", "r", "andrea"))
+	if rr.Code < 400 || rr.Code >= 500 {
+		t.Fatalf("accept over a corrupt file = %d, want 4xx", rr.Code)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, "acceptances.json"))
+	if string(b) != string(corrupt) {
+		t.Error("the corrupt acceptances.json must be left untouched, not overwritten")
+	}
+}
+
+// TestAcceptAndRunAreMutuallyExclusive (reviewer HIGH-2): a full run holding
+// the writer slot makes /accept 409 (already covered), and — the reverse —
+// an accept holding the slot makes a concurrent /run 409. tryReserve is the
+// single shared slot both respect.
+func TestAcceptReservesSlotAgainstRun(t *testing.T) {
+	dir := t.TempDir()
+	writeChecklistWithActions(t, dir)
+	// The runner signals when it enters (slot is held) and blocks until
+	// released, so the test knows exactly when the accept holds the slot.
+	started := make(chan struct{})
+	release := make(chan struct{})
+	blocking := func(ctx context.Context, out io.Writer, name string, argv []string) error {
+		close(started)
+		<-release
+		return nil
+	}
+	h := newTestHandler(t, dir, blocking)
+	saveValidConfig(t, h)
+	csrf := fetchCSRF(t, h)
+
+	done := make(chan int, 1)
+	go func() {
+		done <- doReq(h, http.MethodPost, "/accept", acceptForm(csrf, "AK-accept01", "r", "andrea")).Code
+	}()
+	<-started // the accept has reserved the slot and is in its regen
+	if rr := doReq(h, http.MethodPost, "/run", url.Values{"csrf": {csrf}}); rr.Code != http.StatusConflict {
+		t.Errorf("run while an accept holds the slot = %d, want 409", rr.Code)
+	}
+	close(release)
+	if code := <-done; code != http.StatusSeeOther {
+		t.Errorf("accept = %d, want 303", code)
+	}
+}

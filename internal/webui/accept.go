@@ -32,13 +32,15 @@ func (s *server) saveAccept(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "action_key, reason and operator are all required", http.StatusUnprocessableEntity)
 		return
 	}
-	if s.job.running() {
+	// Claim the single-writer slot for the WHOLE critical section (read
+	// checklist, write acceptances, regenerate): a concurrent /run sees the
+	// slot taken and is refused, and vice versa — real mutual exclusion, so
+	// the two writers of migration_checklist.json never overlap.
+	if !s.job.tryReserve() {
 		http.Error(w, "an analysis run is in progress — wait for it to finish before accepting", http.StatusConflict)
 		return
 	}
-
-	s.cfgMu.Lock()
-	defer s.cfgMu.Unlock()
+	defer s.job.release()
 
 	checklistPath := filepath.Join(s.dir, "migration_checklist.json")
 	cb, err := os.ReadFile(checklistPath) // #nosec G304 -- fixed name in the operator-chosen dir
@@ -68,9 +70,16 @@ func (s *server) saveAccept(w http.ResponseWriter, r *http.Request) {
 	accPath := filepath.Join(s.dir, "acceptances.json")
 	if ab, err := os.ReadFile(accPath); err == nil { // #nosec G304 -- fixed name in the operator-chosen dir
 		var af accountinventory.AcceptanceFile
-		if json.Unmarshal(ab, &af) == nil {
-			existing = &af
+		if uerr := json.Unmarshal(ab, &af); uerr != nil {
+			// Never start fresh over an unparsed file: that would erase the
+			// whole acceptance audit trail on the next click. Fail loudly.
+			http.Error(w, "existing acceptances.json is not valid JSON ("+uerr.Error()+") — fix or remove it before accepting; nothing was changed", http.StatusUnprocessableEntity)
+			return
 		}
+		existing = &af
+	} else if !os.IsNotExist(err) {
+		http.Error(w, "cannot read acceptances.json ("+err.Error()+") — nothing was changed", http.StatusInternalServerError)
+		return
 	}
 	merged := accountinventory.MergeAcceptance(existing, "migration_checklist.json", sha,
 		accountinventory.OperatorAcceptance{

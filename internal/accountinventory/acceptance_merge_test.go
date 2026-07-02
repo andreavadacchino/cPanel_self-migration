@@ -53,3 +53,20 @@ func TestMergeAcceptanceRestampsSHA(t *testing.T) {
 		t.Errorf("sha = %q, want the current sha-Y", got.ChecklistSHA256)
 	}
 }
+
+func TestMergeAcceptancePreservesExistingWhenUpsertingDifferentKey(t *testing.T) {
+	base := AcceptanceFile{
+		Mode: AcceptanceFileMode, FormatVersion: 1,
+		ChecklistFile: "migration_checklist.json", ChecklistSHA256: "old",
+		Acceptances: []OperatorAcceptance{acc("AK-1", "r1", "a"), acc("AK-2", "r2", "b")},
+	}
+	got := MergeAcceptance(&base, "migration_checklist.json", "new", acc("AK-3", "r3", "c"))
+	if len(got.Acceptances) != 3 {
+		t.Fatalf("acceptances = %d, want 3 (two preserved + one added)", len(got.Acceptances))
+	}
+	for i, k := range []string{"AK-1", "AK-2", "AK-3"} {
+		if got.Acceptances[i].ActionKey != k {
+			t.Errorf("pos %d = %s, want %s", i, got.Acceptances[i].ActionKey, k)
+		}
+	}
+}
