@@ -62,6 +62,13 @@ successful apply report was provided.
    SSL blocker alive (`*.doctorbike.it` is never literally covered by
    per-vhost AutoSSL certs). Candidates: treat certs already expired on
    the SOURCE as `not_applicable`; match wildcard coverage semantically.
+   **FIXED** in the follow-up PR: a removed group whose source entries
+   are ALL provably expired at Now downgrades to an expected difference
+   (fail-safe: unknown expiry or one still-valid generation keeps the
+   blocker), and `domainCovered` now matches RFC 6125-style wildcards
+   (a valid destination `*.base` cert covers exactly one extra label —
+   never the base domain, multi-label subdomains, or a lost wildcard
+   "covered" by per-host certs).
 3. **DKIM-changed reviews are silent** — regenerated DKIM keys produce
    plan `replace` ops (pending work) and policy reviews, but no
    dedicated operator action. Real ambiguity (old key vs regenerated

@@ -187,12 +187,10 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
   checklist to clear reviewed notes (statuses/summary `accepted`).
 - **PR 7E — inventory expansion wave 1** (capture-first like 6B-pre):
   email routing, default address, email filters, redirects.
-- **Real-smoke refinements** (`PR7A_REAL_SMOKE.md`, finding 1 already
-  fixed in #18): (2) source certificates already EXPIRED still gate as
-  SSL blockers when their domain grouping is missing on the destination
-  — treat them as not_applicable, and consider semantic wildcard
-  coverage; (3) regenerated-DKIM reviews are silent — deserve a
-  dedicated operator action (fits 7E).
+- **Real-smoke refinements** (`PR7A_REAL_SMOKE.md`, findings 1 and 2
+  already fixed — #18 and the SSL-expired/wildcard follow-up): (3)
+  regenerated-DKIM reviews are silent — deserve a dedicated operator
+  action (fits 7E).
 - **PR 6C — `dns verify`** (read-only): re-fetch destination zones and
   compare against a plan; exit 3 on drift/mismatch. Reuses
   `internal/sshtest` for end-to-end tests.
