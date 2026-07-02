@@ -10,6 +10,7 @@
 - OK: 5
 - Expected differences: 2
 - Manual actions: 7
+- Accepted by operator: 0
 - Review required: 0
 - Blocked: 1
 - Not migrated by tool: 0
@@ -38,15 +39,15 @@
 
 ## Manual actions (7)
 
-| ID | Blocking | Section | Type | Action |
-|----|----------|---------|------|--------|
-| MA-001 | no | ssl | ACCEPT_EXPECTED_DIFFERENCE | Acknowledge the reissued certificate for main.example — The destination certificate differs from the source but is currently valid; ackno... |
-| MA-002 | no | php | CHECK_PHP_COMPATIBILITY | Check PHP compatibility for main.example — Test the site against the destination PHP configuration before cutover. |
-| MA-003 | **yes** | cron | ADAPT_CRON_PATH | Recreate active cron job — Recreate this cron job on the destination adapting the /home/<user> paths to the new account. |
-| MA-004 | **yes** | email_routing | CONFIRM_EMAIL_ROUTING | Confirm the email routing setting on both servers — Compare cPanel Email Routing (local / remote / automatic) between source and destinat... |
-| MA-005 | **yes** | default_address | MANUAL_CHECK_REQUIRED | Check the default (catch-all) address — Compare the default address setting per domain; a lost catch-all silently drops mail. |
-| MA-006 | **yes** | email_filters | MANUAL_CHECK_REQUIRED | Check account and per-mailbox email filters — Review Email Filters on the source and recreate any that matter on the destination. |
-| MA-007 | no | redirects | MANUAL_CHECK_REQUIRED | Check cPanel redirects — Review cPanel > Redirects on the source and recreate any that matter on the destination. |
+| ID | Key | Blocking | Section | Type | Action |
+|----|-----|----------|---------|------|--------|
+| MA-001 | AK-3dcedd72b052 | no | ssl | ACCEPT_EXPECTED_DIFFERENCE | Acknowledge the reissued certificate for main.example — The destination certificate differs from the source but is currently valid; ackno... |
+| MA-002 | AK-feabe48786b0 | no | php | CHECK_PHP_COMPATIBILITY | Check PHP compatibility for main.example — Test the site against the destination PHP configuration before cutover. |
+| MA-003 | AK-c45ba4c9e844 | **yes** | cron | ADAPT_CRON_PATH | Recreate active cron job — Recreate this cron job on the destination adapting the /home/<user> paths to the new account. |
+| MA-004 | AK-650e9068dc67 | **yes** | email_routing | CONFIRM_EMAIL_ROUTING | Confirm the email routing setting on both servers — Compare cPanel Email Routing (local / remote / automatic) between source and destinat... |
+| MA-005 | AK-c0ff03a72ce0 | **yes** | default_address | MANUAL_CHECK_REQUIRED | Check the default (catch-all) address — Compare the default address setting per domain; a lost catch-all silently drops mail. |
+| MA-006 | AK-b7a1dedbec6b | **yes** | email_filters | MANUAL_CHECK_REQUIRED | Check account and per-mailbox email filters — Review Email Filters on the source and recreate any that matter on the destination. |
+| MA-007 | AK-38428cc2a574 | no | redirects | MANUAL_CHECK_REQUIRED | Check cPanel redirects — Review cPanel > Redirects on the source and recreate any that matter on the destination. |
 
 ## Before shutting down the old server
 
@@ -73,3 +74,4 @@
 | policy | yes | policy_report.json | ddd |
 | dns plan | no |  |  |
 | migration report | yes | report.json | eee |
+| acceptances | no |  |  |

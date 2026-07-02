@@ -281,3 +281,236 @@ func TestInventoryChecklistCmdInputErrors(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Operator acceptances (PR 7D)
+// ---------------------------------------------------------------------------
+
+// writeAcceptances writes an acceptances.json accepting the given keys,
+// bound to the given checklist file (hash computed unless overridden).
+func writeAcceptances(t *testing.T, dir, checklistPath, sha string, keys []string) string {
+	t.Helper()
+	if sha == "" {
+		var err error
+		sha, err = fileSHA256(checklistPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := accountinventory.AcceptanceFile{
+		Mode: accountinventory.AcceptanceFileMode, FormatVersion: 1,
+		ChecklistFile: checklistPath, ChecklistSHA256: sha,
+	}
+	for _, k := range keys {
+		f.Acceptances = append(f.Acceptances, accountinventory.OperatorAcceptance{
+			ActionKey: k, Reason: "reviewed with the customer",
+			AcceptedBy: "andrea", AcceptedAt: "2026-07-02T10:00:00Z",
+		})
+	}
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "acceptances.json")
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestInventoryChecklistCmdAcceptancesFlow is the full operator loop:
+// generate the checklist, accept every blocking action by its stable key,
+// regenerate with --acceptances → the gate clears, the acceptance is
+// visible in the output, and --fail-on-not-ready passes.
+func TestInventoryChecklistCmdAcceptancesFlow(t *testing.T) {
+	dir := t.TempDir()
+	src, dest, diff, policy := checklistFixtureFiles(t, dir, true, nil)
+	rep := writeApplyReport(t, dir)
+	outJSON := filepath.Join(dir, "checklist.json")
+	outMD := filepath.Join(dir, "checklist.md")
+	baseArgs := []string{
+		"--source", src, "--destination", dest, "--diff", diff, "--policy", policy,
+		"--migration-report", rep, "--output-json", outJSON, "--output-md", outMD,
+	}
+
+	if code := runInventoryChecklistCmd(baseArgs); code != 0 {
+		t.Fatalf("first run exit = %d, want 0", code)
+	}
+	base := readChecklistJSON(t, outJSON)
+	if base.OverallStatus != accountinventory.OverallManualActionRequired {
+		t.Fatalf("baseline overall = %q, want MANUAL_ACTION_REQUIRED", base.OverallStatus)
+	}
+	var keys []string
+	for _, a := range base.ManualActions {
+		if a.BlockingCutover && a.Acceptable {
+			keys = append(keys, a.Key)
+		}
+	}
+	if len(keys) == 0 {
+		t.Fatal("no acceptable blocking actions in the baseline — scenario invalid")
+	}
+	accPath := writeAcceptances(t, dir, outJSON, "", keys)
+
+	code := runInventoryChecklistCmd(append(append([]string{}, baseArgs...),
+		"--acceptances", accPath, "--fail-on-not-ready"))
+	if code != 0 {
+		t.Fatalf("second run exit = %d, want 0 (gate cleared by acceptances)", code)
+	}
+	c := readChecklistJSON(t, outJSON)
+	if c.OverallStatus != accountinventory.OverallReadyWithManualNotes {
+		t.Fatalf("overall = %q, want READY_WITH_MANUAL_NOTES", c.OverallStatus)
+	}
+	if c.Summary.Accepted != len(keys) {
+		t.Errorf("summary.accepted = %d, want %d", c.Summary.Accepted, len(keys))
+	}
+	if !c.Inputs.Acceptances.Present || c.Inputs.Acceptances.SHA256 == "" {
+		t.Error("acceptances input ref missing from the audit trail")
+	}
+	md, err := os.ReadFile(outMD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(md), "accepted (andrea)") {
+		t.Error("markdown missing the accepted marker")
+	}
+}
+
+// TestInventoryChecklistCmdAcceptancesHashMismatchRejected: when the
+// acceptance file names its reviewed checklist and the hash does NOT match,
+// the WHOLE acceptance file is rejected (warning) — nothing is accepted.
+func TestInventoryChecklistCmdAcceptancesHashMismatchRejected(t *testing.T) {
+	dir := t.TempDir()
+	src, dest, diff, policy := checklistFixtureFiles(t, dir, true, nil)
+	rep := writeApplyReport(t, dir)
+	outJSON := filepath.Join(dir, "checklist.json")
+	outMD := filepath.Join(dir, "checklist.md")
+	baseArgs := []string{
+		"--source", src, "--destination", dest, "--diff", diff, "--policy", policy,
+		"--migration-report", rep, "--output-json", outJSON, "--output-md", outMD,
+	}
+	if code := runInventoryChecklistCmd(baseArgs); code != 0 {
+		t.Fatalf("first run exit = %d, want 0", code)
+	}
+	base := readChecklistJSON(t, outJSON)
+	var keys []string
+	for _, a := range base.ManualActions {
+		if a.BlockingCutover && a.Acceptable {
+			keys = append(keys, a.Key)
+		}
+	}
+	accPath := writeAcceptances(t, dir, outJSON,
+		"0000000000000000000000000000000000000000000000000000000000000000", keys)
+
+	code := runInventoryChecklistCmd(append(append([]string{}, baseArgs...), "--acceptances", accPath))
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (checklist still generated, acceptances rejected)", code)
+	}
+	c := readChecklistJSON(t, outJSON)
+	if c.Summary.Accepted != 0 {
+		t.Errorf("summary.accepted = %d, want 0: mismatched hash must reject the whole file", c.Summary.Accepted)
+	}
+	if c.OverallStatus != accountinventory.OverallManualActionRequired {
+		t.Errorf("overall = %q, want MANUAL_ACTION_REQUIRED", c.OverallStatus)
+	}
+	found := false
+	for _, w := range c.Warnings {
+		if strings.Contains(w, "acceptances") && strings.Contains(w, "sha256") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want the hash-mismatch rejection warning", c.Warnings)
+	}
+	// The forensic trail survives the rejection: the file WAS submitted.
+	if !c.Inputs.Acceptances.Present || c.Inputs.Acceptances.SHA256 == "" {
+		t.Error("rejected acceptance file must still appear in the inputs audit trail")
+	}
+}
+
+// TestInventoryChecklistCmdAcceptancesInvalidFile: wrong mode or missing
+// required fields are hard input errors (exit 1), same as the other loaders.
+func TestInventoryChecklistCmdAcceptancesInvalidFile(t *testing.T) {
+	dir := t.TempDir()
+	src, dest, diff, policy := checklistFixtureFiles(t, dir, true, nil)
+	baseArgs := []string{
+		"--source", src, "--destination", dest, "--diff", diff, "--policy", policy,
+		"--output-json", filepath.Join(dir, "c.json"), "--output-md", filepath.Join(dir, "c.md"),
+	}
+	cases := []struct {
+		name, body string
+	}{
+		{"wrong mode", `{"mode":"nope","format_version":1,"checklist_sha256":"x","acceptances":[]}`},
+		{"missing key", `{"mode":"operator-acceptances","format_version":1,"checklist_sha256":"x","acceptances":[{"reason":"r","accepted_by":"a","accepted_at":"t"}]}`},
+		{"missing reason", `{"mode":"operator-acceptances","format_version":1,"checklist_sha256":"x","acceptances":[{"action_key":"AK-000000000000","accepted_by":"a","accepted_at":"t"}]}`},
+		{"missing author", `{"mode":"operator-acceptances","format_version":1,"checklist_sha256":"x","acceptances":[{"action_key":"AK-000000000000","reason":"r","accepted_at":"t"}]}`},
+		{"missing checklist hash", `{"mode":"operator-acceptances","format_version":1,"acceptances":[]}`},
+		{"unsupported format_version", `{"mode":"operator-acceptances","format_version":2,"checklist_sha256":"x","acceptances":[]}`},
+		{"not json", `{`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(dir, "bad_acceptances.json")
+			if err := os.WriteFile(p, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if code := runInventoryChecklistCmd(append(append([]string{}, baseArgs...), "--acceptances", p)); code != 1 {
+				t.Errorf("exit = %d, want 1", code)
+			}
+		})
+	}
+}
+
+// TestInventoryChecklistCmdAcceptancesRelativeChecklistFile: a relative
+// checklist_file resolves against the acceptance file's own directory, so
+// the reviewed checklist + acceptances pair can be moved together.
+func TestInventoryChecklistCmdAcceptancesRelativeChecklistFile(t *testing.T) {
+	dir := t.TempDir()
+	src, dest, diff, policy := checklistFixtureFiles(t, dir, true, nil)
+	rep := writeApplyReport(t, dir)
+	outJSON := filepath.Join(dir, "checklist.json")
+	outMD := filepath.Join(dir, "checklist.md")
+	baseArgs := []string{
+		"--source", src, "--destination", dest, "--diff", diff, "--policy", policy,
+		"--migration-report", rep, "--output-json", outJSON, "--output-md", outMD,
+	}
+	if code := runInventoryChecklistCmd(baseArgs); code != 0 {
+		t.Fatalf("first run exit = %d, want 0", code)
+	}
+	base := readChecklistJSON(t, outJSON)
+	var keys []string
+	for _, a := range base.ManualActions {
+		if a.BlockingCutover && a.Acceptable {
+			keys = append(keys, a.Key)
+		}
+	}
+	sha, err := fileSHA256(outJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := accountinventory.AcceptanceFile{
+		Mode: accountinventory.AcceptanceFileMode, FormatVersion: 1,
+		ChecklistFile:   "checklist.json", // relative to the acceptance file's dir
+		ChecklistSHA256: sha,
+	}
+	for _, k := range keys {
+		f.Acceptances = append(f.Acceptances, accountinventory.OperatorAcceptance{
+			ActionKey: k, Reason: "reviewed", AcceptedBy: "andrea", AcceptedAt: "2026-07-02T10:00:00Z",
+		})
+	}
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accPath := filepath.Join(dir, "acceptances.json")
+	if err := os.WriteFile(accPath, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runInventoryChecklistCmd(append(append([]string{}, baseArgs...), "--acceptances", accPath)); code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	c := readChecklistJSON(t, outJSON)
+	if c.Summary.Accepted != len(keys) {
+		t.Errorf("summary.accepted = %d, want %d: the relative checklist_file must resolve and verify", c.Summary.Accepted, len(keys))
+	}
+}

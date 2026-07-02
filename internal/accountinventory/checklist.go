@@ -15,6 +15,7 @@ package accountinventory
 //     (not_inventoried / not_accessible_without_root), never silently ok.
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
@@ -48,6 +49,12 @@ type checklistBuilder struct {
 	actions        []ManualAction
 	sectionActions map[string][]int // section -> indexes into actions
 
+	// Operator acceptances (PR 7D), indexed by stable action key.
+	// acceptMatched tracks which keys actually matched an action, so the
+	// unmatched ones can warn (stale acceptances self-invalidate loudly).
+	acceptByKey   map[string]OperatorAcceptance
+	acceptMatched map[string]bool
+
 	// chainMismatch is set when the provenance verification finds a
 	// PROVEN hash mismatch (not a mere absence): the composition is
 	// inconsistent and a READY_* verdict must be capped.
@@ -64,6 +71,16 @@ func BuildChecklist(in ChecklistInput) MigrationChecklist {
 		findings:       map[string][]PolicyFinding{},
 		planOps:        map[string]PlanOp{},
 		sectionActions: map[string][]int{},
+		acceptByKey:    map[string]OperatorAcceptance{},
+		acceptMatched:  map[string]bool{},
+	}
+	for _, acc := range in.Acceptances {
+		if _, dup := b.acceptByKey[acc.ActionKey]; dup {
+			b.warnings = append(b.warnings, fmt.Sprintf(
+				"acceptances: duplicate entry for action key %s — first entry wins", acc.ActionKey))
+			continue
+		}
+		b.acceptByKey[acc.ActionKey] = acc
 	}
 	for _, f := range in.Policy.Findings {
 		b.findings[f.Section] = append(b.findings[f.Section], f)
@@ -104,10 +121,29 @@ func BuildChecklist(in ChecklistInput) MigrationChecklist {
 	c.ManualActions = append(c.ManualActions, b.actions...)
 	for i := range c.Sections {
 		refs := []string{}
+		accepted := []string{}
 		for _, idx := range b.sectionActions[c.Sections[i].Section] {
 			refs = append(refs, b.actions[idx].ID)
+			if b.actions[idx].Accepted {
+				accepted = append(accepted, b.actions[idx].ID)
+			}
 		}
 		c.Sections[i].ManualActionRefs = refs
+		c.Sections[i].AcceptedByOperator = accepted
+	}
+	// Every acceptance must have found its action: an unmatched key means
+	// the underlying fact changed (or never existed) since the operator
+	// reviewed it — say so instead of silently dropping the acceptance.
+	unmatched := []string{}
+	for key := range b.acceptByKey {
+		if !b.acceptMatched[key] {
+			unmatched = append(unmatched, key)
+		}
+	}
+	sort.Strings(unmatched)
+	for _, key := range unmatched {
+		b.warnings = append(b.warnings, fmt.Sprintf(
+			"acceptances: no current action matches key %s — the underlying finding changed since it was reviewed; re-review", key))
 	}
 
 	c.Warnings = append(c.Warnings, b.warnings...)
@@ -275,11 +311,12 @@ func (b *checklistBuilder) buildInventoriedSection(name string) ChecklistSection
 // (manual_required, or not_migrated_by_tool for a non-migratable area whose
 // destination is empty) > review_required > expected_difference >
 // not_applicable > ok. ACCEPT_EXPECTED_DIFFERENCE acknowledgments never
-// change a section's status.
+// change a section's status, and neither do operator-ACCEPTED actions
+// (PR 7D): a formally accepted action stops counting as real work.
 func (b *checklistBuilder) resolveStatus(name string, sec *ChecklistSection, blockers, reviews, findingsCount int) string {
 	realActions := 0
 	for _, idx := range b.sectionActions[name] {
-		if b.actions[idx].Type != MActionAcceptExpectedDiff {
+		if b.actions[idx].Type != MActionAcceptExpectedDiff && !b.actions[idx].Accepted {
 			realActions++
 		}
 	}
@@ -755,9 +792,12 @@ func (b *checklistBuilder) summarize(c *MigrationChecklist) {
 
 	blockingActions := false
 	for _, a := range c.ManualActions {
+		if a.Accepted {
+			c.Summary.Accepted++
+			continue // a formally accepted action no longer gates
+		}
 		if a.BlockingCutover {
 			blockingActions = true
-			break
 		}
 	}
 	notes := len(c.ManualActions) > 0
@@ -883,16 +923,49 @@ func (b *checklistBuilder) addActionRaw(section, typ string, blocking bool, deri
 	if ev == nil {
 		ev = []ChecklistEvidence{}
 	}
-	// CONFIRM_MX_EXTERNAL and a blocking cron recreation must be resolved,
-	// not waved through: they stay non-acceptable for the future operator
-	// acceptance flow (PR 7D).
-	acceptable := typ != MActionConfirmMXExternal && !(typ == MActionRecreateCron && blocking)
-	b.actions = append(b.actions, ManualAction{
+	// CONFIRM_MX_EXTERNAL and a blocking cron recreation (with or without
+	// path adaptation) must be resolved, not waved through: they are
+	// non-acceptable for the operator acceptance flow (PR 7D).
+	acceptable := typ != MActionConfirmMXExternal &&
+		!(blocking && (typ == MActionRecreateCron || typ == MActionAdaptCronPath))
+	a := ManualAction{
+		Key:  manualActionKey(typ, section, title, detail),
 		Type: typ, Section: section, BlockingCutover: blocking,
 		DerivedFrom: derivedFrom, Title: title, Detail: detail,
 		Evidence: ev, OperatorAction: operator, Acceptable: acceptable,
-	})
+	}
+	if acc, ok := b.acceptByKey[a.Key]; ok {
+		if !b.acceptMatched[a.Key] {
+			b.acceptMatched[a.Key] = true
+			if a.Acceptable {
+				a.Accepted = true
+				a.AcceptedBy = acc.AcceptedBy
+				a.AcceptedAt = acc.AcceptedAt
+				a.AcceptedReason = acc.Reason
+			} else {
+				b.warnings = append(b.warnings, fmt.Sprintf(
+					"acceptances: action %s (%s) is not acceptable — it must be resolved, the acceptance was ignored", a.Key, typ))
+			}
+		} else {
+			// Two structurally identical actions (e.g. the same cron job
+			// scheduled twice, both lost) share the same content key. Only
+			// the FIRST matching action was accepted — say so, or the
+			// second would silently keep gating with no explanation.
+			b.warnings = append(b.warnings, fmt.Sprintf(
+				"acceptances: key %s matches more than one identical action — only the first was accepted, the other(s) still require attention", a.Key))
+		}
+	}
+	b.actions = append(b.actions, a)
 	b.sectionActions[section] = append(b.sectionActions[section], len(b.actions)-1)
+}
+
+// manualActionKey derives the STABLE acceptance handle of an action from
+// its content: same fact → same key across regenerations; changed fact →
+// changed key, so stale acceptances stop matching (fail-safe). NUL framing
+// prevents field-boundary collisions.
+func manualActionKey(typ, section, title, detail string) string {
+	sum := sha256.Sum256([]byte(typ + "\x00" + section + "\x00" + title + "\x00" + detail))
+	return fmt.Sprintf("AK-%x", sum[:6])
 }
 
 // planOpForFindingRef resolves a policy DNS finding ref ("zone <zone>

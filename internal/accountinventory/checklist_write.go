@@ -49,7 +49,11 @@ func checklistSectionHeadline(s ChecklistSection) string {
 		parts = append(parts, fmt.Sprintf("%d blocker(s)", len(s.Blockers)))
 	}
 	if n := len(s.ManualActionRefs); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d manual action(s)", n))
+		if acc := len(s.AcceptedByOperator); acc > 0 {
+			parts = append(parts, fmt.Sprintf("%d manual action(s) (%d accepted)", n, acc))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d manual action(s)", n))
+		}
 	}
 	if n := len(s.ExpectedDifferences); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d expected difference(s)", n))
@@ -109,6 +113,7 @@ func WriteChecklistMarkdown(path string, c MigrationChecklist) error {
 	fmt.Fprintf(&sb, "- OK: %d\n", c.Summary.OK)
 	fmt.Fprintf(&sb, "- Expected differences: %d\n", c.Summary.ExpectedDifferences)
 	fmt.Fprintf(&sb, "- Manual actions: %d\n", c.Summary.ManualActions)
+	fmt.Fprintf(&sb, "- Accepted by operator: %d\n", c.Summary.Accepted)
 	fmt.Fprintf(&sb, "- Review required: %d\n", c.Summary.ReviewRequired)
 	fmt.Fprintf(&sb, "- Blocked: %d\n", c.Summary.Blocked)
 	fmt.Fprintf(&sb, "- Not migrated by tool: %d\n", c.Summary.NotMigratedByTool)
@@ -127,16 +132,22 @@ func WriteChecklistMarkdown(path string, c MigrationChecklist) error {
 	sb.WriteString("\n")
 
 	if len(c.ManualActions) > 0 {
+		// The Key column is the STABLE acceptance handle: acceptances.json
+		// entries reference it (the positional MA-nnn id shifts when
+		// findings change).
 		fmt.Fprintf(&sb, "## Manual actions (%d)\n\n", len(c.ManualActions))
-		sb.WriteString("| ID | Blocking | Section | Type | Action |\n")
-		sb.WriteString("|----|----------|---------|------|--------|\n")
+		sb.WriteString("| ID | Key | Blocking | Section | Type | Action |\n")
+		sb.WriteString("|----|-----|----------|---------|------|--------|\n")
 		for _, a := range c.ManualActions {
 			blocking := "no"
 			if a.BlockingCutover {
 				blocking = "**yes**"
 			}
-			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s |\n",
-				mdCell(a.ID, 10), blocking, mdCell(a.Section, 20), mdCell(a.Type, 30),
+			if a.Accepted {
+				blocking = fmt.Sprintf("accepted (%s)", a.AcceptedBy)
+			}
+			fmt.Fprintf(&sb, "| %s | %s | %s | %s | %s | %s |\n",
+				mdCell(a.ID, 10), mdCell(a.Key, 16), mdCell(blocking, 40), mdCell(a.Section, 20), mdCell(a.Type, 30),
 				mdCell(a.Title+" — "+a.OperatorAction, 140))
 		}
 		sb.WriteString("\n")
@@ -145,8 +156,8 @@ func WriteChecklistMarkdown(path string, c MigrationChecklist) error {
 	fmt.Fprintf(&sb, "## Before shutting down the old server\n\n")
 	n := 0
 	for _, a := range c.ManualActions {
-		if !a.BlockingCutover {
-			continue
+		if !a.BlockingCutover || a.Accepted {
+			continue // a formally accepted action no longer gates the cutover
 		}
 		n++
 		fmt.Fprintf(&sb, "%d. [%s] %s — %s\n", n, a.ID, mdCell(a.Title, 80), mdCell(a.OperatorAction, 160))
@@ -189,6 +200,7 @@ func WriteChecklistMarkdown(path string, c MigrationChecklist) error {
 	writeInputRow("policy", c.Inputs.Policy)
 	writeInputRow("dns plan", c.Inputs.DNSPlan)
 	writeInputRow("migration report", c.Inputs.MigrationReport)
+	writeInputRow("acceptances", c.Inputs.Acceptances)
 
 	return os.WriteFile(path, []byte(sb.String()), 0o600)
 }
