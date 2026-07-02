@@ -72,6 +72,20 @@ func chkApplyReport() *MigrationReportInfo {
 	}
 }
 
+// chkApplyReportWithPhases is chkApplyReport plus a phases_completed list,
+// as a PR 7C apply run records it in report.json.
+func chkApplyReportWithPhases(phases ...string) *MigrationReportInfo {
+	r := chkApplyReport()
+	r.PhasesCompleted = phases
+	return r
+}
+
+// chkAllApplyPhases is the full phase set of a whole-scope apply run.
+var chkAllApplyPhases = []string{
+	"create_domains", "migrate_mail", "verify_mail",
+	"copy_files", "verify_files", "migrate_db", "verify_db",
+}
+
 // chkInput wires the real pipeline: diff and policy are computed from the
 // inventories, never hand-built.
 func chkInput(src, dest NormalizedInventory, plan *DNSPlan, rep *MigrationReportInfo) ChecklistInput {
@@ -308,6 +322,84 @@ func TestBuildChecklistEvidenceRespectsScope(t *testing.T) {
 	for _, name := range []string{"cron", "dns", "ssl", "ftp", "forwarders", "php"} {
 		if s := chkSection(t, c, name); s.MigratedByTool || s.MigrationEvidence != EvidenceNone {
 			t.Errorf("%s = (%v, %q), want (false, none): no importer exists", name, s.MigratedByTool, s.MigrationEvidence)
+		}
+	}
+}
+
+// TestBuildChecklistEvidencePerItemWithApplyPhases pins the PR 7C upgrade: a
+// successful apply report whose phases_completed proves BOTH the migrate and
+// the verify phase of a flow raises that section's evidence to per_item (the
+// verify phases are per-item integrity passes whose failures gate the exit
+// status). Domains have no verify phase; create_domains alone suffices.
+func TestBuildChecklistEvidencePerItemWithApplyPhases(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReportWithPhases(chkAllApplyPhases...)))
+
+	for _, name := range []string{"domains", "mailboxes", "web_files", "databases"} {
+		s := chkSection(t, c, name)
+		if !s.MigratedByTool || s.MigrationEvidence != EvidencePerItem {
+			t.Errorf("%s = (%v, %q), want (true, per_item)", name, s.MigratedByTool, s.MigrationEvidence)
+		}
+	}
+}
+
+// TestBuildChecklistEvidencePartialPhasesStayRunLevel: a flow whose verify
+// phase is missing from phases_completed keeps run_level — completing the
+// migrate phase alone does not prove per-item verification.
+func TestBuildChecklistEvidencePartialPhasesStayRunLevel(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	// verify_mail and verify_db are missing; the file flow is complete.
+	c := BuildChecklist(chkInput(src, dest, nil,
+		chkApplyReportWithPhases("create_domains", "migrate_mail", "copy_files", "verify_files", "migrate_db")))
+
+	for name, want := range map[string]string{
+		"domains":   EvidencePerItem,
+		"mailboxes": EvidenceRunLevel,
+		"web_files": EvidencePerItem,
+		"databases": EvidenceRunLevel,
+	} {
+		s := chkSection(t, c, name)
+		if !s.MigratedByTool || s.MigrationEvidence != want {
+			t.Errorf("%s = (%v, %q), want (true, %q)", name, s.MigratedByTool, s.MigrationEvidence, want)
+		}
+	}
+}
+
+// TestBuildChecklistEvidenceLegacyReportStaysRunLevel: a pre-7C report.json
+// has no phases_completed at all — evidence stays run_level, never per_item.
+func TestBuildChecklistEvidenceLegacyReportStaysRunLevel(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	for _, name := range []string{"domains", "mailboxes", "web_files", "databases"} {
+		s := chkSection(t, c, name)
+		if !s.MigratedByTool || s.MigrationEvidence != EvidenceRunLevel {
+			t.Errorf("%s = (%v, %q), want (true, run_level)", name, s.MigratedByTool, s.MigrationEvidence)
+		}
+	}
+}
+
+// TestBuildChecklistEvidencePhasesNeverOverrideFailedExit: phases_completed
+// on a FAILED apply run must not produce any evidence at all — the exit
+// status gate comes first.
+func TestBuildChecklistEvidencePhasesNeverOverrideFailedExit(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	rep := chkApplyReportWithPhases(chkAllApplyPhases...)
+	rep.ExitStatus = "failed"
+
+	c := BuildChecklist(chkInput(src, dest, nil, rep))
+
+	for _, name := range []string{"domains", "mailboxes", "web_files", "databases"} {
+		s := chkSection(t, c, name)
+		if s.MigratedByTool || s.MigrationEvidence != EvidenceNone {
+			t.Errorf("%s = (%v, %q), want (false, none): failed run, phases are irrelevant", name, s.MigratedByTool, s.MigrationEvidence)
 		}
 	}
 }

@@ -16,6 +16,17 @@ import (
 type mailboxApplyResult struct {
 	failed     int
 	unverified int
+	// items records one per-mailbox outcome per processed mailbox, in loop
+	// order, for the migrate_mail phase event's Data payload (PR 7C). A
+	// mailbox interrupted mid-step is deliberately NOT recorded: the run
+	// errors out and the phase emits phase_failed instead of a payload.
+	items []applyItem
+}
+
+// record appends one per-mailbox outcome. status uses the report-line
+// vocabulary: migrated, unchanged, skipped, failed, unverified.
+func (r *mailboxApplyResult) record(email, status, note string) {
+	r.items = append(r.items, applyItem{Item: email, Status: status, Note: note})
 }
 
 // mirrorVanishHook, if non-nil, is invoked under --apply-mirror right before the
@@ -105,11 +116,13 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 		if domainFailed(pd, m.Domain) {
 			reason := "domain '" + m.Domain + "' creation failed"
 			rep.LogScreenFile(itemStr(log, "→", email, "%s", log.Yellow("skip — "+reason)), report.SkipLine(email, reason))
+			result.record(email, "skipped", reason)
 			skipped++
 			continue
 		}
 		if reason, blocked := domainBlocked(pd, m.Domain); blocked {
 			rep.LogScreenFile(itemStr(log, "→", email, "%s", log.Yellow("skip — "+reason)), report.SkipLine(email, reason))
+			result.record(email, "skipped", reason)
 			skipped++
 			continue
 		}
@@ -118,12 +131,14 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 		if !domainname.Has(pd.DestDomainSet, m.Domain) {
 			reason := "destination domain '" + m.Domain + "' not configured"
 			rep.LogScreenFile(itemStr(log, "→", email, "%s", log.Yellow("skip — "+reason)), report.SkipLine(email, reason))
+			result.record(email, "skipped", reason)
 			skipped++
 			continue
 		}
 		if m.Hash == "" {
 			reason := "no password hash found on source; account/password not applied"
 			rep.LogScreenFile(itemStr(log, "~", email, "%s", log.Red("UNVERIFIED — "+reason)), report.UnverifiedLine(email, reason))
+			result.record(email, "unverified", reason)
 			result.unverified++
 			continue
 		}
@@ -131,6 +146,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 		if !ok {
 			reason := destDomainResolutionIssue(pd, m.Domain)
 			rep.LogScreenFile(itemStr(log, "✗", email, "%s", log.Red("FAIL — "+reason)), report.FailLine(email, reason))
+			result.record(email, "failed", reason)
 			failed++
 			continue
 		}
@@ -144,6 +160,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 				return finish(), ctx.Err()
 			}
 			rep.LogScreenFile(itemStr(log, "✗", email, "%s", log.Red("FAIL — account step: "+err.Error())), report.FailLine(email, "account step: "+err.Error()))
+			result.record(email, "failed", "account step: "+err.Error())
 			failed++
 			continue
 		}
@@ -191,12 +208,14 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 					return finish(), ctx.Err()
 				}
 				rep.LogScreenFile(itemStr(log, "✗", email, "%s", log.Red("FAIL — mirror prep: source unreadable: "+err.Error())), report.FailLine(email, "mirror prep: source mailbox unreadable ("+err.Error()+"); live destination left intact (not mirrored)"))
+				result.record(email, "failed", "mirror prep: source mailbox unreadable ("+err.Error()+")")
 				failed++
 				continue
 			}
 			if !srcPresent {
 				reason := "mirror prep: source mailbox mail/" + m.Domain + "/" + m.User + " absent on source; live destination left intact (not mirrored)"
 				rep.LogScreenFile(itemStr(log, "✗", email, "%s", log.Red("FAIL — "+reason)), report.FailLine(email, reason))
+				result.record(email, "failed", reason)
 				failed++
 				continue
 			}
@@ -218,6 +237,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 				}
 				reason := "mirror prep: could not read source occupancy (" + err.Error() + "); live destination left intact (not mirrored)"
 				rep.LogScreenFile(itemStr(log, "✗", email, "%s", log.Red("FAIL — "+reason)), report.FailLine(email, reason))
+				result.record(email, "failed", reason)
 				failed++
 				continue
 			}
@@ -229,6 +249,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 					return finish(), ctx.Err()
 				}
 				rep.LogScreenFile(itemStr(log, "✗", email, "%s", log.Red("FAIL — mirror prep: "+err.Error())), report.FailLine(email, "mirror prep: "+err.Error()))
+				result.record(email, "failed", "mirror prep: "+err.Error())
 				failed++
 				continue
 			}
@@ -277,6 +298,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 				if skip {
 					logx.Debug("applyMailboxes %s: fast-skip succeeded (msg+UIDVALIDITY consistent, VerifyChecksums=%v)", email, opts.VerifyChecksums)
 					rep.LogScreenFile(itemStr(log, "=", email, "%s", log.Green("unchanged")+" (msg+UIDVALIDITY match)"), report.UnchangedLine(email))
+					result.record(email, "unchanged", "")
 					unchanged++
 					continue
 				}
@@ -303,6 +325,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 			}
 			prog.replace(itemStr(log, "✗", email, "%s", log.Red("FAIL — mailbox copy failed: "+err.Error())))
 			rep.FileOnlyf("%s", report.FailLine(email, "mailbox copy failed: "+err.Error()))
+			result.record(email, "failed", "mailbox copy failed: "+err.Error())
 			failed++
 			continue
 		}
@@ -331,6 +354,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 				reason := "mirror verify: could not confirm destination occupancy after the copy (" + err.Error() + "); the previous live mailbox is preserved in " + mirrorBackedUpDir + " — investigate before trusting this mailbox as migrated"
 				prog.replace(itemStr(log, "✗", email, "%s", log.Red("FAIL — "+reason)))
 				rep.FileOnlyf("%s", report.FailLine(email, reason))
+				result.record(email, "failed", reason)
 				failed++
 				continue
 			}
@@ -338,6 +362,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 				reason := fmt.Sprintf("mirror left the destination EMPTY: the source held %d message(s) at the occupancy gate but none reached the destination — the source was emptied or removed around mirror time (a TOCTOU race and a concurrent full expunge are indistinguishable here). The previous live mailbox is preserved in %s; investigate and recover from there before trusting this mailbox as migrated", srcGateMsgCount, mirrorBackedUpDir)
 				prog.replace(itemStr(log, "✗", email, "%s", log.Red("FAIL — "+reason)))
 				rep.FileOnlyf("%s", report.FailLine(email, reason))
+				result.record(email, "failed", reason)
 				failed++
 				continue
 			}
@@ -351,6 +376,7 @@ func applyMailboxes(ctx context.Context, pool *sshx.Pool, cfg config.Config, pd 
 			prog.replace(itemStr(log, "✓", email, "%s — account %s, %d messages + %d control = %d files", log.Green("synced"), state, res.MsgTotal, res.ControlTotal, res.FilesTotal))
 			rep.FileOnlyf("%s", report.OKLine(email, string(state))+fmt.Sprintf(" — %d messages + %d control = %d files", res.MsgTotal, res.ControlTotal, res.FilesTotal))
 		}
+		result.record(email, "migrated", "")
 		done++
 	}
 

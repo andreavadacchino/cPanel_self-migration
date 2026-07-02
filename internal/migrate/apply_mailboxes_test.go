@@ -71,6 +71,7 @@ func TestApplyMailboxesFailedDomainSkipReason(t *testing.T) {
 	if res.unverified != 0 {
 		t.Errorf("unverified = %d, want 0 (domain root cause is already counted)", res.unverified)
 	}
+	assertMailItems(t, res.items, applyItem{Item: "u@bad.it", Status: "skipped"})
 	out := file.String()
 	if !strings.Contains(out, "creation failed") {
 		t.Errorf("reason should say the domain creation failed:\n%s", out)
@@ -105,6 +106,7 @@ func TestApplyMailboxesBlockedDomainSkipReason(t *testing.T) {
 	if res.unverified != 0 {
 		t.Errorf("unverified = %d, want 0 (blocked domain is already counted)", res.unverified)
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@ghost.it", Status: "skipped"})
 	out := file.String()
 	if !strings.Contains(out, reason) {
 		t.Errorf("reason should explain the Step 8 inventory block:\n%s", out)
@@ -138,6 +140,7 @@ func TestApplyMailboxesEmptySourceHashIsUnverified(t *testing.T) {
 	if res.unverified != 1 {
 		t.Fatalf("unverified = %d, want 1", res.unverified)
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@example.com", Status: "unverified"})
 	out := file.String()
 	if !strings.Contains(out, "[UNVERIFIED]") || !strings.Contains(out, "no password hash found on source") {
 		t.Fatalf("missing hash should be reported as an unverified mailbox:\n%s", out)
@@ -174,6 +177,7 @@ func TestApplyMailboxesCanonicalDestinationPresentDoesNotUseMissingDomainSkip(t 
 	if res.unverified != 1 {
 		t.Fatalf("unverified = %d, want 1", res.unverified)
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@Example.COM", Status: "unverified"})
 	out := file.String()
 	if !strings.Contains(out, "no password hash found on source") {
 		t.Fatalf("mailbox should pass destination-domain gate and reach hash check:\n%s", out)
@@ -220,6 +224,7 @@ func TestApplyMailboxesDomainTypeIssueWarnsButDoesNotBlock(t *testing.T) {
 	if res.unverified != 1 {
 		t.Fatalf("unverified = %d, want 1", res.unverified)
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@Example.COM", Status: "unverified"})
 	out := file.String()
 	if !strings.Contains(out, "[domain WARN]") || !strings.Contains(out, "destination domain type mismatch") {
 		t.Fatalf("mail report should contain the type mismatch warning:\n%s", out)

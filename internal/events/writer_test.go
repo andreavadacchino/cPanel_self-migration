@@ -173,6 +173,63 @@ func TestWriterRedactsDataSecrets(t *testing.T) {
 	}
 }
 
+// TestWriterRedactsStructDataSecrets pins the PR 7C hardening: a TYPED
+// struct payload (like the apply phase event data) must go through the same
+// key-based redaction net as a map[string]any — a sensitive field name in a
+// future payload type cannot silently bypass RedactMap.
+func TestWriterRedactsStructDataSecrets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	type item struct {
+		Item   string `json:"item"`
+		Status string `json:"status"`
+		Note   string `json:"note,omitempty"`
+	}
+	type payload struct {
+		Items []item `json:"items"`
+		Token string `json:"token"`
+	}
+	ev := Event{
+		RunID:   "test",
+		TS:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Level:   LevelInfo,
+		Phase:   PhaseMigrateMail,
+		Type:    EventPhaseCompleted,
+		Message: "done",
+		Data: payload{
+			Items: []item{{Item: "info@example.com", Status: "failed", Note: "account step: timeout"}},
+			Token: "s3cr3t-token",
+		},
+	}
+	if err := w.Write(ev); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	s := string(b)
+	if strings.Contains(s, "s3cr3t-token") {
+		t.Errorf("struct payload bypassed redaction, token leaked: %s", s)
+	}
+	if !strings.Contains(s, "<redacted>") {
+		t.Errorf("written event missing redaction placeholder: %s", s)
+	}
+	for _, want := range []string{"info@example.com", "failed", "account step: timeout"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("non-sensitive payload content %q lost in redaction: %s", want, s)
+		}
+	}
+}
+
 func TestWriterCreatesParentDir(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "subdir", "events.jsonl")

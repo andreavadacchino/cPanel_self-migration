@@ -43,6 +43,8 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 7A-smoke | real-data smoke on doctorbike.it captures (`PR7A_REAL_SMOKE.md`) | #17 |
 | 6B-fix | dns-plan: TXT already matching the ip-map translation → skip (cyclic-map safe, single-pass substitution) | #18 |
 | 7B | provenance chain: diff/policy record input hashes, checklist verifies `chain_verified` | #19 |
+| 7A-ssl-fix | checklist SSL: expired source cert groups → expected, RFC 6125 wildcard coverage | #21 |
+| 7C | apply evidence: phase events (+per-item data), report.json `phases_completed`/`artifacts`, checklist `per_item` | #22 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -71,8 +73,9 @@ actions with IDs, and an overall
 `BLOCKED|MANUAL_ACTION_REQUIRED|NOT_READY|READY_WITH_MANUAL_NOTES|READY_TO_CUTOVER`
 rollup; `--fail-on-not-ready` exits 3 unless READY_*. Honesty invariants
 (pinned by tests): `migrated_by_tool` never true without a successful
-apply report (run_level evidence only — per-item needs PR 7C apply
-events); a dns-plan proves "expected" only via action `skip`;
+apply report; evidence is `per_item` when the report's
+`phases_completed` proves both the migrate and the verify phase of the
+flow completed (PR 7C), `run_level` otherwise; a dns-plan proves "expected" only via action `skip`;
 non-inventoried areas (email routing, default address, filters,
 redirects) and root-only areas (quota/package, server config) surface as
 explicit sections instead of silently reading ok.
@@ -177,12 +180,12 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
 
 ## Suggested next steps (not started)
 
-- **PR 7C — apply evidence**: emit the already-defined apply phase events
-  (`events/event.go:31-37`, defined but never emitted) with per-item data
-  and populate `report.json` `phases_completed`/`artifacts`, so the
-  checklist can upgrade evidence to `per_item`. Touches `apply*.go` and
-  the minimal `runApply` call-site — the ONLY sanctioned contact with the
-  migrate perimeter.
+- **PR 7C follow-up (optional)**: per-item Data for the web copy/verify
+  and db/mail verify events — needs `applyWebFiles`/`verifyWebFiles`
+  signature changes (8 test call sites) and `verify.go` (outside the 7C
+  perimeter). The per-item lines already exist in
+  `logs/migration_report.log`; the checklist upgrade does NOT depend on
+  this.
 - **PR 7D — operator acceptance file**: acceptances.json consumed by the
   checklist to clear reviewed notes (statuses/summary `accepted`).
 - **PR 7E — inventory expansion wave 1** (capture-first like 6B-pre):
