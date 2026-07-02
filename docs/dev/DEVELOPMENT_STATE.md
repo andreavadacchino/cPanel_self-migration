@@ -217,6 +217,15 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
   `utf8.ValidString` only on source TXT values, not destination ones —
   a non-UTF-8 dest TXT can only fail-safe toward drift/manual, never
   toward a silent pass, so cosmetic only.
+- **LOW follow-ups from the #34/#35 go-reviews** (non-blocking):
+  (a) diff keys use space/slash separators (`Domain+" "+Source`,
+  `account+"/"+FilterName`) — NUL-framed keys would be collision-proof;
+  (b) the CMS-rewrite exemption applies only to Removed redirects — a
+  CMS rewrite whose destination changed still surfaces as review
+  (asymmetric, errs toward scrutiny); (c) email filter `-CHANGED`
+  findings gate via review but get no dedicated action; (d) a
+  protocol-relative (`//`) CMS rewrite would classify as genuine
+  (over-cautious direction).
 - **Policy rule refinement / configurable rules** — only if real usage
   shows the v0 rule table is too aggressive; the smoke test did not show
   false positives (the 24 blockers were legitimate for two *different*
