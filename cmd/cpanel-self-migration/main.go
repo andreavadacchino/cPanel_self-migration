@@ -39,6 +39,8 @@ func main() {
 			os.Exit(runInventoryPolicyCmd(os.Args[3:]))
 		case "dns-plan":
 			os.Exit(runInventoryDNSPlanCmd(os.Args[3:]))
+		case "checklist":
+			os.Exit(runInventoryChecklistCmd(os.Args[3:]))
 		}
 	}
 

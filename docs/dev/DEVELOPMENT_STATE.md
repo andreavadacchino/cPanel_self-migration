@@ -1,7 +1,11 @@
 # Development State — cPanel Self-Migration (handoff)
 
 Snapshot for starting a fresh development session. Last updated after
-**PR 6B** (`inventory dns-plan` offline plan builder).
+**PR 7A** (`inventory checklist` — operator migration checklist v0).
+
+**PR numbering note:** the 6x series is the DNS track (6C = `dns verify`,
+6D = `dns apply`, both not started); the 7x series is the migration
+checklist / final verification track (7A = checklist v0, this PR).
 
 ## What this tool is
 
@@ -34,6 +38,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 6A | DNS import/verifier micro-design (v2 post adversarial review) | #11 |
 | 6B-pre | real-server DNS capability captures (mass_edit_zone OK on v110) | #12 |
 | 6B | `inventory dns-plan`: offline DNS import plan builder | #13 |
+| 7A | `inventory checklist`: operator migration checklist v0 | — |
 
 ## The full pipeline (all read-only / offline)
 
@@ -41,6 +46,8 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 cpanel-self-migration --account-inventory   → inventory_source.json (+ _destination, report.md)
 cpanel-self-migration inventory diff         → inventory_diff.json + .md
 cpanel-self-migration inventory policy        → policy_report.json + .md
+cpanel-self-migration inventory dns-plan      → dns_import_plan.json + .md
+cpanel-self-migration inventory checklist     → migration_checklist.json + .md
 ```
 
 The inventory has 11 sections: account, domains, mailboxes, databases,
@@ -52,6 +59,20 @@ None of the three commands connect to a server except
 --fail-on-blockers` exits 3 when `overall_status` is `blocked` (reports
 are still fully written first; `review_required` never gates), so the
 pipeline can gate CI without JSON parsing.
+
+`inventory checklist` (PR 7A) composes inventories + diff + policy
+(+ optional dns-plan and `--apply` report.json) into the operator
+migration checklist: per-area statuses, expected differences, manual
+actions with IDs, and an overall
+`BLOCKED|MANUAL_ACTION_REQUIRED|NOT_READY|READY_WITH_MANUAL_NOTES|READY_TO_CUTOVER`
+rollup; `--fail-on-not-ready` exits 3 unless READY_*. Honesty invariants
+(pinned by tests): `migrated_by_tool` never true without a successful
+apply report (run_level evidence only — per-item needs PR 7C apply
+events); a dns-plan proves "expected" only via action `skip`;
+non-inventoried areas (email routing, default address, filters,
+redirects) and root-only areas (quota/package, server config) surface as
+explicit sections instead of silently reading ok. `chain_verified` stays
+false until diff/policy record their input hashes (PR 7B).
 
 ## Architecture map
 
@@ -65,7 +86,9 @@ pipeline can gate CI without JSON parsing.
   quoted string OR float→trunc), `flexStringList` (string OR array).
 - `internal/accountinventory/` — `Collect()` orchestrates all collectors;
   `types.go` (normalized schema), `collector.go`, `write.go` (report),
-  `diff.go`+`diff_write.go` (PR4A), `policy.go`+`policy_write.go` (PR5A).
+  `diff.go`+`diff_write.go` (PR4A), `policy.go`+`policy_write.go` (PR5A),
+  `dnsplan.go`+`dnsplan_write.go` (PR6B),
+  `checklist.go`+`checklist_types.go`+`checklist_write.go` (PR7A).
 - `internal/migrate/runner.go` — the migration orchestrator. **Off-limits
   to the inventory/diff/policy line of work** (do not modify).
 - `internal/sshx/` — real SSH transport; `internal/sshtest/` — in-process
@@ -138,6 +161,19 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
 
 ## Suggested next steps (not started)
 
+- **PR 7B — provenance chain**: `inventory diff`/`inventory policy`
+  record the sha256 of their own inputs; `inventory checklist` validates
+  the chain and flips `chain_verified` to true. Small, offline.
+- **PR 7C — apply evidence**: emit the already-defined apply phase events
+  (`events/event.go:31-37`, defined but never emitted) with per-item data
+  and populate `report.json` `phases_completed`/`artifacts`, so the
+  checklist can upgrade evidence to `per_item`. Touches `apply*.go` and
+  the minimal `runApply` call-site — the ONLY sanctioned contact with the
+  migrate perimeter.
+- **PR 7D — operator acceptance file**: acceptances.json consumed by the
+  checklist to clear reviewed notes (statuses/summary `accepted`).
+- **PR 7E — inventory expansion wave 1** (capture-first like 6B-pre):
+  email routing, default address, email filters, redirects.
 - **PR 6C — `dns verify`** (read-only): re-fetch destination zones and
   compare against a plan; exit 3 on drift/mismatch. Reuses
   `internal/sshtest` for end-to-end tests.

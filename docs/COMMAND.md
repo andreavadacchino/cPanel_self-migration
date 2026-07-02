@@ -106,6 +106,9 @@ make build
 | `inventory_report.md`       | `--account-inventory`     |
 | `inventory_diff.json`       | `inventory diff`          |
 | `inventory_diff.md`         | `inventory diff`          |
+| `policy_report.json` / `.md`| `inventory policy`        |
+| `dns_import_plan.json` / `.md` | `inventory dns-plan`   |
+| `migration_checklist.json` / `.md` | `inventory checklist` |
 
 ## Subcommand: `inventory diff`
 
@@ -205,3 +208,76 @@ effective ip-map for auditability.
 
 Exit codes: `0` plan generated, `1` missing/invalid input (including
 malformed `--ip-map` values) or write failure, `2` flag usage error.
+
+## Subcommand: `inventory checklist`
+
+Fully offline composition of the pipeline's artifacts into the
+operator-facing **migration checklist**
+(`migration_checklist.json` + `.md`): per account area, what the tool
+migrated (with evidence), what it did not migrate, what differs but is
+expected, what requires manual action, and what blocks shutting down the
+old server. It never connects to any server.
+
+```bash
+cpanel-self-migration inventory checklist \
+  --source ./inventory_source.json \
+  --destination ./inventory_destination.json \
+  --diff ./inventory_diff.json \
+  --policy ./policy_report.json \
+  [--dns-plan ./dns_import_plan.json] \
+  [--migration-report ./report.json] \
+  [--output-json ./migration_checklist.json] \
+  [--output-md ./migration_checklist.md] \
+  [--fail-on-not-ready]
+```
+
+Overall status: `BLOCKED` (unresolved blockers) →
+`MANUAL_ACTION_REQUIRED` (at least one cutover-blocking manual action) →
+`NOT_READY` (a core area — mailboxes, databases, web files — has data on
+the source and no migration evidence) → `READY_WITH_MANUAL_NOTES` (only
+non-blocking notes/reviews/expected differences remain) →
+`READY_TO_CUTOVER`.
+
+Honesty rules:
+
+- `migrated_by_tool` is **never** true without evidence. Evidence comes
+  only from a `report.json` of a **successful `--apply` run**
+  (`--migration-report`), and is explicitly labeled `run_level` — the
+  apply flow does not emit per-item events yet. Without the report the
+  status is "unknown", even when both inventories look identical.
+- A DNS plan (`--dns-plan`) proves a DNS difference is expected **only**
+  when the destination already matches the desired translation (plan
+  action `skip`). Pending plan work (`add`/`replace`) is still work.
+- Areas the inventory cannot see are reported as their own sections
+  instead of silently reading as ok: `email_routing`, `default_address`,
+  `email_filters`, `redirects` are `not_inventoried` (with explicit
+  manual checks); `quota_package` and `server_level_config` are
+  `not_accessible_without_root`.
+
+Section statuses: `ok`, `expected_difference`, `manual_required`,
+`review_required`, `blocked`, `not_migrated_by_tool`,
+`not_inventoried`, `not_accessible_without_root`, `not_applicable`.
+Expected differences recognized in v0: regenerated SOA, docroot layout,
+A/AAAA already translated per the DNS plan, and a certificate that
+differs but is currently valid for the same domains.
+
+Manual actions carry a stable ID (`MA-001`…), a type
+(`RECREATE_CRON`, `ADAPT_CRON_PATH`, `CONFIRM_MX_EXTERNAL`,
+`CONFIRM_DNS_RECORD`, `UPDATE_SPF`, `REISSUE_SSL`,
+`CHECK_PHP_COMPATIBILITY`, `CREATE_ON_DESTINATION`,
+`VERIFY_EXTERNAL_SERVICE`, `CONFIRM_EMAIL_ROUTING`,
+`MANUAL_CHECK_REQUIRED`, `ACCEPT_EXPECTED_DIFFERENCE`), and a
+`blocking_cutover` flag; the Markdown report lists the blocking ones
+under "Before shutting down the old server".
+
+The checklist embeds the SHA-256 of every input file. `chain_verified`
+stays `false` for now: the diff/policy artifacts do not yet record the
+hashes of *their own* inputs, so the chain inventory → diff → policy
+cannot be proven end-to-end (planned as PR 7B).
+
+Exit codes: `0` checklist generated (manual actions and blockers are
+findings, not process errors), `1` missing/invalid input or write
+failure, `2` flag usage error, `3` `--fail-on-not-ready` was set and the
+overall status is neither `READY_TO_CUTOVER` nor
+`READY_WITH_MANUAL_NOTES`. The reports are always fully written before
+the gating exit.
