@@ -3,6 +3,7 @@ package accountinventory
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1090,5 +1091,220 @@ func TestBuildChecklistSectionUnavailableGates(t *testing.T) {
 	cron := chkSection(t, c, "cron")
 	if cron.Status != SectionReviewRequired {
 		t.Errorf("cron status = %q, want %q (skipped comparison can never be ok)", cron.Status, SectionReviewRequired)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Operator acceptances (PR 7D)
+// ---------------------------------------------------------------------------
+
+func chkAcceptance(key string) OperatorAcceptance {
+	return OperatorAcceptance{
+		ActionKey: key, Reason: "reviewed with the customer",
+		AcceptedBy: "andrea", AcceptedAt: "2026-07-02T10:00:00Z",
+	}
+}
+
+func chkInputWithAcceptances(src, dest NormalizedInventory, rep *MigrationReportInfo, accs []OperatorAcceptance) ChecklistInput {
+	in := chkInput(src, dest, nil, rep)
+	in.Acceptances = accs
+	return in
+}
+
+// TestManualActionKeysStableAndUnique pins the acceptance handle: every
+// action carries a content-derived key (AK-<12 hex>) that is IDENTICAL
+// across regenerations from the same inputs and unique per action, while
+// the positional MA-nnn id may shift when findings change.
+func TestManualActionKeysStableAndUnique(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	c1 := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+	c2 := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	if len(c1.ManualActions) == 0 {
+		t.Fatal("want at least the not-inventoried synthetic actions")
+	}
+	keyRe := regexp.MustCompile(`^AK-[0-9a-f]{12}$`)
+	seen := map[string]bool{}
+	for i, a := range c1.ManualActions {
+		if !keyRe.MatchString(a.Key) {
+			t.Errorf("action %s key = %q, want AK-<12 hex>", a.ID, a.Key)
+		}
+		if seen[a.Key] {
+			t.Errorf("duplicate action key %q", a.Key)
+		}
+		seen[a.Key] = true
+		if a.Key != c2.ManualActions[i].Key {
+			t.Errorf("action %s key changed across identical regenerations: %q vs %q", a.ID, a.Key, c2.ManualActions[i].Key)
+		}
+	}
+}
+
+// TestBuildChecklistAcceptanceClearsManualGate: accepting every blocking
+// (and acceptable) synthetic check moves the verdict from
+// MANUAL_ACTION_REQUIRED to READY_WITH_MANUAL_NOTES, populates
+// accepted_by_operator on the owning sections and summary.accepted — while
+// the not_inventoried sections KEEP their honest status.
+func TestBuildChecklistAcceptanceClearsManualGate(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	base := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+	if base.OverallStatus != OverallManualActionRequired {
+		t.Fatalf("baseline overall = %q, want %q", base.OverallStatus, OverallManualActionRequired)
+	}
+	var accs []OperatorAcceptance
+	for _, a := range base.ManualActions {
+		if a.BlockingCutover {
+			if !a.Acceptable {
+				t.Fatalf("baseline has a non-acceptable blocking action %s (%s) — scenario invalid", a.ID, a.Type)
+			}
+			accs = append(accs, chkAcceptance(a.Key))
+		}
+	}
+	if len(accs) == 0 {
+		t.Fatal("baseline has no blocking actions to accept — scenario invalid")
+	}
+
+	c := BuildChecklist(chkInputWithAcceptances(src, dest, chkApplyReport(), accs))
+
+	if c.OverallStatus != OverallReadyWithManualNotes {
+		t.Fatalf("overall = %q, want %q after accepting every blocking action", c.OverallStatus, OverallReadyWithManualNotes)
+	}
+	if c.Summary.Accepted != len(accs) {
+		t.Errorf("summary.accepted = %d, want %d", c.Summary.Accepted, len(accs))
+	}
+	er := chkSection(t, c, "email_routing")
+	if er.Status != SectionNotInventoried {
+		t.Errorf("email_routing status = %q, want %q: acceptance clears the gate, not the honesty", er.Status, SectionNotInventoried)
+	}
+	if len(er.AcceptedByOperator) != 1 {
+		t.Errorf("email_routing accepted_by_operator = %v, want the accepted action id", er.AcceptedByOperator)
+	}
+	for _, a := range c.ManualActions {
+		if a.BlockingCutover {
+			if !a.Accepted || a.AcceptedBy != "andrea" || a.AcceptedReason == "" || a.AcceptedAt == "" {
+				t.Errorf("action %s = %+v, want accepted with author/reason/date", a.ID, a)
+			}
+		}
+	}
+}
+
+// TestBuildChecklistAcceptanceNonAcceptableIgnored: BOTH blocking cron
+// action types (RECREATE_CRON and ADAPT_CRON_PATH) must be RESOLVED, not
+// waved through — acceptances targeting them are ignored with a warning and
+// the verdict stays blocked.
+func TestBuildChecklistAcceptanceNonAcceptableIgnored(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	// A second enabled job WITHOUT /home/ paths → plain RECREATE_CRON; the
+	// fixture job carries /home/acct → ADAPT_CRON_PATH.
+	src.Cron.Jobs = append(src.Cron.Jobs, CronJobEntry{
+		Type: "standard", Minute: "10", Hour: "2", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		CommandRedacted: "php -q cron.php --token=****",
+		CommandSHA256:   "sha256:ccc", RawLineSHA256: "sha256:ddd", Enabled: true, LineNumber: 2,
+		Warnings: []string{},
+	})
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	dest.Cron.Jobs = []CronJobEntry{} // every source cron job lost
+
+	base := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+	keys := map[string]string{} // type -> key
+	for _, a := range base.ManualActions {
+		if (a.Type == MActionRecreateCron || a.Type == MActionAdaptCronPath) && a.BlockingCutover {
+			if a.Acceptable {
+				t.Fatalf("blocking %s must not be acceptable: %+v", a.Type, a)
+			}
+			keys[a.Type] = a.Key
+		}
+	}
+	if keys[MActionRecreateCron] == "" || keys[MActionAdaptCronPath] == "" {
+		t.Fatalf("baseline actions %v: want one blocking RECREATE_CRON and one blocking ADAPT_CRON_PATH", keys)
+	}
+
+	c := BuildChecklist(chkInputWithAcceptances(src, dest, chkApplyReport(),
+		[]OperatorAcceptance{chkAcceptance(keys[MActionRecreateCron]), chkAcceptance(keys[MActionAdaptCronPath])}))
+
+	if c.Summary.Accepted != 0 {
+		t.Errorf("summary.accepted = %d, want 0: non-acceptable actions cannot be accepted", c.Summary.Accepted)
+	}
+	if c.OverallStatus != OverallBlocked {
+		t.Errorf("overall = %q, want %q: the lost cron jobs still gate", c.OverallStatus, OverallBlocked)
+	}
+	for typ, key := range keys {
+		found := false
+		for _, w := range c.Warnings {
+			if strings.Contains(w, "not acceptable") && strings.Contains(w, key) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("warnings = %v, want one naming the non-acceptable %s key %s", c.Warnings, typ, key)
+		}
+	}
+}
+
+// TestBuildChecklistAcceptanceUnknownKeyWarns: an acceptance whose key
+// matches nothing (the underlying fact changed since the operator reviewed
+// it) is ignored with a warning — stale acceptances self-invalidate.
+func TestBuildChecklistAcceptanceUnknownKeyWarns(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	c := BuildChecklist(chkInputWithAcceptances(src, dest, chkApplyReport(),
+		[]OperatorAcceptance{chkAcceptance("AK-000000000000")}))
+
+	if c.Summary.Accepted != 0 {
+		t.Errorf("summary.accepted = %d, want 0", c.Summary.Accepted)
+	}
+	if c.OverallStatus != OverallManualActionRequired {
+		t.Errorf("overall = %q, want %q: nothing was actually accepted", c.OverallStatus, OverallManualActionRequired)
+	}
+	found := false
+	for _, w := range c.Warnings {
+		if strings.Contains(w, "AK-000000000000") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want one naming the unmatched key", c.Warnings)
+	}
+}
+
+// TestBuildChecklistAcceptanceDuplicateFirstWins: two entries for the same
+// key — the first is applied, the duplicate warns.
+func TestBuildChecklistAcceptanceDuplicateFirstWins(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	base := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+	var key string
+	for _, a := range base.ManualActions {
+		if a.Section == "email_routing" {
+			key = a.Key
+		}
+	}
+	first := chkAcceptance(key)
+	second := chkAcceptance(key)
+	second.AcceptedBy = "someone-else"
+
+	c := BuildChecklist(chkInputWithAcceptances(src, dest, chkApplyReport(), []OperatorAcceptance{first, second}))
+
+	if c.Summary.Accepted != 1 {
+		t.Errorf("summary.accepted = %d, want 1", c.Summary.Accepted)
+	}
+	for _, a := range c.ManualActions {
+		if a.Key == key && a.AcceptedBy != "andrea" {
+			t.Errorf("accepted_by = %q, want the FIRST entry's author", a.AcceptedBy)
+		}
+	}
+	found := false
+	for _, w := range c.Warnings {
+		if strings.Contains(w, "duplicate") && strings.Contains(w, key) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want a duplicate-entry warning for %s", c.Warnings, key)
 	}
 }

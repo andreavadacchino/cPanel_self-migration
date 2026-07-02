@@ -236,10 +236,47 @@ cpanel-self-migration inventory checklist \
   --policy ./policy_report.json \
   [--dns-plan ./dns_import_plan.json] \
   [--migration-report ./report.json] \
+  [--acceptances ./acceptances.json] \
   [--output-json ./migration_checklist.json] \
   [--output-md ./migration_checklist.md] \
   [--fail-on-not-ready]
 ```
+
+### Operator acceptances (`--acceptances`)
+
+`acceptances.json` lets the operator formally accept reviewed manual
+actions so they stop gating the verdict — attributably and fail-safe:
+
+```json
+{
+  "mode": "operator-acceptances",
+  "format_version": 1,
+  "checklist_file": "migration_checklist.json",
+  "checklist_sha256": "<sha256 of the reviewed checklist file>",
+  "acceptances": [
+    {
+      "action_key": "AK-650e9068dc67",
+      "action_id": "MA-004",
+      "reason": "confirmed with the customer",
+      "accepted_by": "andrea",
+      "accepted_at": "2026-07-02T10:00:00Z"
+    }
+  ]
+}
+```
+
+- Acceptances bind to the action's stable `key` (shown in both reports),
+  NOT to the positional `MA-nnn` id. If the underlying finding changes,
+  the key changes and the acceptance stops matching: the action
+  resurfaces un-accepted, with a warning.
+- `checklist_sha256` records which checklist the operator reviewed; when
+  `checklist_file` is present its hash is verified strictly and a
+  mismatch rejects the whole file (warning, nothing accepted).
+- Non-acceptable actions (`acceptable: false` — an external MX to
+  confirm, a lost active cron job) can never be accepted: they must be
+  resolved.
+- An accepted action no longer counts toward `MANUAL_ACTION_REQUIRED`;
+  sections list it in `accepted_by_operator` and the summary counts it.
 
 Overall status: `BLOCKED` (unresolved blockers) →
 `MANUAL_ACTION_REQUIRED` (at least one cutover-blocking manual action) →

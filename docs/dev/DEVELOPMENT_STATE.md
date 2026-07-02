@@ -45,6 +45,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 7B | provenance chain: diff/policy record input hashes, checklist verifies `chain_verified` | #19 |
 | 7A-ssl-fix | checklist SSL: expired source cert groups → expected, RFC 6125 wildcard coverage | #21 |
 | 7C | apply evidence: phase events (+per-item data), report.json `phases_completed`/`artifacts`, checklist `per_item` | #22 |
+| 7D | operator acceptances: stable action keys, acceptances.json, `--acceptances` (gate clearing, fail-safe) | — |
 
 ## The full pipeline (all read-only / offline)
 
@@ -186,8 +187,6 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
   perimeter). The per-item lines already exist in
   `logs/migration_report.log`; the checklist upgrade does NOT depend on
   this.
-- **PR 7D — operator acceptance file**: acceptances.json consumed by the
-  checklist to clear reviewed notes (statuses/summary `accepted`).
 - **PR 7E — inventory expansion wave 1** (capture-first like 6B-pre):
   email routing, default address, email filters, redirects.
 - **Real-smoke refinements** (`PR7A_REAL_SMOKE.md`, findings 1 and 2

@@ -82,6 +82,10 @@ type ChecklistInputs struct {
 	Policy               ChecklistInputRef `json:"policy"`
 	DNSPlan              ChecklistInputRef `json:"dns_plan"`
 	MigrationReport      ChecklistInputRef `json:"migration_report"`
+	// Acceptances records the operator acceptance file reference for the
+	// audit trail. It is NOT part of the provenance chain verification: an
+	// acceptance file is operator input, not a derived artifact.
+	Acceptances ChecklistInputRef `json:"acceptances"`
 }
 
 // ChecklistEvidence is one already-safe pointer shown to the operator (diff
@@ -115,15 +119,21 @@ type ChecklistSection struct {
 	ManualActionRefs    []string             `json:"manual_action_refs"`
 	Blockers            []string             `json:"blockers"`
 	PolicyFindingRefs   []string             `json:"policy_finding_refs"`
-	// AcceptedByOperator is reserved for the operator-acceptance work
-	// (PR 7D); v0 always emits it empty.
+	// AcceptedByOperator lists the ids of this section's actions that an
+	// operator acceptance matched (PR 7D).
 	AcceptedByOperator []string            `json:"accepted_by_operator"`
 	PostCutoverChecks  []string            `json:"post_cutover_checks"`
 	Evidence           []ChecklistEvidence `json:"evidence"`
 }
 
 type ManualAction struct {
-	ID              string              `json:"id"`
+	ID string `json:"id"`
+	// Key is the STABLE acceptance handle (PR 7D): a content-derived hash
+	// (AK-<12 hex> over type/section/title/detail) that survives
+	// regeneration from the same facts, unlike the positional MA-nnn id.
+	// When the underlying fact changes the key changes too, so a stale
+	// acceptance stops matching and the action resurfaces — fail-safe.
+	Key             string              `json:"key"`
 	Type            string              `json:"type"`
 	Section         string              `json:"section"`
 	BlockingCutover bool                `json:"blocking_cutover"`
@@ -133,7 +143,40 @@ type ManualAction struct {
 	Evidence        []ChecklistEvidence `json:"evidence"`
 	OperatorAction  string              `json:"operator_action"`
 	Acceptable      bool                `json:"acceptable"`
+	// Acceptance state (PR 7D): set when an operator acceptance matched
+	// this action's key AND the action is acceptable. An accepted action
+	// stops gating the section status and the overall rollup.
+	Accepted       bool   `json:"accepted"`
+	AcceptedBy     string `json:"accepted_by,omitempty"`
+	AcceptedAt     string `json:"accepted_at,omitempty"`
+	AcceptedReason string `json:"accepted_reason,omitempty"`
 }
+
+// OperatorAcceptance is one entry of the operator acceptance file: a formal,
+// attributable decision that a reviewed manual action does not gate the
+// cutover. It binds to the action's stable Key, never to the positional id.
+type OperatorAcceptance struct {
+	ActionKey  string `json:"action_key"`
+	ActionID   string `json:"action_id,omitempty"` // display only
+	Reason     string `json:"reason"`
+	AcceptedBy string `json:"accepted_by"`
+	AcceptedAt string `json:"accepted_at"`
+}
+
+// AcceptanceFile is the on-disk acceptances.json format. ChecklistSHA256
+// records WHICH checklist file the operator reviewed (audit anchor); when
+// ChecklistFile is present the CLI verifies the hash strictly and rejects
+// the whole file on mismatch.
+type AcceptanceFile struct {
+	Mode            string               `json:"mode"`
+	FormatVersion   int                  `json:"format_version"`
+	ChecklistFile   string               `json:"checklist_file,omitempty"`
+	ChecklistSHA256 string               `json:"checklist_sha256"`
+	Acceptances     []OperatorAcceptance `json:"acceptances"`
+}
+
+// AcceptanceFileMode is the required mode marker of acceptances.json.
+const AcceptanceFileMode = "operator-acceptances"
 
 // ChecklistSummary counts sections by status, plus totals for expected
 // differences (entries, not sections), manual actions, and operator
@@ -197,6 +240,9 @@ type ChecklistInput struct {
 	Policy          PolicyReport
 	DNSPlan         *DNSPlan
 	MigrationReport *MigrationReportInfo
+	// Acceptances carries the (already loaded and validated) operator
+	// acceptance entries; the engine matches them by action key.
+	Acceptances []OperatorAcceptance
 	// InputRefs carries the file/sha256 references of every input as the
 	// caller read them; the engine copies them into the checklist and
 	// verifies the provenance chain against the hashes the artifacts

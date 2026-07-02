@@ -32,11 +32,12 @@ func runInventoryChecklistCmd(args []string) int {
 	policyPath := fs.String("policy", "", "path to the policy_report.json (required)")
 	planPath := fs.String("dns-plan", "", "optional dns_import_plan.json for DNS expected-difference detection")
 	reportPath := fs.String("migration-report", "", "optional report.json from an --apply run, used as migration evidence")
+	acceptancesPath := fs.String("acceptances", "", "optional acceptances.json with operator-accepted manual actions (bound to stable action keys)")
 	outJSON := fs.String("output-json", "migration_checklist.json", "path for the machine-readable checklist")
 	outMD := fs.String("output-md", "migration_checklist.md", "path for the operator-facing checklist")
 	failOnNotReady := fs.Bool("fail-on-not-ready", false, "exit with code 3 unless the overall status is READY_TO_CUTOVER or READY_WITH_MANUAL_NOTES (for CI gating)")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory checklist --source SRC.json --destination DEST.json --diff DIFF.json --policy POLICY.json [--dns-plan PLAN.json] [--migration-report REPORT.json] [--output-json PATH] [--output-md PATH] [--fail-on-not-ready]")
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory checklist --source SRC.json --destination DEST.json --diff DIFF.json --policy POLICY.json [--dns-plan PLAN.json] [--migration-report REPORT.json] [--acceptances ACC.json] [--output-json PATH] [--output-md PATH] [--fail-on-not-ready]")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -86,6 +87,16 @@ func runInventoryChecklistCmd(args []string) int {
 		}
 		report = &r
 	}
+	var acceptances []accountinventory.OperatorAcceptance
+	var acceptanceWarning string
+	if *acceptancesPath != "" {
+		accs, warning, err := loadAcceptancesFile(*acceptancesPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+		acceptances, acceptanceWarning = accs, warning
+	}
 
 	// Input refs (file + raw-byte sha256) are computed BEFORE building the
 	// checklist: the engine verifies the provenance chain against them.
@@ -118,17 +129,26 @@ func runInventoryChecklistCmd(args []string) int {
 			return 1
 		}
 	}
+	if *acceptancesPath != "" {
+		if refs.Acceptances, err = checklistInputRef(*acceptancesPath); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+	}
 
 	// One single "now": the SSL-validity reference time and the report's
 	// own Generated timestamp must agree for auditability.
 	now := time.Now().UTC()
 	c := accountinventory.BuildChecklist(accountinventory.ChecklistInput{
 		Source: srcInv, Destination: destInv, Diff: d, Policy: p,
-		DNSPlan: plan, MigrationReport: report,
+		DNSPlan: plan, MigrationReport: report, Acceptances: acceptances,
 		InputRefs: refs,
 		Now:       now,
 	})
 	c.GeneratedAt = now.Format(time.RFC3339)
+	if acceptanceWarning != "" {
+		c.Warnings = append(c.Warnings, acceptanceWarning)
+	}
 
 	if err := accountinventory.WriteChecklistJSON(*outJSON, c); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -182,6 +202,55 @@ func loadDNSPlanFile(path string) (accountinventory.DNSPlan, error) {
 		return p, fmt.Errorf("%s: not a DNS import plan (mode %q)", path, p.Mode)
 	}
 	return p, nil
+}
+
+// loadAcceptancesFile reads and validates an acceptances.json. Structural
+// problems (wrong mode, missing required fields, bad JSON) are hard errors.
+// When the file names the checklist the operator reviewed (checklist_file),
+// its sha256 is verified STRICTLY: a mismatch — or an unreadable file —
+// rejects every acceptance (returned as a warning with zero entries), never
+// silently applies them. The checklist is still generated either way.
+func loadAcceptancesFile(path string) ([]accountinventory.OperatorAcceptance, string, error) {
+	var f accountinventory.AcceptanceFile
+	b, err := os.ReadFile(path) // #nosec G304 -- user-supplied CLI input path, read-only
+	if err != nil {
+		return nil, "", fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		return nil, "", fmt.Errorf("parse %s: %w", path, err)
+	}
+	if f.Mode != accountinventory.AcceptanceFileMode {
+		return nil, "", fmt.Errorf("%s: not an operator acceptance file (mode %q)", path, f.Mode)
+	}
+	if f.ChecklistSHA256 == "" {
+		return nil, "", fmt.Errorf("%s: checklist_sha256 is required (the sha256 of the checklist file the operator reviewed)", path)
+	}
+	for i, a := range f.Acceptances {
+		switch {
+		case a.ActionKey == "":
+			return nil, "", fmt.Errorf("%s: acceptance %d: action_key is required", path, i+1)
+		case a.Reason == "":
+			return nil, "", fmt.Errorf("%s: acceptance %d (%s): reason is required", path, i+1, a.ActionKey)
+		case a.AcceptedBy == "":
+			return nil, "", fmt.Errorf("%s: acceptance %d (%s): accepted_by is required", path, i+1, a.ActionKey)
+		case a.AcceptedAt == "":
+			return nil, "", fmt.Errorf("%s: acceptance %d (%s): accepted_at is required", path, i+1, a.ActionKey)
+		}
+	}
+	if f.ChecklistFile != "" {
+		sum, err := fileSHA256(f.ChecklistFile)
+		if err != nil {
+			return nil, fmt.Sprintf(
+				"acceptances REJECTED: the referenced checklist %s could not be hashed (%v) — nothing was accepted",
+				f.ChecklistFile, err), nil
+		}
+		if sum != f.ChecklistSHA256 {
+			return nil, fmt.Sprintf(
+				"acceptances REJECTED: %s no longer matches the reviewed checklist (sha256 %s, file has %s) — re-review and re-accept; nothing was accepted",
+				f.ChecklistFile, f.ChecklistSHA256, sum), nil
+		}
+	}
+	return f.Acceptances, "", nil
 }
 
 // loadMigrationReportFile reads and minimally validates a report.json from
