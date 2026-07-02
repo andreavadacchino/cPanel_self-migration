@@ -50,6 +50,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | UI-2b | accept manual actions from the browser (acceptances.json upsert + checklist regen) | #27 |
 | 6C | `dns verify`: read-only per-op verification of destination zones against a dns plan (`--fail-on-drift`, stale-plan sha256 gate, `sshx.DialDest`, structural literal-names safety test) | #29 |
 | UI-3 | apply/run monitor: dashboard tails events.jsonl (monitor-only, zero-JS, stall detection, bounded parse/render) | #30 |
+| fix | dispatch: `inventory` missing/unknown subcommand → exit 2 + usage (was: silent fall-through to the migration flow); E2E dispatch tests via TestMain re-exec | #32 |
 
 ## The full pipeline (all read-only / offline)
 
