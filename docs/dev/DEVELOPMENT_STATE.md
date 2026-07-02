@@ -1,11 +1,12 @@
 # Development State — cPanel Self-Migration (handoff)
 
 Snapshot for starting a fresh development session. Last updated after
-**PR 7A** (`inventory checklist` — operator migration checklist v0).
+**PR 7B** (provenance chain — `chain_verified` end-to-end).
 
 **PR numbering note:** the 6x series is the DNS track (6C = `dns verify`,
 6D = `dns apply`, both not started); the 7x series is the migration
-checklist / final verification track (7A = checklist v0, this PR).
+checklist / final verification track (7A = checklist v0, 7B =
+provenance chain, both merged).
 
 ## What this tool is
 
@@ -38,7 +39,10 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 6A | DNS import/verifier micro-design (v2 post adversarial review) | #11 |
 | 6B-pre | real-server DNS capability captures (mass_edit_zone OK on v110) | #12 |
 | 6B | `inventory dns-plan`: offline DNS import plan builder | #13 |
-| 7A | `inventory checklist`: operator migration checklist v0 | — |
+| 7A | `inventory checklist`: operator migration checklist v0 | #16 |
+| 7A-smoke | real-data smoke on doctorbike.it captures (`PR7A_REAL_SMOKE.md`) | #17 |
+| 6B-fix | dns-plan: TXT already matching the ip-map translation → skip (cyclic-map safe, single-pass substitution) | #18 |
+| 7B | provenance chain: diff/policy record input hashes, checklist verifies `chain_verified` | #19 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -71,8 +75,16 @@ apply report (run_level evidence only — per-item needs PR 7C apply
 events); a dns-plan proves "expected" only via action `skip`;
 non-inventoried areas (email routing, default address, filters,
 redirects) and root-only areas (quota/package, server config) surface as
-explicit sections instead of silently reading ok. `chain_verified` stays
-false until diff/policy record their input hashes (PR 7B).
+explicit sections instead of silently reading ok.
+
+Provenance chain (PR 7B): `inventory diff` records
+`source_sha256`/`destination_sha256`, `inventory policy` records
+`input_diff_sha256` (raw file bytes); the checklist verifies every link
+(diff→inventories, policy→diff, dns-plan→inventories) against the files
+it composes. All match → `chain_verified: true`. Missing hashes
+(pre-7B artifacts) → warning, no gating. A PROVEN mismatch → explicit
+warning and any READY_* verdict capped to NOT_READY (the cap never
+improves a worse verdict).
 
 ## Architecture map
 
@@ -154,7 +166,11 @@ with a TOTP, then `wordpress_run_remote_command` running `uapi …` /
 `cpapi2 …` / `crontab -l`), save one file per API call into a capture
 dir, and replay them through `accountinventory.Collect` with a small
 throwaway `Runner` test (see git history of PR5B/5C for the harness — it
-is intentionally never committed). Diff/policy then run offline with the
+is intentionally never committed). **The Orbit gateway masks
+emails/paths/IPs in command output and the masking corrupts JSON:
+base64-encode every capture in transit (`uapi … | base64 -w0`), decode
+locally, validate with a JSON parse** (learned in the 7A smoke,
+`PR7A_REAL_SMOKE.md`). Diff/policy then run offline with the
 real binary. Accounts must be registered in Orbit to be reachable;
 `turtlebeachandora.com`/`fidopetstore.it` exist on the server but are NOT
 in Orbit — `doctorbike.it` and `italplant.com` are and were used.
@@ -171,6 +187,12 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
   checklist to clear reviewed notes (statuses/summary `accepted`).
 - **PR 7E — inventory expansion wave 1** (capture-first like 6B-pre):
   email routing, default address, email filters, redirects.
+- **Real-smoke refinements** (`PR7A_REAL_SMOKE.md`, finding 1 already
+  fixed in #18): (2) source certificates already EXPIRED still gate as
+  SSL blockers when their domain grouping is missing on the destination
+  — treat them as not_applicable, and consider semantic wildcard
+  coverage; (3) regenerated-DKIM reviews are silent — deserve a
+  dedicated operator action (fits 7E).
 - **PR 6C — `dns verify`** (read-only): re-fetch destination zones and
   compare against a plan; exit 3 on drift/mismatch. Reuses
   `internal/sshtest` for end-to-end tests.
