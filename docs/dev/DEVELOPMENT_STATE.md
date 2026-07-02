@@ -44,7 +44,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 6B-fix | dns-plan: TXT already matching the ip-map translation → skip (cyclic-map safe, single-pass substitution) | #18 |
 | 7B | provenance chain: diff/policy record input hashes, checklist verifies `chain_verified` | #19 |
 | 7A-ssl-fix | checklist SSL: expired source cert groups → expected, RFC 6125 wildcard coverage | #21 |
-| 7C | apply evidence: phase events (+per-item data), report.json `phases_completed`/`artifacts`, checklist `per_item` | — |
+| 7C | apply evidence: phase events (+per-item data), report.json `phases_completed`/`artifacts`, checklist `per_item` | #22 |
 
 ## The full pipeline (all read-only / offline)
 
