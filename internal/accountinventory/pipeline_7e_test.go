@@ -197,3 +197,119 @@ func TestChecklistDKIMRegeneratedGetsConfirmAction(t *testing.T) {
 		t.Fatalf("DKIM CONFIRM_DNS_RECORD = %+v, want exactly 1 non-blocking", dkim)
 	}
 }
+
+// --- round-1 reviewer HIGH findings, pinned ---------------------------------
+
+// HIGH 1: a diff artifact missing an expected section key (produced by
+// an older binary) must surface as a review — never silence.
+func TestPolicySectionMissingFromDiffIsReview(t *testing.T) {
+	d := DiffInventories(baseInventory(), baseInventory())
+	delete(d.Sections, "email_routing")
+	p := EvaluatePolicy(d)
+	found := false
+	for _, f := range p.Findings {
+		if f.ID == "POL-SECTION-MISSING" && f.Section == "email_routing" && f.Severity == SeverityReview {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("findings = %+v, want POL-SECTION-MISSING review for email_routing", p.Findings)
+	}
+	if p.OverallStatus != StatusReviewRequired {
+		t.Errorf("overall = %q, want review_required", p.OverallStatus)
+	}
+}
+
+// HIGH 1, end to end (the reviewer's reproduction): a REAL routing
+// divergence combined with a stale diff that lacks the four 7E section
+// keys must NEVER read READY_TO_CUTOVER.
+func TestChecklistStaleDiffMissingSectionNeverReadsOK(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	dest.EmailRouting.Items[0].Routing = "remote" // mail silently repointed
+
+	d := DiffInventories(src, dest)
+	for _, name := range []string{"email_routing", "default_address", "email_filters", "redirects"} {
+		delete(d.Sections, name) // simulate a pre-7E diff artifact
+	}
+	in := ChecklistInput{
+		Source: src, Destination: dest, Diff: d, Policy: EvaluatePolicy(d),
+		MigrationReport: chkApplyReport(), Now: chkNow,
+	}
+	c := BuildChecklist(in)
+
+	er := chkSection(t, c, "email_routing")
+	if er.Status == SectionOK {
+		t.Fatalf("email_routing = ok on a stale diff hiding a routing change — false green")
+	}
+	if c.OverallStatus == OverallReadyToCutover {
+		t.Fatalf("overall = READY_TO_CUTOVER with a hidden routing divergence — false green")
+	}
+}
+
+// HIGH 2: an operator-created "temporary" redirect can plausibly report
+// no status code, but it always targets an absolute URL — it must stay
+// genuine (CONFIRM_REDIRECT), never CMS noise.
+func TestPolicyOperatorTemporaryRedirectIsNotCMS(t *testing.T) {
+	src, dest := baseInventory(), baseInventory()
+	src.Redirects.Items = []RedirectEntry{{
+		Domain: "main.example", Source: "/promo", Destination: "https://main.example/new-promo",
+		Kind: "rewrite", Type: "temporary", StatusCode: 0,
+	}}
+	dest.Redirects.Items = nil
+	p := EvaluatePolicy(DiffInventories(src, dest))
+	for _, f := range p.Findings {
+		if f.ID == "POL-REDIRECT-CMS-REMOVED" {
+			t.Fatalf("operator temporary redirect classified as CMS noise: %+v", f)
+		}
+	}
+	found := false
+	for _, f := range p.Findings {
+		if f.ID == "POL-REDIRECT-REMOVED" && f.Severity == SeverityReview {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("findings = %+v, want POL-REDIRECT-REMOVED review", p.Findings)
+	}
+}
+
+func TestChecklistOperatorTemporaryRedirectGetsConfirmAction(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	src.Redirects.Items = []RedirectEntry{{
+		Domain: "main.example", Source: "/promo", Destination: "https://main.example/new-promo",
+		Kind: "rewrite", Type: "temporary", StatusCode: 0,
+	}}
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	if acts := chkActionsOf(c, "redirects", MActionConfirmRedirect); len(acts) != 1 {
+		t.Fatalf("CONFIRM_REDIRECT = %+v, want exactly 1 (URL destination = genuine)", acts)
+	}
+	rd := chkSection(t, c, "redirects")
+	if len(rd.ExpectedDifferences) != 0 {
+		t.Errorf("expected differences = %+v, want none for a genuine redirect", rd.ExpectedDifferences)
+	}
+}
+
+// MEDIUM: when the dns comparison is skipped but mail routing has data,
+// the checklist must say explicitly that the MX exchangers were never
+// verified.
+func TestChecklistWarnsAboutUnverifiedMXWhenDNSSkipped(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	src.DNS = DNSSection{ConfigSection: ConfigSection{Warnings: []string{}}, Zones: []DNSZoneResult{}} // unavailable
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	found := false
+	for _, w := range c.Warnings {
+		if strings.Contains(w, "MX exchangers behind email routing") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want the unverified-MX warning", c.Warnings)
+	}
+}

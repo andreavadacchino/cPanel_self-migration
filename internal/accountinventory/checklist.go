@@ -397,6 +397,14 @@ func (b *checklistBuilder) evalRecreateSection(sec *ChecklistSection, name strin
 // per-domain confirmation, replacing the old blanket not_inventoried
 // check.
 func (b *checklistBuilder) evalEmailRoutingSection(sec *ChecklistSection, findings []PolicyFinding) {
+	// The routing diff compares the routing MODE only; the exchangers
+	// live in the dns section. When the dns comparison was skipped the
+	// operator must know the MX rrsets behind this routing were never
+	// verified — a generic "dns incomplete" note is not enough.
+	if dnsSec, ok := b.in.Diff.Sections["dns"]; ok && len(dnsSec.Skipped) > 0 && sec.SourceCount > 0 {
+		b.warnings = append(b.warnings,
+			"dns comparison was skipped — the MX exchangers behind email routing were not verified; compare them manually before cutover")
+	}
 	for _, f := range findings {
 		switch f.ID {
 		case "POL-MAILROUTE-REMOVED":

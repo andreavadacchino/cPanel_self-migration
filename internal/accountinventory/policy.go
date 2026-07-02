@@ -101,6 +101,16 @@ func EvaluatePolicy(d InventoryDiff) PolicyReport {
 	for _, name := range diffSectionNames {
 		sec, ok := d.Sections[name]
 		if !ok {
+			// A diff produced by an older tool version (or otherwise
+			// incomplete) simply lacks the key: silence here would let a
+			// real difference in that area read as ok downstream. Same
+			// fail-safe class as POL-SECTION-UNAVAILABLE.
+			emit(PolicyFinding{
+				ID: "POL-SECTION-MISSING", Section: name, Severity: SeverityReview,
+				Title:          name + " missing from the diff",
+				Detail:         "the diff artifact has no \"" + name + "\" section — produced by an older tool version or incomplete",
+				Recommendation: "Regenerate the diff with the current binary, then re-run the policy.",
+			})
 			continue
 		}
 		switch name {
@@ -582,8 +592,22 @@ func evalCron(sec SectionDiff, emit func(PolicyFinding)) {
 // destination is expected, not operator work.
 const cmsRewriteDetailPrefix = "rewrite/temporary/- "
 
+// isCMSRewriteDetail additionally requires a NON-URL destination: every
+// CMS rewrite captured live rewrites to a relative path
+// (`%{ENV:REWRITEBASE}img/…`), while operator-created redirects always
+// target an absolute URL (the cPanel UI requires one). An operator
+// "temporary" redirect that reports no status code therefore still
+// classifies as genuine — the fail-safe direction. A hand-authored
+// rewrite to a relative path stays CMS-class: that .htaccess content
+// travels with the web files either way.
 func isCMSRewriteDetail(detail string) bool {
-	return strings.HasPrefix(detail, cmsRewriteDetailPrefix)
+	if !strings.HasPrefix(detail, cmsRewriteDetailPrefix) {
+		return false
+	}
+	dest := strings.TrimPrefix(detail, cmsRewriteDetailPrefix+"→ ")
+	return !strings.HasPrefix(dest, "http://") &&
+		!strings.HasPrefix(dest, "https://") &&
+		!strings.HasPrefix(dest, "//")
 }
 
 // evalRedirects: CMS-generated rewrites are informational (they live in
