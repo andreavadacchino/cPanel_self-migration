@@ -148,6 +148,20 @@ func WriteChecklistMarkdown(path string, c MigrationChecklist) error {
 	}
 	sb.WriteString("\n")
 
+	if len(c.CoverageManifest) > 0 {
+		// Declarative boundary of the tool's sight (PR 1A): every known area
+		// with its coverage state — a not_collected area is a visible line,
+		// never a silent absence. No action or verdict derives from it.
+		fmt.Fprintf(&sb, "## Coverage\n\n")
+		sb.WriteString("| Area | State | Note |\n")
+		sb.WriteString("|------|-------|------|\n")
+		for _, a := range c.CoverageManifest {
+			fmt.Fprintf(&sb, "| %s | %s | %s |\n",
+				mdCell(a.Area, 30), mdCell(string(a.State), 16), mdCell(a.Note, 140))
+		}
+		sb.WriteString("\n")
+	}
+
 	if len(c.ManualActions) > 0 {
 		// The Key column is the STABLE acceptance handle: acceptances.json
 		// entries reference it (the positional MA-nnn id shifts when
