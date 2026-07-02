@@ -486,3 +486,42 @@ func TestParseRunMonitorBoundsPhaseRows(t *testing.T) {
 		t.Errorf("parse note = %q, want an overflow marker for the dropped phases", m.ParseNote)
 	}
 }
+
+// Round-2 findings: the round-1 fixes themselves regressed two edges.
+
+// (c) Ordinary NTP skew (seconds) on a HEALTHY run must not stall it —
+// only a timestamp beyond the tolerance is untrustworthy.
+func TestParseRunMonitorSmallFutureSkewStaysLive(t *testing.T) {
+	evs := []events.Event{
+		monEv("run-x", 0, "", events.EventRunStarted, events.LevelInfo, "", nil),
+		monEv("run-x", time.Minute, events.PhaseCopyFiles, events.EventPhaseStarted, events.LevelInfo, "", nil),
+	}
+	skewedNow := monT0.Add(time.Minute).Add(-3 * time.Second) // writer clock 3s ahead
+	m := parseRunMonitor(monLines(t, evs...), skewedNow)
+	if m == nil {
+		t.Fatal("monitor is nil")
+	}
+	if m.Stalled || !m.Live {
+		t.Errorf("stalled=%v live=%v — 3s of clock skew must not stall a healthy run", m.Stalled, m.Live)
+	}
+}
+
+// (b) The overflow note counts DISTINCT dropped phases, not their events.
+func TestParseRunMonitorOverflowNoteCountsDistinctPhases(t *testing.T) {
+	evs := []events.Event{monEv("run-x", 0, "", events.EventRunStarted, events.LevelInfo, "", nil)}
+	for i := 0; i < monitorMaxPhases; i++ { // fill the cap
+		evs = append(evs, monEv("run-x", time.Duration(i)*time.Second,
+			events.Phase(fmt.Sprintf("phase-%02d", i)), events.EventPhaseStarted, events.LevelInfo, "", nil))
+	}
+	// ONE extra phase with THREE events: the note must say 1, not 3.
+	for _, typ := range []events.EventType{events.EventPhaseStarted, events.EventPhaseCompleted, events.EventPhaseFailed} {
+		evs = append(evs, monEv("run-x", 100*time.Second, "phase-overflow", typ, events.LevelInfo, "", nil))
+	}
+	m := parseRunMonitor(monLines(t, evs...), monT0.Add(101*time.Second))
+	if m == nil {
+		t.Fatal("monitor is nil")
+	}
+	if !strings.Contains(m.ParseNote, "1 additional phase row(s) not shown") {
+		t.Errorf("parse note = %q, want a DISTINCT-phase count of 1", m.ParseNote)
+	}
+}

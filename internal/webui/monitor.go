@@ -24,6 +24,11 @@ import (
 // (a killed apply leaves no run_completed/run_failed behind).
 const monitorStallCutoff = 10 * time.Minute
 
+// monitorClockSkewTolerance absorbs ordinary NTP slew between the
+// writer's clock and the UI's: a last event a few seconds in the future
+// is normal jitter, one beyond this is as untrustworthy as a stale one.
+const monitorClockSkewTolerance = 30 * time.Second
+
 // monitorTailBytes bounds how much of events.jsonl is read per page
 // build: the file is append-only across runs and can grow unbounded.
 const monitorTailBytes = 2 << 20 // 2 MiB
@@ -245,12 +250,18 @@ func parseRunMonitor(data []byte, now time.Time) *runMonitor {
 			i, seen := phaseIdx[ev.Phase]
 			if !seen {
 				if len(m.Phases) >= monitorMaxPhases {
+					// Memoize the drop (sentinel -1) so later events of the
+					// SAME phase are not recounted: the note reports
+					// distinct hidden phases, not their event count.
+					phaseIdx[ev.Phase] = -1
 					droppedPhases++
 					continue
 				}
 				m.Phases = append(m.Phases, monitorPhase{Phase: ev.Phase, State: "running"})
 				i = len(m.Phases) - 1
 				phaseIdx[ev.Phase] = i
+			} else if i < 0 {
+				continue // dropped phase, already counted once
 			}
 			switch ev.Type {
 			case string(events.EventPhaseStarted):
@@ -276,12 +287,13 @@ func parseRunMonitor(data []byte, now time.Time) *runMonitor {
 		}
 	}
 
-	// A last event from the FUTURE is exactly as untrustworthy as one
-	// that is too old (clock skew, corrupted ts): both stall the monitor
+	// A last event far in the FUTURE is exactly as untrustworthy as one
+	// that is too old (corrupted or forged ts): both stall the monitor
 	// instead of keeping the page refreshing forever on unknown state.
+	// Small negative skew is ordinary clock jitter and stays live.
 	if m.State == "running" {
 		elapsed := now.Sub(last.TS)
-		if elapsed < 0 || elapsed > monitorStallCutoff {
+		if elapsed < -monitorClockSkewTolerance || elapsed > monitorStallCutoff {
 			m.Stalled = true
 		}
 	}
