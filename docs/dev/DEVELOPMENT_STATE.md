@@ -1,12 +1,11 @@
 # Development State — cPanel Self-Migration (handoff)
 
 Snapshot for starting a fresh development session. Last updated after
-**PR 7B** (provenance chain — `chain_verified` end-to-end).
+**PR 6C** (`dns verify` — read-only per-op plan verification).
 
 **PR numbering note:** the 6x series is the DNS track (6C = `dns verify`,
-6D = `dns apply`, both not started); the 7x series is the migration
-checklist / final verification track (7A = checklist v0, 7B =
-provenance chain, both merged).
+merged; 6D = `dns apply`, not started — the only writer); the 7x series
+is the migration checklist / final verification track.
 
 ## What this tool is
 
@@ -49,6 +48,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | UI-1 | `ui` subcommand: local read-only dashboard (checklist + staleness + artifacts), loopback-only | #24 |
 | UI-2a | connections form (host.yaml) + run-from-browser (CLI subprocess pipeline), CSRF/rebinding gates | #25, #26 |
 | UI-2b | accept manual actions from the browser (acceptances.json upsert + checklist regen) | #27 |
+| 6C | `dns verify`: read-only per-op verification of destination zones against a dns plan (`--fail-on-drift`, stale-plan sha256 gate, `sshx.DialDest`, structural literal-names safety test) | #29 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -196,14 +196,22 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
   already fixed — #18 and the SSL-expired/wildcard follow-up): (3)
   regenerated-DKIM reviews are silent — deserve a dedicated operator
   action (fits 7E).
-- **PR 6C — `dns verify`** (read-only): re-fetch destination zones and
-  compare against a plan; exit 3 on drift/mismatch. Reuses
-  `internal/sshtest` for end-to-end tests.
 - **PR 6D — `dns apply`**: the only writer. High risk — full backup +
   rollback protocol from the project CLAUDE.md, sacrificial-zone smoke
   first, and a live session for Orbit approvals. Contract in
   `PR6A_DNS_IMPORT_DESIGN.md`; write API facts in
   `PR6B_PRE_CAPTURES.md` (mass_edit_zone is line_index-addressed!).
+  6C's post-apply certification (`dns verify --fail-on-drift`) and the
+  safety tests (lexical + structural literal-names guard in
+  `dns_safety_test.go`) are in place; 6D must consciously amend the
+  forbidden list to introduce its writer.
+- **Follow-ups from the 6C go-review** (non-blocking): (a) `inventory
+  <unknown-subcommand>` still falls through silently to the migration
+  flow (`main.go` dispatch) — same footgun class the `dns` namespace
+  now refuses with exit 2; (b) LOW: `classify()` checks
+  `utf8.ValidString` only on source TXT values, not destination ones —
+  a non-UTF-8 dest TXT can only fail-safe toward drift/manual, never
+  toward a silent pass, so cosmetic only.
 - **Policy rule refinement / configurable rules** — only if real usage
   shows the v0 rule table is too aggressive; the smoke test did not show
   false positives (the 24 blockers were legitimate for two *different*
