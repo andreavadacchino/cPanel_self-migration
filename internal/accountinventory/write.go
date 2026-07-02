@@ -243,6 +243,11 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 	writeDNSSection(sb, inv.DNS)
 	writeCronSection(sb, inv.Cron)
 
+	writeEmailRoutingSection(sb, inv.EmailRouting)
+	writeDefaultAddressSection(sb, inv.DefaultAddresses)
+	writeEmailFiltersSection(sb, inv.EmailFilters)
+	writeRedirectsSection(sb, inv.Redirects)
+
 	if len(inv.Warnings) > 0 {
 		fmt.Fprintf(sb, "## Warnings (%d)\n\n", len(inv.Warnings))
 		for _, w := range inv.Warnings {
@@ -250,4 +255,71 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 		}
 		sb.WriteString("\n")
 	}
+}
+
+func writeEmailRoutingSection(sb *strings.Builder, sec EmailRoutingSection) {
+	writeConfigSection(sb, "Email Routing", sec.ConfigSection, len(sec.Items))
+	if len(sec.Items) == 0 {
+		return
+	}
+	sb.WriteString("| Domain | Routing | Detected | Always Accept | MX Records |\n")
+	sb.WriteString("|--------|---------|----------|---------------|------------|\n")
+	for _, e := range sec.Items {
+		mx := make([]string, 0, len(e.MXRecords))
+		for _, m := range e.MXRecords {
+			mx = append(mx, fmt.Sprintf("%d %s", m.Priority, m.Exchange))
+		}
+		fmt.Fprintf(sb, "| %s | %s | %s | %t | %s |\n",
+			e.Domain, e.Routing, e.Detected, e.AlwaysAccept, mdCell(strings.Join(mx, "; "), 80))
+	}
+	sb.WriteString("\n")
+}
+
+func writeDefaultAddressSection(sb *strings.Builder, sec DefaultAddressSection) {
+	writeConfigSection(sb, "Default Addresses", sec.ConfigSection, len(sec.Items))
+	if len(sec.Items) == 0 {
+		return
+	}
+	sb.WriteString("| Domain | Default Address |\n")
+	sb.WriteString("|--------|-----------------|\n")
+	for _, e := range sec.Items {
+		fmt.Fprintf(sb, "| %s | %s |\n", e.Domain, mdCell(e.DefaultAddress, 80))
+	}
+	sb.WriteString("\n")
+}
+
+func writeEmailFiltersSection(sb *strings.Builder, sec EmailFilterSection) {
+	writeConfigSection(sb, "Email Filters", sec.ConfigSection, len(sec.Items))
+	if len(sec.Items) == 0 {
+		return
+	}
+	sb.WriteString("| Account | Filter | Enabled | Rules | Actions |\n")
+	sb.WriteString("|---------|--------|---------|-------|--------|\n")
+	for _, e := range sec.Items {
+		account := e.Account
+		if account == "" {
+			account = "(account-level)"
+		}
+		fmt.Fprintf(sb, "| %s | %s | %t | %d | %d |\n",
+			mdCell(account, 60), mdCell(e.FilterName, 60), e.Enabled, e.RuleCount, e.ActionCount)
+	}
+	sb.WriteString("\n")
+}
+
+func writeRedirectsSection(sb *strings.Builder, sec RedirectSection) {
+	writeConfigSection(sb, "Redirects", sec.ConfigSection, len(sec.Items))
+	if len(sec.Items) == 0 {
+		return
+	}
+	sb.WriteString("| Domain | Source | Destination | Kind | Type | Status |\n")
+	sb.WriteString("|--------|--------|-------------|------|------|--------|\n")
+	for _, e := range sec.Items {
+		status := "-"
+		if e.StatusCode != 0 {
+			status = fmt.Sprintf("%d", e.StatusCode)
+		}
+		fmt.Fprintf(sb, "| %s | %s | %s | %s | %s | %s |\n",
+			e.Domain, mdCell(e.Source, 60), mdCell(e.Destination, 60), e.Kind, e.Type, status)
+	}
+	sb.WriteString("\n")
 }

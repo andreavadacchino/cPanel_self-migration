@@ -51,9 +51,9 @@ func newFakeRunnerFromFixtures(t *testing.T) *fakeRunner {
 		"Email list_forwarders":          loadFixture(t, "email_forwarders.json"),
 		"Email list_auto_responders":     loadFixture(t, "email_autoresponders.json"),
 		"Mysql list_databases":           wrapUAPI(`[{"database":"src_wp","disk_usage":1024,"users":["src_admin"]}]`),
-		"Mysql list_users":              wrapUAPI(`[{"user":"src_admin","short_user":"admin","databases":["src_wp"]}]`),
+		"Mysql list_users":               wrapUAPI(`[{"user":"src_admin","short_user":"admin","databases":["src_wp"]}]`),
 		"Ftp list_ftp_with_disk":         loadFixture(t, "ftp_list.json"),
-		"SSL list_certs":                loadFixture(t, "ssl_list_certs.json"),
+		"SSL list_certs":                 loadFixture(t, "ssl_list_certs.json"),
 		"LangPHP php_get_vhost_versions": loadFixture(t, "php_vhost_versions.json"),
 		"ZoneEdit fetchzone_records":     loadFixture(t, "dns_fetchzone_records.json"),
 		"crontab -l":                     []byte(fakeCrontabOutput),
@@ -149,11 +149,11 @@ func TestCollectForwardersAndAutoresponders(t *testing.T) {
 
 func TestCollectForwardersWarningNotFatal(t *testing.T) {
 	runner := &fakeRunner{responses: map[string][]byte{
-		"DomainInfo list_domains":    loadFixture(t, "domaininfo_list.json"),
-		"DomainInfo domains_data":    loadFixture(t, "domaininfo_domains_data.json"),
-		"Email list_pops_with_disk":  loadFixture(t, "email_list_pops.json"),
-		"Mysql list_databases":       wrapUAPI(`[]`),
-		"Mysql list_users":           wrapUAPI(`[]`),
+		"DomainInfo list_domains":   loadFixture(t, "domaininfo_list.json"),
+		"DomainInfo domains_data":   loadFixture(t, "domaininfo_domains_data.json"),
+		"Email list_pops_with_disk": loadFixture(t, "email_list_pops.json"),
+		"Mysql list_databases":      wrapUAPI(`[]`),
+		"Mysql list_users":          wrapUAPI(`[]`),
 	}}
 	ctx := context.Background()
 
@@ -546,6 +546,9 @@ func TestCollectMailboxWarningNotFatal(t *testing.T) {
 		"DomainInfo domains_data": loadFixture(t, "domaininfo_domains_data.json"),
 		"Mysql list_databases":    wrapUAPI(`[]`),
 		"Mysql list_users":        wrapUAPI(`[]`),
+		// list_filters succeeds while the mailbox list fails: the
+		// filters section must surface the narrowed scope (PR 7E).
+		"Email list_filters": wrapUAPI(`[]`),
 	}}
 	ctx := context.Background()
 
@@ -565,6 +568,19 @@ func TestCollectMailboxWarningNotFatal(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected a warning about mailboxes, got: %v", result.Source.Warnings)
+	}
+	ef := result.Source.EmailFilters
+	if !ef.Available {
+		t.Fatalf("email filters section = %+v, want available", ef.ConfigSection)
+	}
+	scoped := false
+	for _, w := range ef.Warnings {
+		if contains(w, "account-level") {
+			scoped = true
+		}
+	}
+	if !scoped {
+		t.Errorf("email filters must warn about account-level-only scope, got: %v", ef.Warnings)
 	}
 }
 

@@ -158,19 +158,93 @@ type CronSection struct {
 	Errors            []string       `json:"errors"`
 }
 
+// MXRecordEntry is one MX record row of an email-routing domain.
+type MXRecordEntry struct {
+	Priority int64  `json:"priority"`
+	Exchange string `json:"exchange"`
+}
+
+// EmailRoutingEntry is one domain's mail-routing mode (PR 7E). Only
+// mail-routing domains appear here — subdomains have a default address
+// but no routing entry of their own, so this section's domain universe
+// is narrower than DefaultAddresses'.
+type EmailRoutingEntry struct {
+	Domain       string          `json:"domain"`
+	Routing      string          `json:"routing"`  // configured mxcheck: local | remote | auto | secondary
+	Detected     string          `json:"detected"` // what cPanel detects from the MX records
+	AlwaysAccept bool            `json:"always_accept"`
+	MXRecords    []MXRecordEntry `json:"mx_records"`
+}
+
+// DefaultAddressEntry is one domain's catch-all configuration (PR 7E);
+// the value is opaque (the cPanel default embeds literal quotes).
+type DefaultAddressEntry struct {
+	Domain         string `json:"domain"`
+	DefaultAddress string `json:"default_address"`
+}
+
+// EmailFilterEntry is one email filter (PR 7E). Counts only: rule and
+// action bodies are unproven shapes and may embed personal patterns, so
+// they never reach any artifact.
+type EmailFilterEntry struct {
+	Account     string `json:"account"` // "" = account-level (all mail)
+	FilterName  string `json:"filter_name"`
+	Enabled     bool   `json:"enabled"`
+	RuleCount   int    `json:"rule_count"`
+	ActionCount int    `json:"action_count"`
+}
+
+// RedirectEntry is one redirect/rewrite harvested from .htaccess by
+// cPanel (PR 7E). Raw facts only — the CMS-noise classification
+// (rewrite+temporary+no status code) belongs to the policy layer.
+type RedirectEntry struct {
+	Domain      string `json:"domain"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Kind        string `json:"kind"`
+	Type        string `json:"type"`
+	StatusCode  int64  `json:"status_code"` // 0 = none reported
+	Wildcard    bool   `json:"wildcard"`
+	MatchWWW    bool   `json:"match_www"`
+}
+
+type EmailRoutingSection struct {
+	ConfigSection
+	Items []EmailRoutingEntry `json:"items"`
+}
+
+type DefaultAddressSection struct {
+	ConfigSection
+	Items []DefaultAddressEntry `json:"items"`
+}
+
+type EmailFilterSection struct {
+	ConfigSection
+	Items []EmailFilterEntry `json:"items"`
+}
+
+type RedirectSection struct {
+	ConfigSection
+	Items []RedirectEntry `json:"items"`
+}
+
 type NormalizedInventory struct {
-	Account        AccountInfo          `json:"account"`
-	Domains        []DomainEntry        `json:"domains"`
-	Mailboxes      []MailboxEntry       `json:"mailboxes"`
-	Databases      []DatabaseEntry      `json:"databases"`
-	Forwarders     []ForwarderEntry     `json:"forwarders"`
-	Autoresponders []AutoresponderEntry `json:"autoresponders"`
-	FTP            FTPSection           `json:"ftp"`
-	SSL            SSLSection           `json:"ssl"`
-	PHP            PHPSection           `json:"php"`
-	DNS            DNSSection           `json:"dns"`
-	Cron           CronSection          `json:"cron"`
-	Warnings       []string             `json:"warnings"`
+	Account          AccountInfo           `json:"account"`
+	Domains          []DomainEntry         `json:"domains"`
+	Mailboxes        []MailboxEntry        `json:"mailboxes"`
+	Databases        []DatabaseEntry       `json:"databases"`
+	Forwarders       []ForwarderEntry      `json:"forwarders"`
+	Autoresponders   []AutoresponderEntry  `json:"autoresponders"`
+	FTP              FTPSection            `json:"ftp"`
+	SSL              SSLSection            `json:"ssl"`
+	PHP              PHPSection            `json:"php"`
+	DNS              DNSSection            `json:"dns"`
+	Cron             CronSection           `json:"cron"`
+	EmailRouting     EmailRoutingSection   `json:"email_routing"`
+	DefaultAddresses DefaultAddressSection `json:"default_address"`
+	EmailFilters     EmailFilterSection    `json:"email_filters"`
+	Redirects        RedirectSection       `json:"redirects"`
+	Warnings         []string              `json:"warnings"`
 }
 
 // NewEmptyCronSection returns a CronSection with every slice initialized so
@@ -203,6 +277,14 @@ func NewEmptyInventory(user, host, side string) NormalizedInventory {
 		PHP:            PHPSection{ConfigSection: ConfigSection{Warnings: []string{}}, Items: []PHPEntry{}},
 		DNS:            DNSSection{ConfigSection: ConfigSection{Warnings: []string{}}, Zones: []DNSZoneResult{}},
 		Cron:           NewEmptyCronSection(),
-		Warnings:       []string{},
+		EmailRouting: EmailRoutingSection{
+			ConfigSection: ConfigSection{Warnings: []string{}}, Items: []EmailRoutingEntry{}},
+		DefaultAddresses: DefaultAddressSection{
+			ConfigSection: ConfigSection{Warnings: []string{}}, Items: []DefaultAddressEntry{}},
+		EmailFilters: EmailFilterSection{
+			ConfigSection: ConfigSection{Warnings: []string{}}, Items: []EmailFilterEntry{}},
+		Redirects: RedirectSection{
+			ConfigSection: ConfigSection{Warnings: []string{}}, Items: []RedirectEntry{}},
+		Warnings: []string{},
 	}
 }
