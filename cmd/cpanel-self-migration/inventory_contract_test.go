@@ -68,6 +68,8 @@ func setupInventoryStubs(t *testing.T, dnsUAPIFails, noCrontab bool) {
 		"email_list_pops.json", "email_forwarders.json", "email_autoresponders.json",
 		"ftp_list.json", "ssl_list_certs.json", "php_vhost_versions.json",
 		"dns_parse_zone.json", "dns_fetchzone_records.json",
+		"email_list_mxs_realserver.json", "email_default_address_realserver.json",
+		"email_list_filters.json", "mime_redirects_realserver.json",
 	} {
 		b, err := os.ReadFile(filepath.Join("..", "..", "internal", "testdata", name))
 		if err != nil {
@@ -116,6 +118,10 @@ case "$1 $2" in
   "SSL list_certs")                 cat "$CPSM_TEST_FIXDIR/ssl_list_certs.json" ;;
   "LangPHP php_get_vhost_versions") cat "$CPSM_TEST_FIXDIR/php_vhost_versions.json" ;;
   "DNS parse_zone")                 cat "$CPSM_TEST_FIXDIR/`+dnsFixture+`" ;;
+  "Email list_mxs")                 cat "$CPSM_TEST_FIXDIR/email_list_mxs_realserver.json" ;;
+  "Email list_default_address")     cat "$CPSM_TEST_FIXDIR/email_default_address_realserver.json" ;;
+  "Email list_filters")             cat "$CPSM_TEST_FIXDIR/email_list_filters.json" ;;
+  "Mime list_redirects")            cat "$CPSM_TEST_FIXDIR/mime_redirects_realserver.json" ;;
   *) echo '{"result":{"status":0,"errors":["stub: unknown uapi call"]}}' ;;
 esac`)
 	writeStub("cpapi2", `shift # drop --output=json
@@ -199,6 +205,7 @@ func TestAccountInventoryContract(t *testing.T) {
 	for _, section := range []string{
 		"account", "domains", "mailboxes", "databases",
 		"forwarders", "autoresponders", "ftp", "ssl", "php", "dns", "cron",
+		"email_routing", "default_address", "email_filters", "redirects",
 	} {
 		if _, ok := inv[section]; !ok {
 			t.Errorf("section %q missing from inventory JSON", section)
@@ -214,6 +221,10 @@ func TestAccountInventoryContract(t *testing.T) {
 	checkSectionAvailable(t, inv, "php", "uapi")
 	checkSectionAvailable(t, inv, "dns", "uapi")
 	checkSectionAvailable(t, inv, "cron", "ssh_crontab_l")
+	checkSectionAvailable(t, inv, "email_routing", "uapi")
+	checkSectionAvailable(t, inv, "default_address", "uapi")
+	checkSectionAvailable(t, inv, "email_filters", "uapi")
+	checkSectionAvailable(t, inv, "redirects", "uapi")
 
 	cron := inv["cron"].(map[string]any)
 	jobs := cron["jobs"].([]any)

@@ -243,6 +243,61 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 	writeDNSSection(sb, inv.DNS)
 	writeCronSection(sb, inv.Cron)
 
+	writeConfigSection(sb, "Email Routing", inv.EmailRouting.ConfigSection, len(inv.EmailRouting.Items))
+	if len(inv.EmailRouting.Items) > 0 {
+		sb.WriteString("| Domain | Routing | Detected | Always Accept | MX Records |\n")
+		sb.WriteString("|--------|---------|----------|---------------|------------|\n")
+		for _, e := range inv.EmailRouting.Items {
+			mx := make([]string, 0, len(e.MXRecords))
+			for _, m := range e.MXRecords {
+				mx = append(mx, fmt.Sprintf("%d %s", m.Priority, m.Exchange))
+			}
+			fmt.Fprintf(sb, "| %s | %s | %s | %t | %s |\n",
+				e.Domain, e.Routing, e.Detected, e.AlwaysAccept, mdCell(strings.Join(mx, "; "), 80))
+		}
+		sb.WriteString("\n")
+	}
+
+	writeConfigSection(sb, "Default Addresses", inv.DefaultAddresses.ConfigSection, len(inv.DefaultAddresses.Items))
+	if len(inv.DefaultAddresses.Items) > 0 {
+		sb.WriteString("| Domain | Default Address |\n")
+		sb.WriteString("|--------|-----------------|\n")
+		for _, e := range inv.DefaultAddresses.Items {
+			fmt.Fprintf(sb, "| %s | %s |\n", e.Domain, mdCell(e.DefaultAddress, 80))
+		}
+		sb.WriteString("\n")
+	}
+
+	writeConfigSection(sb, "Email Filters", inv.EmailFilters.ConfigSection, len(inv.EmailFilters.Items))
+	if len(inv.EmailFilters.Items) > 0 {
+		sb.WriteString("| Account | Filter | Enabled | Rules | Actions |\n")
+		sb.WriteString("|---------|--------|---------|-------|--------|\n")
+		for _, e := range inv.EmailFilters.Items {
+			account := e.Account
+			if account == "" {
+				account = "(account-level)"
+			}
+			fmt.Fprintf(sb, "| %s | %s | %t | %d | %d |\n",
+				mdCell(account, 60), mdCell(e.FilterName, 60), e.Enabled, e.RuleCount, e.ActionCount)
+		}
+		sb.WriteString("\n")
+	}
+
+	writeConfigSection(sb, "Redirects", inv.Redirects.ConfigSection, len(inv.Redirects.Items))
+	if len(inv.Redirects.Items) > 0 {
+		sb.WriteString("| Domain | Source | Destination | Kind | Type | Status |\n")
+		sb.WriteString("|--------|--------|-------------|------|------|--------|\n")
+		for _, e := range inv.Redirects.Items {
+			status := "-"
+			if e.StatusCode != 0 {
+				status = fmt.Sprintf("%d", e.StatusCode)
+			}
+			fmt.Fprintf(sb, "| %s | %s | %s | %s | %s | %s |\n",
+				e.Domain, mdCell(e.Source, 60), mdCell(e.Destination, 60), e.Kind, e.Type, status)
+		}
+		sb.WriteString("\n")
+	}
+
 	if len(inv.Warnings) > 0 {
 		fmt.Fprintf(sb, "## Warnings (%d)\n\n", len(inv.Warnings))
 		for _, w := range inv.Warnings {

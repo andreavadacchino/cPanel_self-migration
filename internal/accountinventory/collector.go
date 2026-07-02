@@ -3,6 +3,7 @@ package accountinventory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -150,6 +151,10 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 	inv.PHP = collectPHP(ctx, r)
 	inv.DNS = collectDNS(ctx, r, inv.Domains)
 	inv.Cron = collectCron(ctx, r)
+	inv.EmailRouting = collectEmailRouting(ctx, r)
+	inv.DefaultAddresses = collectDefaultAddresses(ctx, r)
+	inv.EmailFilters = collectEmailFilters(ctx, r, inv.Mailboxes)
+	inv.Redirects = collectRedirects(ctx, r)
 
 	return inv, nil
 }
@@ -384,3 +389,133 @@ func collectPHP(ctx context.Context, r cpanel.Runner) PHPSection {
 	return sec
 }
 
+// --- PR 7E sections -------------------------------------------------------
+
+func collectEmailRouting(ctx context.Context, r cpanel.Runner) EmailRoutingSection {
+	sec := EmailRoutingSection{
+		ConfigSection: ConfigSection{Method: "uapi", SourceFunction: "Email::list_mxs", Warnings: []string{}},
+		Items:         []EmailRoutingEntry{},
+	}
+	domains, err := cpanel.ListMXs(ctx, r)
+	if err != nil {
+		sec.Available = false
+		sec.Method = "unavailable"
+		sec.Warnings = append(sec.Warnings, fmt.Sprintf("email routing unavailable: %v", err))
+		return sec
+	}
+	sec.Available = true
+	for _, d := range domains {
+		mx := []MXRecordEntry{}
+		for _, e := range d.Entries {
+			mx = append(mx, MXRecordEntry{Priority: int64(e.Priority), Exchange: e.MX})
+		}
+		sec.Items = append(sec.Items, EmailRoutingEntry{
+			Domain:       d.Domain,
+			Routing:      d.MXCheck,
+			Detected:     d.Detected,
+			AlwaysAccept: d.AlwaysAccept != 0,
+			MXRecords:    mx,
+		})
+	}
+	return sec
+}
+
+func collectDefaultAddresses(ctx context.Context, r cpanel.Runner) DefaultAddressSection {
+	sec := DefaultAddressSection{
+		ConfigSection: ConfigSection{Method: "uapi", SourceFunction: "Email::list_default_address", Warnings: []string{}},
+		Items:         []DefaultAddressEntry{},
+	}
+	entries, err := cpanel.ListDefaultAddresses(ctx, r)
+	if err != nil {
+		sec.Available = false
+		sec.Method = "unavailable"
+		sec.Warnings = append(sec.Warnings, fmt.Sprintf("default addresses unavailable: %v", err))
+		return sec
+	}
+	sec.Available = true
+	for _, e := range entries {
+		sec.Items = append(sec.Items, DefaultAddressEntry{
+			Domain:         e.Domain,
+			DefaultAddress: e.DefaultAddress,
+		})
+	}
+	return sec
+}
+
+// collectEmailFilters gathers the account-level filter set plus one
+// per-mailbox set per real mailbox (the Main Account pseudo-entry has
+// no "@" and is skipped). A failing per-mailbox call degrades to a
+// warning; only the account-level failure marks the whole section
+// unavailable.
+func collectEmailFilters(ctx context.Context, r cpanel.Runner, mailboxes []MailboxEntry) EmailFilterSection {
+	sec := EmailFilterSection{
+		ConfigSection: ConfigSection{Method: "uapi", SourceFunction: "Email::list_filters", Warnings: []string{}},
+		Items:         []EmailFilterEntry{},
+	}
+	appendFilters := func(account string, filters []cpanel.EmailFilterEntry) {
+		for _, f := range filters {
+			sec.Items = append(sec.Items, EmailFilterEntry{
+				Account:     account,
+				FilterName:  f.FilterName,
+				Enabled:     f.Enabled != 0,
+				RuleCount:   len(f.Rules),
+				ActionCount: len(f.Actions),
+			})
+		}
+	}
+	accountLevel, err := cpanel.ListEmailFilters(ctx, r, "")
+	if err != nil {
+		sec.Available = false
+		sec.Method = "unavailable"
+		sec.Warnings = append(sec.Warnings, fmt.Sprintf("email filters unavailable: %v", err))
+		return sec
+	}
+	sec.Available = true
+	appendFilters("", accountLevel)
+	for _, mb := range mailboxes {
+		if !strings.Contains(mb.Email, "@") {
+			continue // Main Account pseudo-mailbox
+		}
+		filters, err := cpanel.ListEmailFilters(ctx, r, mb.Email)
+		if err != nil {
+			sec.Warnings = append(sec.Warnings, fmt.Sprintf("filters for %s unavailable: %v", mb.Email, err))
+			continue
+		}
+		appendFilters(mb.Email, filters)
+	}
+	sort.SliceStable(sec.Items, func(i, j int) bool {
+		if sec.Items[i].Account != sec.Items[j].Account {
+			return sec.Items[i].Account < sec.Items[j].Account
+		}
+		return sec.Items[i].FilterName < sec.Items[j].FilterName
+	})
+	return sec
+}
+
+func collectRedirects(ctx context.Context, r cpanel.Runner) RedirectSection {
+	sec := RedirectSection{
+		ConfigSection: ConfigSection{Method: "uapi", SourceFunction: "Mime::list_redirects", Warnings: []string{}},
+		Items:         []RedirectEntry{},
+	}
+	entries, err := cpanel.ListRedirects(ctx, r)
+	if err != nil {
+		sec.Available = false
+		sec.Method = "unavailable"
+		sec.Warnings = append(sec.Warnings, fmt.Sprintf("redirects unavailable: %v", err))
+		return sec
+	}
+	sec.Available = true
+	for _, e := range entries {
+		sec.Items = append(sec.Items, RedirectEntry{
+			Domain:      e.Domain,
+			Source:      e.Source,
+			Destination: e.Destination,
+			Kind:        e.Kind,
+			Type:        e.Type,
+			StatusCode:  int64(e.StatusCode),
+			Wildcard:    e.Wildcard != 0,
+			MatchWWW:    e.MatchWWW != 0,
+		})
+	}
+	return sec
+}

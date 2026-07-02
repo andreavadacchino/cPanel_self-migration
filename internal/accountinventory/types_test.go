@@ -40,6 +40,7 @@ func TestNormalizedInventoryJSON(t *testing.T) {
 		`"databases"`, `"users"`,
 		`"dns"`, `"zones"`,
 		`"cron"`, `"jobs"`, `"source_command"`,
+		`"email_routing"`, `"default_address"`, `"email_filters"`, `"redirects"`,
 		`"warnings"`,
 	} {
 		if !strings.Contains(s, want) {
@@ -93,7 +94,7 @@ func TestEmptyInventoryNoNulls(t *testing.T) {
 		t.Fatalf("Marshal: %v", err)
 	}
 	s := string(b)
-	for _, field := range []string{"domains", "mailboxes", "databases", "warnings", "zones", "jobs", "environment"} {
+	for _, field := range []string{"domains", "mailboxes", "databases", "warnings", "zones", "jobs", "environment", "items"} {
 		if strings.Contains(s, `"`+field+`":null`) {
 			t.Errorf("%s is null, want empty array", field)
 		}
