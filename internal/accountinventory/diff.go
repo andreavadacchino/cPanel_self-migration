@@ -62,12 +62,18 @@ type DiffSummary struct {
 }
 
 type InventoryDiff struct {
-	Mode            string                 `json:"mode"`
-	SourceFile      string                 `json:"source_file"`
-	DestinationFile string                 `json:"destination_file"`
-	GeneratedAt     string                 `json:"generated_at"`
-	Summary         DiffSummary            `json:"summary"`
-	Sections        map[string]SectionDiff `json:"sections"`
+	Mode            string `json:"mode"`
+	SourceFile      string `json:"source_file"`
+	DestinationFile string `json:"destination_file"`
+	// SourceSHA256/DestinationSHA256 hash the raw bytes of the two input
+	// files (set by the CLI, same stale-input defense as the DNS plan);
+	// the checklist verifies the provenance chain against them (PR 7B).
+	// omitempty keeps artifacts produced by older builds parseable.
+	SourceSHA256      string                 `json:"source_sha256,omitempty"`
+	DestinationSHA256 string                 `json:"destination_sha256,omitempty"`
+	GeneratedAt       string                 `json:"generated_at"`
+	Summary           DiffSummary            `json:"summary"`
+	Sections          map[string]SectionDiff `json:"sections"`
 	// Warnings holds cross-section warnings. Currently always empty —
 	// per-section warnings live in each SectionDiff — but it is part of
 	// the diff schema consumers can already rely on.

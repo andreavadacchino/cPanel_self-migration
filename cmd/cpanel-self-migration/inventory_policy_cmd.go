@@ -52,6 +52,12 @@ func runInventoryPolicyCmd(args []string) int {
 	r := accountinventory.EvaluatePolicy(d)
 	r.InputDiff = *diffPath
 	r.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
+	// Raw-byte hash of the consumed diff: the checklist verifies the
+	// provenance chain against it (PR 7B).
+	if r.InputDiffSHA256, err = fileSHA256(*diffPath); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
 
 	if err := accountinventory.WritePolicyJSON(*outJSON, r); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

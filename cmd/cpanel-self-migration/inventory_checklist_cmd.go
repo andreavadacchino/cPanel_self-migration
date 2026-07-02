@@ -87,44 +87,48 @@ func runInventoryChecklistCmd(args []string) int {
 		report = &r
 	}
 
+	// Input refs (file + raw-byte sha256) are computed BEFORE building the
+	// checklist: the engine verifies the provenance chain against them.
+	var refs accountinventory.ChecklistInputs
+	if refs.SourceInventory, err = checklistInputRef(*source); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	if refs.DestinationInventory, err = checklistInputRef(*destination); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	if refs.Diff, err = checklistInputRef(*diffPath); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	if refs.Policy, err = checklistInputRef(*policyPath); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	if *planPath != "" {
+		if refs.DNSPlan, err = checklistInputRef(*planPath); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+	}
+	if *reportPath != "" {
+		if refs.MigrationReport, err = checklistInputRef(*reportPath); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			return 1
+		}
+	}
+
 	// One single "now": the SSL-validity reference time and the report's
 	// own Generated timestamp must agree for auditability.
 	now := time.Now().UTC()
 	c := accountinventory.BuildChecklist(accountinventory.ChecklistInput{
 		Source: srcInv, Destination: destInv, Diff: d, Policy: p,
 		DNSPlan: plan, MigrationReport: report,
-		Now: now,
+		InputRefs: refs,
+		Now:       now,
 	})
 	c.GeneratedAt = now.Format(time.RFC3339)
-
-	if c.Inputs.SourceInventory, err = checklistInputRef(*source); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return 1
-	}
-	if c.Inputs.DestinationInventory, err = checklistInputRef(*destination); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return 1
-	}
-	if c.Inputs.Diff, err = checklistInputRef(*diffPath); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return 1
-	}
-	if c.Inputs.Policy, err = checklistInputRef(*policyPath); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		return 1
-	}
-	if *planPath != "" {
-		if c.Inputs.DNSPlan, err = checklistInputRef(*planPath); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			return 1
-		}
-	}
-	if *reportPath != "" {
-		if c.Inputs.MigrationReport, err = checklistInputRef(*reportPath); err != nil {
-			fmt.Fprintln(os.Stderr, "error:", err)
-			return 1
-		}
-	}
 
 	if err := accountinventory.WriteChecklistJSON(*outJSON, c); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)

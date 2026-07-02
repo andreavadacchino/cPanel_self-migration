@@ -49,6 +49,16 @@ func runInventoryDiffCmd(args []string) int {
 	d.SourceFile = *source
 	d.DestinationFile = *destination
 	d.GeneratedAt = time.Now().UTC().Format(time.RFC3339)
+	// Raw-byte hashes of the inputs: the checklist verifies the
+	// provenance chain against them (PR 7B).
+	if d.SourceSHA256, err = fileSHA256(*source); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
+	if d.DestinationSHA256, err = fileSHA256(*destination); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
 
 	if err := accountinventory.WriteDiffJSON(*outJSON, d); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
