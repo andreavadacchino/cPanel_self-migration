@@ -342,11 +342,26 @@ the gating exit.
 
 ## Subcommand: `ui`
 
-A LOCAL, read-only web dashboard over the pipeline artifacts: the operator
-opens a browser instead of reading raw JSON. It renders the migration
-checklist (verdict, sections, manual actions with their stable acceptance
-keys, warnings) plus an artifact presence table, and re-hashes every input
-the checklist records — a mismatch renders a dominant **STALE** banner.
+A LOCAL web workstation over the pipeline artifacts: the operator
+configures the servers, launches the read-only analysis and reads the
+results in a browser — the terminal is only needed for the migration
+itself. It renders the migration checklist (verdict, sections, manual
+actions with their stable acceptance keys, warnings) plus an artifact
+presence table, and re-hashes every input the checklist records — a
+mismatch renders a dominant **STALE** banner.
+
+From the page you can:
+
+- **save the server connections** (source and destination IP, port, SSH
+  user/password) → written to `host.yaml` in the artifact directory
+  (0600, local only; blank password fields keep the stored ones; the
+  file is validated by the same `config.Load` the CLI uses);
+- **run the read-only analysis**: the UI spawns the tool's own binary
+  through the pipeline (account inventory over SSH — the only connecting
+  step, source read-only by construction — then diff → policy →
+  checklist, picking up `acceptances.json`/`dns_import_plan.json`/apply
+  `report.json` when present). One run at a time; the page auto-refreshes
+  with per-step progress and output tails. `--apply` stays terminal-only.
 
 ```bash
 cpanel-self-migration ui [--dir ./run-artifacts] [--listen 127.0.0.1:8422]
@@ -355,15 +370,16 @@ cpanel-self-migration ui [--dir ./run-artifacts] [--listen 127.0.0.1:8422]
 
 Safety, by construction:
 
-- binds to **loopback only** (`127.0.0.1`, `::1` or `localhost`; anything
-  else is rejected);
-- read-only: it never opens SSH connections and never writes anything;
+- binds to **loopback only** (`127.0.0.1`, `::1` or `localhost`); every
+  request also passes an anti-DNS-rebinding **Host gate**, an **Origin
+  check**, and mutating POSTs require the per-start **CSRF token**;
+- the UI process never opens SSH itself and never mutates servers: the
+  analysis runs as a subprocess of the CLI, which remains the single
+  authority for every step;
 - it serves rendered pages only — no raw-file serving, no other routes;
 - no readiness logic is re-implemented in the UI: it displays decisions
-  the offline pipeline already computed. Refresh the page to re-read the
-  artifacts from disk.
+  the offline pipeline already computed.
 
-This is phase 1 of the embedded UI (artifact browser). The acceptance
-workstation (writing `acceptances.json` from the browser through the same
-validated library code) and the live `events.jsonl` run monitor are the
-next phases.
+Next phases: accepting actions from the browser (writing
+`acceptances.json` through the same validated library code) and the live
+`events.jsonl` run monitor.

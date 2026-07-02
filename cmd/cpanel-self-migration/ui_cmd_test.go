@@ -29,8 +29,10 @@ func TestNewUIServerValidation(t *testing.T) {
 	if srv.ReadHeaderTimeout == 0 {
 		t.Error("the server must set ReadHeaderTimeout (gosec G112, slowloris)")
 	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "127.0.0.1:0" // the rebinding gate rejects httptest's example.com default
 	rr := httptest.NewRecorder()
-	srv.Handler.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	srv.Handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "migration_checklist.json") {
 		t.Errorf("dashboard = %d, want 200 with the empty-state hint", rr.Code)
 	}
