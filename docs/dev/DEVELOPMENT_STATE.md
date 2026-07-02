@@ -55,6 +55,8 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 7E-1 | inventory sections email_routing / default_address / email_filters / redirects (4 read-only UAPI calls, filter bodies never in artifacts, deterministic tie-breaks, narrowed-scope warning); diff/policy/checklist unchanged until 7E-2 | #34 |
 | 7E-2 | diff/policy/checklist wiring for the four 7E sections (per-item actions replace the blanket not_inventoried checks, CMS rewrite recognition, RECREATE_EMAIL_FILTERS + CONFIRM_REDIRECT action types) + DKIM CONFIRM_DNS_RECORD on plan replace (7A finding 3) | #35 |
 | 7E-smoke | real-data smoke of the four 7E sections via offline capture replay (`PR7E_REAL_SMOKE.md`): all criteria pass — 20 CMS rewrites → expected differences, zero fake actions, blocking 11→8, DKIM CONFIRM_DNS_RECORD ×4, SPF still 0 manual, stale-dest guard holds, italplant remote routing clean + genuine 301 → one non-blocking CONFIRM_REDIRECT; 11 pre-7E sections multiset-identical to the 7A source (zero collector drift). Captures archived in `~/Desktop/pADV/cPanel_self-migration-captures/` | #38 |
+| main→main | support the 1:1 same-domain migration layout (Fase 0.2 blocker): classifier carve-out `sameNameMainToMain` + webfiles guard per-item opt-in `AllowDestPublicHTMLRoot`/`ALLOW_PUBLIC_HTML_ROOT=1` (backup path still refuses the root even with the flag). Found by the first real dry-run; 2× adversarial go-review APPROVE; Docker LINUX_ALL_GREEN (gate: Sourcery rate-limited) | #40 |
+| Fase 0.2 | **first real `--apply`** (giorginisposi .193→.78): 14/14 phases green — mail 379 msg (body-hash verified), web 12 521 entries/1.1 GB into the public_html root, db 32 tables + wp-config rewrite; site serves on .78 (`curl --resolve`). First checklist with REAL apply evidence: `chain_verified`, per_item evidence on all 4 migrated sections, BLOCKED with 6 genuine manual actions (forwarder, NS, catch-all, DKIM, PHP). Full story + campaign gotchas (DNS cluster on .78!) in `FASE0_2_FIRST_APPLY.md` | #41 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -144,6 +146,14 @@ them when adding collectors:
    `Type=="sub"` for DNS (correct).
 6. **Cron redaction must cover `secure=`** as well as `token=` — real
    PrestaShop cron jobs authenticate with `secure=<token>`.
+7. **Destination server .78 is a member of the production DNS cluster**
+   (peer ns.hostnuoviclienti.com, normally role `sync` — currently flipped
+   to `standalone` for the pre-cutover window, backup on keliweb2). Any zone
+   save on .78 with sync active reaches the production NS. `createacct`
+   refuses cluster-existing domains (disable clustering for the ~30 s window);
+   `killdns` cannot remove an account's primary-domain zone; ⚠️ `removeacct`
+   with clustering active DELETES the production zone. Full runbook in
+   `FASE0_2_FIRST_APPLY.md`.
 
 **General lesson:** any cPanel numeric field can arrive as a quoted
 string or float; default to `flexInt64` for informational numbers and
