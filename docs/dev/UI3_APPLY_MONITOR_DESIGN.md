@@ -65,11 +65,18 @@ refresh stops and the panel says the process may have been interrupted
 (a killed apply leaves no terminal event; refreshing forever on a dead
 file would lie). `now` is a parameter, so the cutoff is unit-testable.
 
-Reading is bounded: the loader reads at most the final 2 MiB of the
-file (seek from the end, drop the first partial line) so a long-lived
+Reading AND rendering are bounded: the loader reads at most the final
+2 MiB of the file (seek from the end, `io.LimitReader` on the small
+branch, drop the first partial line of a tail) so a long-lived
 events.jsonl cannot balloon page builds; the panel notes when the tail
-was truncated. Scanner line buffer is raised to 1 MiB (a mail phase
-with many mailboxes produces long Data lines).
+was truncated. Lines are split from the in-memory slice (`bytes.Split`,
+no scanner token limit), so DKIM-length Data lines parse whole. The
+rendered model is bounded too (go-reviewer findings): at most 50 phase
+rows (overflow noted), 8 errors, 10 item names per summary. Stall
+detection treats a FUTURE last-event timestamp like a too-old one —
+clock skew or a corrupted ts must not keep the page refreshing forever
+— and the stalled panel wears its own amber style, never the green
+"completed" one.
 
 ## Dashboard integration
 

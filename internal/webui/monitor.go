@@ -29,10 +29,14 @@ const monitorStallCutoff = 10 * time.Minute
 const monitorTailBytes = 2 << 20 // 2 MiB
 
 // monitorMaxItemNames bounds the failed/unverified item names listed in
-// a phase summary; monitorMaxErrors bounds the error list.
+// a phase summary; monitorMaxErrors bounds the error list;
+// monitorMaxPhases bounds the phase rows (a corrupted file could carry
+// thousands of distinct phase strings inside the tail budget — the page
+// is rebuilt on every 2s refresh and must stay cheap).
 const (
 	monitorMaxItemNames = 10
 	monitorMaxErrors    = 8
+	monitorMaxPhases    = 50
 )
 
 // applyPhaseSet mirrors the run-report collector's criterion in cmd:
@@ -144,7 +148,9 @@ func loadRunMonitor(dir string, now time.Time) *runMonitor {
 			data = data[i+1:]
 		}
 	} else {
-		data, err = io.ReadAll(f)
+		// LimitReader keeps the bound airtight even if the file grew past
+		// the cap between Stat and this read (concurrent writer).
+		data, err = io.ReadAll(io.LimitReader(f, monitorTailBytes))
 		if err != nil {
 			return nil
 		}
@@ -218,6 +224,7 @@ func parseRunMonitor(data []byte, now time.Time) *runMonitor {
 	m.LastEventAt = last.TS.Format("15:04:05")
 
 	phaseIdx := map[string]int{}
+	droppedPhases := 0
 	for _, ev := range run {
 		if ev.Level == string(events.LevelError) && ev.Message != "" && len(m.Errors) < monitorMaxErrors {
 			m.Errors = append(m.Errors, ev.Message)
@@ -237,6 +244,10 @@ func parseRunMonitor(data []byte, now time.Time) *runMonitor {
 			}
 			i, seen := phaseIdx[ev.Phase]
 			if !seen {
+				if len(m.Phases) >= monitorMaxPhases {
+					droppedPhases++
+					continue
+				}
 				m.Phases = append(m.Phases, monitorPhase{Phase: ev.Phase, State: "running"})
 				i = len(m.Phases) - 1
 				phaseIdx[ev.Phase] = i
@@ -256,8 +267,23 @@ func parseRunMonitor(data []byte, now time.Time) *runMonitor {
 		}
 	}
 
-	if m.State == "running" && now.Sub(last.TS) > monitorStallCutoff {
-		m.Stalled = true
+	if droppedPhases > 0 {
+		note := fmt.Sprintf("%d additional phase row(s) not shown", droppedPhases)
+		if m.ParseNote != "" {
+			m.ParseNote += "; " + note
+		} else {
+			m.ParseNote = note
+		}
+	}
+
+	// A last event from the FUTURE is exactly as untrustworthy as one
+	// that is too old (clock skew, corrupted ts): both stall the monitor
+	// instead of keeping the page refreshing forever on unknown state.
+	if m.State == "running" {
+		elapsed := now.Sub(last.TS)
+		if elapsed < 0 || elapsed > monitorStallCutoff {
+			m.Stalled = true
+		}
 	}
 	m.Live = m.State == "running" && !m.Stalled
 	return m

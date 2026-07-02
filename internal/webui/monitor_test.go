@@ -269,7 +269,7 @@ func TestParseRunMonitorNoRunStartedFallsBack(t *testing.T) {
 
 func TestParseRunMonitorHandlesHugeLines(t *testing.T) {
 	items := make([]map[string]any, 0, 3000)
-	for i := 0; i < 3000; i++ { // ~120KB of JSON, past bufio.Scanner's default cap
+	for i := 0; i < 3000; i++ { // ~120KB single JSON line — must parse whole
 		items = append(items, map[string]any{
 			"item": fmt.Sprintf("mailbox-%04d@example.com", i), "status": "migrated"})
 	}
@@ -427,5 +427,62 @@ func TestHandlerMonitorEscapesHTMLInMessages(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;") {
 		t.Error("escaped message not rendered")
+	}
+}
+
+// --- go-reviewer findings (REQUEST CHANGES round) ---------------------------
+
+// Finding HIGH: a forged/corrupted FUTURE timestamp must not keep the page
+// refreshing forever — an event from the future is as untrustworthy as one
+// that is too old.
+func TestParseRunMonitorFutureTimestampIsStalled(t *testing.T) {
+	evs := []events.Event{
+		monEv("run-x", 0, "", events.EventRunStarted, events.LevelInfo, "", nil),
+		monEv("run-x", 24*time.Hour, events.PhaseCopyFiles, events.EventPhaseStarted, events.LevelInfo, "", nil),
+	}
+	m := parseRunMonitor(monLines(t, evs...), monT0.Add(time.Minute))
+	if m == nil {
+		t.Fatal("monitor is nil")
+	}
+	if !m.Stalled || m.Live {
+		t.Errorf("stalled=%v live=%v — a future-dated event stream must stall, not refresh forever", m.Stalled, m.Live)
+	}
+}
+
+// Finding HIGH: a stalled run must NOT wear the green "completed" status
+// class — a dead apply colored like a success is an operational lie.
+func TestHandlerMonitorStalledIsNotStyledCompleted(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now().UTC()
+	writeMonitorEvents(t, dir,
+		events.Event{RunID: "run-dead", TS: now.Add(-40 * time.Minute), Level: events.LevelInfo, Type: events.EventRunStarted},
+		events.Event{RunID: "run-dead", TS: now.Add(-30 * time.Minute), Level: events.LevelInfo, Phase: events.PhaseCopyFiles, Type: events.EventPhaseStarted},
+	)
+	_, body := getIndex(t, dir)
+	if !strings.Contains(body, `class="status stalled"`) {
+		t.Error("stalled run must carry its own status class")
+	}
+	if strings.Contains(body, `class="status completed"`) {
+		t.Error("stalled run styled as completed — looks like a success")
+	}
+}
+
+// Finding MEDIUM: distinct phase strings from a corrupted file must not
+// produce unbounded table rows on every 2s refresh.
+func TestParseRunMonitorBoundsPhaseRows(t *testing.T) {
+	evs := []events.Event{monEv("run-x", 0, "", events.EventRunStarted, events.LevelInfo, "", nil)}
+	for i := 0; i < 500; i++ {
+		evs = append(evs, monEv("run-x", time.Duration(i)*time.Second,
+			events.Phase(fmt.Sprintf("garbage-phase-%04d", i)), events.EventPhaseStarted, events.LevelInfo, "", nil))
+	}
+	m := parseRunMonitor(monLines(t, evs...), monT0.Add(510*time.Second))
+	if m == nil {
+		t.Fatal("monitor is nil")
+	}
+	if len(m.Phases) > monitorMaxPhases {
+		t.Errorf("phases = %d, want at most %d", len(m.Phases), monitorMaxPhases)
+	}
+	if !strings.Contains(m.ParseNote, "not shown") {
+		t.Errorf("parse note = %q, want an overflow marker for the dropped phases", m.ParseNote)
 	}
 }
