@@ -243,6 +243,10 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	if runID == "" {
 		runID = events.NewRunID(opts.Now)
 	}
+	// Propagate the RESOLVED run ID to runApply, which emits the apply phase
+	// events from opts (PR 7C) — otherwise those events would carry the raw,
+	// possibly-empty flag value.
+	opts.RunID = runID
 
 	plan := buildPipeline(opts, destConfigured)
 	log := logx.New(plan.total)

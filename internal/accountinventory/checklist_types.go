@@ -181,6 +181,10 @@ type MigrationReportInfo struct {
 	Mode       string               `json:"mode"`
 	Scope      MigrationReportScope `json:"scope"`
 	ExitStatus string               `json:"exit_status"`
+	// PhasesCompleted mirrors report.json's phases_completed (populated by
+	// apply runs since PR 7C). A pre-7C report decodes it to nil, which
+	// simply caps evidence at run_level — full backward compatibility.
+	PhasesCompleted []string `json:"phases_completed"`
 }
 
 // ChecklistInput carries everything BuildChecklist needs. Now is the

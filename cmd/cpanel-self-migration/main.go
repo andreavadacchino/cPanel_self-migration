@@ -188,7 +188,11 @@ func main() {
 		}
 	}
 
-	var em events.Emitter
+	// The emitter always feeds the phase collector (report.json's
+	// phases_completed works with --report-json alone) and tees to the JSONL
+	// writer only when --json-events is set.
+	collector := newPhaseCollector()
+	em := events.Emitter{Emit: collector.observe}
 	if *jsonEvents {
 		evPath := filepath.Join(outDir, "events.jsonl")
 		ew, err := events.NewWriter(evPath)
@@ -199,6 +203,7 @@ func main() {
 		defer ew.Close()
 		var evWriteErr sync.Once
 		em = events.Emitter{Emit: func(e events.Event) {
+			collector.observe(e)
 			if err := ew.Write(e); err != nil {
 				evWriteErr.Do(func() {
 					fmt.Fprintln(os.Stderr, "warning: events.jsonl write error:", err)
@@ -240,7 +245,8 @@ func main() {
 	finishedAt := time.Now()
 
 	if *reportJSON {
-		rpt := buildRunReport(opts, cfg, startedAt, finishedAt, runErr, ctx.Err())
+		rpt := buildRunReport(opts, cfg, startedAt, finishedAt, runErr, ctx.Err(),
+			collector.completed(), runArtifacts(outDir, opts.Apply, *jsonEvents))
 		rptPath := filepath.Join(outDir, "report.json")
 		if werr := events.WriteReport(rptPath, rpt); werr != nil {
 			fmt.Fprintln(os.Stderr, "warning: could not write report.json:", werr)
@@ -349,7 +355,7 @@ func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID s
 	return nil
 }
 
-func buildRunReport(opts migrate.Options, cfg config.Config, startedAt, finishedAt time.Time, runErr, ctxErr error) events.RunReport {
+func buildRunReport(opts migrate.Options, cfg config.Config, startedAt, finishedAt time.Time, runErr, ctxErr error, phases []events.Phase, artifacts map[string]string) events.RunReport {
 	mode := "dry-run"
 	if opts.Apply {
 		mode = "apply"
@@ -368,6 +374,9 @@ func buildRunReport(opts migrate.Options, cfg config.Config, startedAt, finished
 	if runID == "" {
 		runID = events.NewRunID(opts.Now)
 	}
+	if phases == nil {
+		phases = []events.Phase{}
+	}
 	return events.RunReport{
 		RunID:   runID,
 		Version: version.String(),
@@ -384,10 +393,72 @@ func buildRunReport(opts migrate.Options, cfg config.Config, startedAt, finished
 		StartedAt:       startedAt,
 		FinishedAt:      finishedAt,
 		ExitStatus:      status,
-		PhasesCompleted: []events.Phase{},
+		PhasesCompleted: phases,
 		Warnings:        []string{},
 		Errors:          errs,
+		Artifacts:       artifacts,
 	}
+}
+
+// phaseCollector records completed phases from the event stream, in
+// first-completion order and deduplicated, for report.json's
+// phases_completed. Mutex-guarded so a future concurrent emitter cannot
+// corrupt it (the race CI job is authoritative).
+type phaseCollector struct {
+	mu     sync.Mutex
+	seen   map[events.Phase]bool
+	phases []events.Phase
+}
+
+func newPhaseCollector() *phaseCollector {
+	return &phaseCollector{seen: map[events.Phase]bool{}}
+}
+
+// observe records e when it is a phase_completed event for a named phase;
+// run-level events (no phase) and every other event type are ignored.
+func (c *phaseCollector) observe(e events.Event) {
+	if e.Type != events.EventPhaseCompleted || e.Phase == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen[e.Phase] {
+		return
+	}
+	c.seen[e.Phase] = true
+	c.phases = append(c.phases, e.Phase)
+}
+
+// completed returns a copy of the recorded phases.
+func (c *phaseCollector) completed() []events.Phase {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]events.Phase{}, c.phases...)
+}
+
+// runArtifacts records the run's artifact files in report.json, by
+// EXISTENCE CHECK only — never on trust. The migration report log is
+// claimed only for apply runs (a dry-run must not claim a stale one from a
+// previous apply), events.jsonl only when --json-events was set.
+func runArtifacts(outDir string, apply, jsonEvents bool) map[string]string {
+	arts := map[string]string{}
+	if apply {
+		if p := filepath.Join(outDir, "logs", "migration_report.log"); fileIsRegular(p) {
+			arts["migration_report_log"] = p
+		}
+	}
+	if jsonEvents {
+		if p := filepath.Join(outDir, "events.jsonl"); fileIsRegular(p) {
+			arts["events_jsonl"] = p
+		}
+	}
+	return arts
+}
+
+// fileIsRegular reports whether path exists and is a regular file.
+func fileIsRegular(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 // handleSignals is the SINGLE interrupt handler. The first SIGINT/SIGTERM cancels

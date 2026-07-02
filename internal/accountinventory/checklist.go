@@ -140,8 +140,28 @@ func (b *checklistBuilder) computeEvidence() {
 			"migration report %q did not succeed (exit_status %q) — ignored as migration evidence", rep.RunID, rep.ExitStatus))
 		return
 	}
+	// PR 7C upgrade: when the (successful) report's phases_completed proves
+	// BOTH the migrate and the verify phase of a section's flow completed,
+	// evidence rises to per_item — the verify phases are per-item integrity
+	// passes whose failures make the run non-success, so "success + both
+	// phases" proves each item was individually processed and verified.
+	// Domains have no verify phase: creation is itself per-item and its
+	// failures gate the exit status the same way.
+	completed := map[string]bool{}
+	for _, p := range rep.PhasesCompleted {
+		completed[p] = true
+	}
+	perItem := map[string]bool{
+		"mailboxes": completed["migrate_mail"] && completed["verify_mail"],
+		"web_files": completed["copy_files"] && completed["verify_files"],
+		"databases": completed["migrate_db"] && completed["verify_db"],
+		"domains":   completed["create_domains"],
+	}
 	mark := func(section string) {
 		b.evidence[section] = EvidenceRunLevel
+		if perItem[section] {
+			b.evidence[section] = EvidencePerItem
+		}
 		b.migrated[section] = true
 	}
 	if rep.Scope.Mail {

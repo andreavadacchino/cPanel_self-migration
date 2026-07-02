@@ -252,9 +252,15 @@ Honesty rules:
 
 - `migrated_by_tool` is **never** true without evidence. Evidence comes
   only from a `report.json` of a **successful `--apply` run**
-  (`--migration-report`), and is explicitly labeled `run_level` — the
-  apply flow does not emit per-item events yet. Without the report the
-  status is "unknown", even when both inventories look identical.
+  (`--migration-report`). It is labeled `per_item` when the report's
+  `phases_completed` proves BOTH the migrate and the verify phase of that
+  section's flow completed (`migrate_mail`+`verify_mail`,
+  `copy_files`+`verify_files`, `migrate_db`+`verify_db`; domains need
+  `create_domains` only) — the verify phases are per-item integrity
+  passes whose failures make the run non-success. Otherwise (including
+  every pre-7C report without `phases_completed`) it is `run_level`.
+  Without the report the status is "unknown", even when both inventories
+  look identical.
 - A DNS plan (`--dns-plan`) proves a DNS difference is expected **only**
   when the destination already matches the desired translation (plan
   action `skip`). Pending plan work (`add`/`replace`) is still work.
