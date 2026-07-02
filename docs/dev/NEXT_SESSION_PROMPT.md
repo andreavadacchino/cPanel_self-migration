@@ -15,33 +15,37 @@ tra due account cPanel via SSH user-level), directory
    cPanel può arrivare come stringa quotata o float → `flexInt64`; ogni "stringa"
    può essere un array → `flexStringList`), convenzioni test, metodo smoke via
    Orbit (capture SEMPRE in base64: il gateway maschera e corrompe il JSON).
-2. Per la linea UI: `docs/dev/UI2A_CONNECTIONS_RUN_DESIGN.md` e
-   `docs/dev/UI2B_ACCEPT_DESIGN.md`.
-3. Per la checklist/accettazioni: `docs/dev/PR7A_REAL_SMOKE.md`,
+2. Per la linea DNS: `docs/dev/PR6A_DNS_IMPORT_DESIGN.md` (contratto 6D),
+   `docs/dev/PR6B_PRE_CAPTURES.md` (fatti write-API reali),
+   `docs/dev/PR6C_DNS_VERIFY_DESIGN.md` (verify + safety test).
+3. Per la linea UI: `docs/dev/UI2A_CONNECTIONS_RUN_DESIGN.md`,
+   `docs/dev/UI2B_ACCEPT_DESIGN.md`, `docs/dev/UI3_APPLY_MONITOR_DESIGN.md`.
+4. Per checklist/accettazioni: `docs/dev/PR7A_REAL_SMOKE.md`,
    `docs/dev/PR7C_APPLY_EVIDENCE_DESIGN.md`, `docs/dev/PR7D_ACCEPTANCES_DESIGN.md`.
 
 ## Contesto in una riga
 
 Pipeline read-only completa (inventario SSH → diff → policy → dns-plan →
 checklist) con catena di provenienza sha256, evidenza `per_item` da report apply
-(PR 7C), accettazioni operatore con chiavi stabili (PR 7D), **e una UI web locale
-interattiva** (`cpanel-self-migration ui`) che copre l'intero flusso read-only dal
-browser: configurare i server, lanciare l'analisi, accettare le azioni. La
-migrazione vera (`--apply`) resta SOLO da terminale.
+(7C), accettazioni operatore (7D), **`dns verify`** (6C: certificazione read-only
+delle zone destination contro il piano), e una UI web locale zero-JS che copre
+l'intero flusso read-only dal browser **più il monitor live di un apply da
+terminale** (UI-3). La migrazione vera (`--apply`) e la futura scrittura DNS
+restano SOLO da terminale.
 
-## Stato del fork (ultimo merge: PR #27, HEAD `69da8d4`)
-
-Ultime 7 PR di questa sessione, tutte mergiate sul main del fork:
+## Stato del fork (ultimo merge: PR #30, main `6a9dfed`)
 
 | PR | Contenuto |
 |----|-----------|
-| #21 | checklist SSL: gruppi cert scaduti sul source → expected, copertura wildcard RFC 6125 |
-| #22 | PR 7C apply evidence: eventi di fase apply, `phases_completed`/`artifacts` in report.json, checklist `per_item` |
-| #23 | PR 7D acceptances: chiavi azione stabili (`AK-<12hex>`), acceptances.json, `--acceptances` (gate clearing fail-safe) |
-| #24 | UI fase 1: dashboard read-only (checklist + staleness + artefatti), loopback-only |
-| #25 | UI fase 2a: form connessioni (host.yaml) + run-from-browser (pipeline come subprocess della CLI), gate CSRF/rebinding/clickjacking |
-| #26 | UI 2a hardening: panic recovery nel job, signal shutdown (niente sottoprocessi orfani), doc/banner corretti, race save-config |
-| #27 | UI fase 2b: accettare azioni dal browser (upsert acceptances.json + rigenerazione checklist immediata) |
+| #29 | **PR 6C `dns verify`**: namespace `dns` nel dispatch (subcommand ignoti → exit 2, prima cadevano silenziosamente in un dry-run di migrazione), engine puro `VerifyDNSPlan` (stati applied/unchanged/pending/drift/manual_review/not_checked, fail-safe su piani malformati), gate stale-plan sha256 (exit 3 prima di ogni SSH), `--fail-on-drift` (exit 3 se non clean), `sshx.DialDest` (solo destination — il source può essere già dismesso), `FetchDNSZone` estratto behavior-preserving dal collector, report json+md con golden. Semantica gate: manual OPS non gatano mai (NS differisce in ogni migrazione reale — deadlock 6A-v1), manual ZONES gatano sempre (piano stantio ≠ falso verde). Safety: scan module-wide token-based dei verbi di scrittura DNS + **test strutturale AST** (ogni `RunUAPI`/`RunAPI2` deve passare modulo/funzione come string literal — la concatenazione `"mass_"+"edit_zone"` fa fallire la suite). |
+| #30 | **UI-3 apply/run monitor**: la dashboard legge `events.jsonl` (scritto da `--apply --json-events` da terminale, O_APPEND → segmentazione sull'ultimo `run_started`) e mostra l'ultimo run fase-per-fase con l'evidenza per-item 7C. Monitor-only (la UI non lancia mai apply), zero-JS (meta-refresh esteso, NIENTE SSE: richiederebbe JS), parser fail-safe (tail 2 MiB con io.LimitReader, riga parziale=write in-flight, garbage contato, 50 fasi max, 8 errori, 10 item names), stall detection (>10 min senza eventi o ts futuro oltre 30s di skew → pannello ambra + stop refresh). |
+
+Lezione di sessione (paga da 4 PR di fila): il go-reviewer al **primo giro** su #30
+ha trovato 2 HIGH veri (stalled renderizzato verde; ts futuro → refresh infinito);
+il **secondo giro sui fix** ha trovato 2 MEDIUM introdotti DAI fix (conteggio
+overflow per eventi anziché fasi; zero tolleranza skew NTP → falso stall su run
+sani); terzo giro APPROVE. Su superfici critiche i giri di review sono iterativi
+finché non escono puliti — mai fermarsi al primo APPROVE mancato.
 
 ## Workflow (OBBLIGATORIO — non negoziabile)
 
@@ -50,32 +54,26 @@ Ultime 7 PR di questa sessione, tutte mergiate sul main del fork:
   con `gh pr merge N --merge`.
 - Branch nuovo per ogni PR: `git checkout main && git pull fork main && git checkout -b <branch>`.
 - **TDD rigoroso**: fixture/scenario reale → test RED → fix minimo → GREEN → refactor.
-- Per OGNI PR, prima del push lancia un Go reviewer (agent
+  I safety test vanno validati col metodo test-del-test (canary iniettato → fail → rimosso).
+- Per OGNI PR, prima del push lancia il Go reviewer (agent
   `everything-claude-code:go-reviewer`) con un prompt che gli fa ATTACCARE le
-  proprietà critiche; correggi i finding reali PRIMA di aprire la PR. Storia di
-  questa sessione: il reviewer ha trovato bug HIGH veri su #23 (under-acceptance
-  silenziosa), #26 (panic + sottoprocesso orfano, in un SECONDO giro su main
-  mergiato) e #27 (perdita storico accettazioni + TOCTOU run/accept). Non
-  saltarlo mai, e per superfici security-critical valuta un secondo giro.
-- **Sourcery è rate-limited a livello account** fino a ~09/07/2026 (limite
-  settimanale 500k caratteri di diff): NON produce review, il check "pass" è solo
-  formale. Gate sostitutivo usato per #22–#27: go-reviewer + verifica completa in
-  Docker (sotto). Dichiaralo nel commento di merge.
+  proprietà critiche con controesempi concreti; correggi i finding reali e
+  RIMANDA i fix allo stesso reviewer (SendMessage) finché non dà APPROVE.
+- **Sourcery è rate-limited a livello account** fino a ~09/07/2026: il check
+  "pass" è solo formale. Gate sostitutivo usato per #22–#30: go-reviewer
+  multi-giro + suite completa in Docker. Dichiaralo nel commento di merge.
 
 ## Verifiche finali di ogni PR
 
 ```
-go test ./internal/webui/ ./internal/accountinventory/ ./cmd/... -race
-go test ./...
-go vet ./...
-go build ./cmd/cpanel-self-migration
-gofmt -l <file toccati>
+go test ./internal/webui/ ./internal/accountinventory/ ./cmd/... ./internal/sshx/ ./internal/cpanel/ -race
+go test ./...   &&   go vet ./...   &&   go build ./cmd/cpanel-self-migration
+gofmt -l <file toccati>   # ATTENZIONE: main ha violazioni gofmt PREESISTENTI in 7 file — formatta solo i TUOI file
 ```
 
 I 4 package macOS noti (`dbmig`, `maildir`, `migrate`, `webfiles`) falliscono su
-macOS SOLO perché usano bash/sed GNU-only — NON sono regressioni. Verifica con
-`git diff main -- <pkg>` (deve essere vuoto). La CI del fork non gira: **replica
-la suite completa in Docker** prima di ogni merge (stesso ambiente della CI):
+macOS SOLO per bash/sed GNU-only — verifica `git diff main -- <pkg>` vuoto. La CI
+del fork non gira: **replica la suite in Docker prima di ogni merge**:
 
 ```
 docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false -e CGO_ENABLED=1 \
@@ -86,73 +84,64 @@ Golden Markdown: refresh con `UPDATE_GOLDEN=1`.
 
 ## Perimetro protetto
 
-- `internal/migrate/runner.go` — off-limits alla linea inventory/UI. Unica
-  eccezione già spesa: PR 7C tocca il call-site minimo di `runApply`
-  (`opts.RunID = runID`).
-- Scritture sui server VIETATE fino a PR 6D (protocollo dedicato: backup,
-  rollback <60s, zona sacrificale, Orbit). La UI non apre SSH: lancia la CLI come
-  subprocess; `--apply` resta terminal-only.
+- `internal/migrate/runner.go` off-limits (unica eccezione già spesa: la riga
+  `opts.RunID = runID` di PR 7C).
+- Scritture sui server VIETATE fino a PR 6D. La UI non apre SSH e non lancia
+  `--apply`; `dns verify` apre SSH READ-ONLY verso il solo destination.
+- I safety test DNS (`internal/cpanel/dns_safety_test.go`: lexical module-wide +
+  strutturale literal-names) sono il lucchetto di 6D: 6D dovrà emendarli
+  CONSAPEVOLMENTE con una allowlist per i propri file.
 
-## Architettura UI (per orientarti veloce)
+## Mappa rapida del codice nuovo
 
-- `internal/webui/webui.go` — handler, gate di sicurezza (`route`,
-  `requestIsLocal` anti-rebinding, `post` CSRF), config form (`saveConfig`,
-  `writeValidatedConfig` — validazione delegata a `config.Load`), dashboard
-  (`buildPage`, `staleInputs`).
-- `internal/webui/job.go` — `jobManager` (uno slot singolo `busy` sotto mutex;
-  `tryReserve`/`release` per la mutua esclusione run↔accept), `pipelineSteps` e
-  `checklistStep(dir)` (condiviso), `execRunner` (subprocess della CLI),
-  `tailBuffer`.
-- `internal/webui/accept.go` — `saveAccept` (UI 2b): legge la checklist, verifica
-  `Acceptable`, upsert via `accountinventory.MergeAcceptance`, rigenera la
-  checklist; `writeJSONAtomic`.
-- `internal/webui/templates/index.html` — pagina unica, zero JS (meta-refresh
-  durante un run), form connessioni + run + accept inline.
-- `cmd/cpanel-self-migration/ui_cmd.go` — sottocomando `ui`, signal handling che
-  cancella il base context (uccide il subprocess) e drena via `srv.Shutdown`.
+- `internal/accountinventory/dnsverify.go` — `VerifyDNSPlan` (puro; riusa
+  `planValue`/`groupRRSets`/`canonDNSName` del piano: verify non può divergere
+  dal piano su cosa significhi "uguale") + `dnsverify_write.go` (json+md golden).
+- `internal/accountinventory/collector.go` — `FetchDNSZone` esportata (UAPI→API2
+  →unavailable, mai fatale), usata da collector e da `dns verify`.
+- `internal/sshx/pool.go` — `DialDest` + `hostKeyCallback` condiviso con `DialBoth`.
+- `cmd/cpanel-self-migration/dns_verify_cmd.go` — comando; dispatch namespace
+  `dns` in `main.go`. Exit: 0 ok, 1 input/SSH, 2 flag, 3 gated (stale-plan o
+  `--fail-on-drift` non clean). E2E con `sshtest` + stub `uapi` in PATH.
+- `internal/webui/monitor.go` — `loadRunMonitor` (tail-bounded) +
+  `parseRunMonitor` (puro, `now` iniettato) + pannello in `templates/index.html`
+  (classe `.status.stalled` ambra); `page.Monitor`/`MonitorLive` in `webui.go`.
 
 ## Prossimi obiettivi (proponi tu quale, motiva, aspetta conferma)
 
-**Lato UI:**
-1. **UI fase 3 — monitor live apply**: seguire `events.jsonl` via SSE durante un
-   `--apply` mostrando fase/item in tempo reale (gli eventi per-item ci sono già
-   da PR 7C). ATTENZIONE: l'apply è l'operazione che scrive sui server — decidere
-   se la UI lo LANCIA (con conferme forti) o solo lo MONITORA mentre gira da
-   terminale. Il monitor-only è a rischio molto più basso e allineato al modello
-   attuale ("la UI non muta i server").
-2. **UI rifiniture**: revoca di un'accettazione dal browser (oggi si edita il
-   file); persistenza del nome operatore; download degli artefatti.
+1. **PR 7E — inventario esteso** (capture-first come 6B-pre): email routing,
+   default address, filtri email, redirect + finding 3 dello smoke 7A (DKIM
+   rigenerati silenziosi → azione operatore `CONFIRM_DNS_RECORD`). Riduce le
+   azioni manuali cieche della checklist. **RICHIEDE sessione Orbit con TOTP**
+   per le capture reali (account registrati: doctorbike.it, italplant.com).
+2. **PR 6D — `dns apply`**: il PRIMO comando che scrive. Alto rischio — sessione
+   dedicata, protocollo completo del CLAUDE.md (backup, rollback <60s, zona
+   sacrificale su principiadv.online, approvazioni Orbit live). Contratto:
+   mass_edit_zone atomica serial-guarded, mai delete di record destination, mai
+   NS/SOA, backup-file-o-niente-write. 6C fornisce già la certificazione
+   post-apply (`dns verify --fail-on-drift`) e i safety test da emendare.
+3. **Quick-fix dispatch** (30 min): `inventory <subcommand ignoto>` cade ancora
+   silenziosamente nel flusso migrazione (stessa classe di footgun che il
+   namespace `dns` ora rifiuta con exit 2) — finding out-of-scope del reviewer
+   su #29, annotato in DEVELOPMENT_STATE.md.
+4. **UI rifiniture** (basso valore, zero blocchi): revoca accettazione dal
+   browser, persistenza nome operatore, download artefatti.
 
-**Lato pipeline (nessuna UI):**
-3. **PR 6C — dns verify** (read-only): ri-fetch delle zone destination e confronto
-   con un `dns_import_plan.json`, exit 3 su drift; il piano può essere rifiutato se
-   gli input non corrispondono agli sha256 embedded. Prerequisito logico di 6D.
-   Riusa `internal/sshtest` e `dns_zones.go`.
-4. **PR 7E — inventario esteso** (capture-first come 6B-pre): email routing,
-   default address, filtri, redirect + finding 3 dello smoke (DKIM rigenerati
-   silenziosi → azione operatore dedicata). Riduce le azioni manuali cieche della
-   checklist. Richiede capture reali via Orbit (sessione con TOTP).
-5. **PR 6D — dns apply**: il PRIMO comando che scrive. Alto rischio, sessione
-   dedicata, protocollo completo del CLAUDE.md di progetto.
+Consiglio: 1 e 2 sono i due obiettivi sostanziali rimasti e richiedono ENTRAMBI
+l'utente in sessione (TOTP / approvazioni): pianificali come sessioni dedicate.
+La 3 è il riempitivo perfetto se c'è tempo residuo. Follow-up minori annotati in
+DEVELOPMENT_STATE.md (§ "Follow-ups from the 6C go-review").
 
-Consiglio: la **3 (dns verify)** è il quick-win read-only a maggior valore
-strutturale; la **1 monitor-only** è il completamento naturale della UI a basso
-rischio; la **4** sblocca la checklist ma costa una sessione di capture Orbit.
-
-## Come provare la UI adesso (demo con dati sintetici)
+## Come provare la UI adesso
 
 ```
 go build ./cmd/cpanel-self-migration
-mkdir -p ~/Desktop/pADV/demo-run
-./cpanel-self-migration ui --dir ~/Desktop/pADV/demo-run   # http://127.0.0.1:8422/
+./cpanel-self-migration ui --dir <dir-artefatti>   # http://127.0.0.1:8422/
 ```
 
-Directory vuota = stato vuoto. Per popolarla servono gli artefatti di una run
-(inventari → diff → policy → checklist). In sessione precedente è stata usata una
-demo sintetica generando due inventari con un piccolo main() throwaway che importa
-`internal/accountinventory` (va eseguito DA DENTRO il repo con `go run ./tmp_gen`,
-non da un file esterno: il package è internal), poi i tre subcomandi
-`inventory diff|policy|checklist`.
+Per vedere il monitor: nella dir un `events.jsonl` (anche sintetico: righe JSONL
+di `events.Event`; vedi `internal/webui/monitor_test.go` per lo shape, o lancia
+un dry-run con `--json-events`). Senza file la dashboard mostra l'hint.
 
 ## Regole di lavoro
 
