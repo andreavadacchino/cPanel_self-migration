@@ -50,6 +50,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | UI-2b | accept manual actions from the browser (acceptances.json upsert + checklist regen) | #27 |
 | 6C | `dns verify`: read-only per-op verification of destination zones against a dns plan (`--fail-on-drift`, stale-plan sha256 gate, `sshx.DialDest`, structural literal-names safety test) | #29 |
 | UI-3 | apply/run monitor: dashboard tails events.jsonl (monitor-only, zero-JS, stall detection, bounded parse/render) | #30 |
+| fix | dispatch: `inventory` missing/unknown subcommand → exit 2 + usage (was: silent fall-through to the migration flow); E2E dispatch tests via TestMain re-exec | #32 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -206,10 +207,11 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
   safety tests (lexical + structural literal-names guard in
   `dns_safety_test.go`) are in place; 6D must consciously amend the
   forbidden list to introduce its writer.
-- **Follow-ups from the 6C go-review** (non-blocking): (a) `inventory
-  <unknown-subcommand>` still falls through silently to the migration
-  flow (`main.go` dispatch) — same footgun class the `dns` namespace
-  now refuses with exit 2; (b) LOW: `classify()` checks
+- **Follow-ups from the 6C go-review**: (a) **DONE** — `inventory` with a
+  missing or unknown subcommand now exits 2 with a usage line instead of
+  falling through to the migration flow (dispatch guard mirroring the
+  `dns` namespace; E2E-locked by `dispatch_test.go`, which re-execs the
+  real `main()` via TestMain + env guard); (b) LOW: `classify()` checks
   `utf8.ValidString` only on source TXT values, not destination ones —
   a non-UTF-8 dest TXT can only fail-safe toward drift/manual, never
   toward a silent pass, so cosmetic only.
