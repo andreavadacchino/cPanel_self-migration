@@ -54,6 +54,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 7E-pre | real-server captures for email routing / default address / filters / redirects (`PR7E_PRE_CAPTURES.md`: list_mxs local+remote pair, list_default_address covers subdomains, filters empty everywhere, Mime::list_redirects = .htaccess harvest with CMS noise) | #33 |
 | 7E-1 | inventory sections email_routing / default_address / email_filters / redirects (4 read-only UAPI calls, filter bodies never in artifacts, deterministic tie-breaks, narrowed-scope warning); diff/policy/checklist unchanged until 7E-2 | #34 |
 | 7E-2 | diff/policy/checklist wiring for the four 7E sections (per-item actions replace the blanket not_inventoried checks, CMS rewrite recognition, RECREATE_EMAIL_FILTERS + CONFIRM_REDIRECT action types) + DKIM CONFIRM_DNS_RECORD on plan replace (7A finding 3) | #35 |
+| 7E-smoke | real-data smoke of the four 7E sections via offline capture replay (`PR7E_REAL_SMOKE.md`): all criteria pass — 20 CMS rewrites → expected differences, zero fake actions, blocking 11→8, DKIM CONFIRM_DNS_RECORD ×4, SPF still 0 manual, stale-dest guard holds, italplant remote routing clean + genuine 301 → one non-blocking CONFIRM_REDIRECT; 11 pre-7E sections multiset-identical to the 7A source (zero collector drift). Captures archived in `~/Desktop/pADV/cPanel_self-migration-captures/` | #38 |
 
 ## The full pipeline (all read-only / offline)
 
