@@ -577,6 +577,75 @@ func TestBuildChecklistSSLRemovedUnknownExpiryStaysBlocked(t *testing.T) {
 	}
 }
 
+// Fail-safe: a source certificate with NO domain list surfaces as the
+// "(no domain list)" placeholder ref, which can never match a real Domains
+// key — even when that certificate is itself expired, the removal must keep
+// blocking (the tool cannot prove which domains it covered).
+func TestBuildChecklistSSLNoDomainListExpiredStaysBlocked(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	src.SSL.Items = append(src.SSL.Items,
+		SSLEntry{Domains: "", Issuer: "R3",
+			ValidFrom: 1_500_000_000, ValidUntil: chkCertExpiredUntil, ValidationType: "dv"},
+	)
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	ssl := chkSection(t, c, "ssl")
+	if ssl.Status != SectionBlocked {
+		t.Errorf("ssl status = %q, want %q: an unmatchable placeholder key must never downgrade", ssl.Status, SectionBlocked)
+	}
+	if acts := chkActionsOf(c, "ssl", MActionReissueSSL); len(acts) == 0 {
+		t.Error("want a blocking REISSUE_SSL action for the certificate without a domain list")
+	}
+}
+
+// Fail-safe: one expired generation followed by one with UNKNOWN expiry
+// under the same key — the unknown entry must veto the downgrade even after
+// an expired entry was already seen.
+func TestBuildChecklistSSLRemovedExpiredThenUnknownStaysBlocked(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	src.SSL.Items = append(src.SSL.Items,
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3 gen1",
+			ValidFrom: 1_500_000_000, ValidUntil: chkCertExpiredUntil, ValidationType: "dv"},
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3 gen2",
+			ValidFrom: 1_600_000_000, ValidUntil: 0, ValidationType: "dv"},
+	)
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	ssl := chkSection(t, c, "ssl")
+	if ssl.Status != SectionBlocked {
+		t.Errorf("ssl status = %q, want %q: an unknown-expiry generation must veto the expired-group downgrade", ssl.Status, SectionBlocked)
+	}
+}
+
+func TestCertDomainCovers(t *testing.T) {
+	cases := []struct {
+		certDom, dom string
+		want         bool
+	}{
+		{"main.example", "main.example", true},         // exact
+		{"*.main.example", "shop.main.example", true},  // one extra label
+		{"*.main.example", "main.example", false},      // never the base itself
+		{"*.main.example", "a.b.main.example", false},  // never multi-label
+		{"*.main.example", "*.main.example", true},     // literal wildcard match
+		{"*.main.example", "*.other.example", false},   // wildcard query, other zone
+		{"*.", "x", false},                             // bare wildcard, empty base
+		{"*.a.b", "*.c.a.b", false},                    // wildcard query never synthesized
+		{"shop.main.example", "*.main.example", false}, // per-host never covers a wildcard
+		{"*.main.example", ".main.example", false},     // empty label
+		{"", "", true}, // pre-existing exact-match semantics
+		{"", "main.example", false},
+	}
+	for _, tc := range cases {
+		if got := certDomainCovers(tc.certDom, tc.dom); got != tc.want {
+			t.Errorf("certDomainCovers(%q, %q) = %v, want %v", tc.certDom, tc.dom, got, tc.want)
+		}
+	}
+}
+
 // Semantic wildcard coverage: a valid destination wildcard covers the
 // single-label subdomain a removed per-host certificate used to serve.
 func TestBuildChecklistSSLRemovedCoveredByWildcardIsExpected(t *testing.T) {

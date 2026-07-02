@@ -451,7 +451,9 @@ func (b *checklistBuilder) evalSSLSection(sec *ChecklistSection, findings []Poli
 // exact match, or RFC 6125-style wildcard matching — "*.base" covers exactly
 // one extra non-empty label ("shop.base" yes; "base" itself and "a.b.base"
 // no). A wildcard query is only ever covered by the identical literal
-// wildcard entry, never synthesized from per-host coverage.
+// wildcard entry, never synthesized from per-host coverage. Matching is
+// case-sensitive like the rest of the pipeline: cPanel normalizes domains
+// to lowercase on both sides.
 func certDomainCovers(certDom, dom string) bool {
 	if certDom == dom {
 		return true
