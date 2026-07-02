@@ -175,6 +175,8 @@ func (s *server) route(w http.ResponseWriter, r *http.Request) {
 		s.post(w, r, s.saveConfig)
 	case "/run":
 		s.post(w, r, s.startRun)
+	case "/accept":
+		s.post(w, r, s.saveAccept)
 	default:
 		http.NotFound(w, r)
 	}

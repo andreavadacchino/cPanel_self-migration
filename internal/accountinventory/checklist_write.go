@@ -10,7 +10,8 @@ import (
 
 // WriteChecklistJSON writes the machine-readable checklist (same
 // conventions as the other artifacts: pretty-printed, trailing newline,
-// 0600).
+// 0600). The write is atomic (temp + rename): a reader — e.g. the web ui
+// re-reading it on every request — never observes a torn file.
 func WriteChecklistJSON(path string, c MigrationChecklist) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("accountinventory: mkdir %s: %w", filepath.Dir(path), err)
@@ -20,7 +21,23 @@ func WriteChecklistJSON(path string, c MigrationChecklist) error {
 		return fmt.Errorf("accountinventory: marshal checklist: %w", err)
 	}
 	b = append(b, '\n')
-	return os.WriteFile(path, b, 0o600)
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("accountinventory: temp for %s: %w", path, err)
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // no-op after a successful rename
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("accountinventory: write %s: %w", tmp, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("accountinventory: close %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("accountinventory: commit %s: %w", path, err)
+	}
+	return nil
 }
 
 // checklistStatusEmoji renders a section status for the operator report.

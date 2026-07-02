@@ -34,6 +34,9 @@
   .status { padding: .6rem 1rem; border-radius: .5rem; background: #f3f6fb; margin: .6rem 0; }
   .status.failed { background: #fde8e8; }
   .status.completed { background: #def7ec; }
+  .acceptform { display: flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
+  .acceptform input { padding: .2rem .3rem; }
+  .acceptform button { padding: .3rem .7rem; }
   pre.tail { background: #10161f; color: #d7e0ee; padding: .6rem; border-radius: .4rem; font-size: .78rem; overflow-x: auto; max-height: 14rem; }
 </style>
 </head>
@@ -127,17 +130,28 @@
 
   {{if .ManualActions}}
   <h2>Manual actions</h2>
-  <p class="muted">The <strong>Key</strong> column is the stable handle acceptances.json entries bind to.</p>
+  <p class="muted">Acceptable, non-blocking-once-accepted items can be accepted here; a lost active cron job or an external MX must be resolved, not accepted.</p>
   <table>
-    <tr><th>ID</th><th>Key</th><th>Blocking</th><th>Section</th><th>Type</th><th>Action</th></tr>
+    <tr><th>ID</th><th>Blocking</th><th>Section</th><th>Type</th><th>Action</th><th>Accept</th></tr>
     {{range .ManualActions}}
     <tr>
-      <td class="mono">{{.ID}}</td>
-      <td class="mono">{{.Key}}</td>
-      <td>{{if .Accepted}}<span class="accepted">accepted by {{.AcceptedBy}} ({{.AcceptedAt}})</span>{{else if .BlockingCutover}}<span class="yes">yes</span>{{else}}no{{end}}</td>
+      <td class="mono">{{.ID}}<br><span class="muted mono">{{.Key}}</span></td>
+      <td>{{if .Accepted}}<span class="accepted">accepted by {{.AcceptedBy}}</span>{{else if .BlockingCutover}}<span class="yes">yes</span>{{else}}no{{end}}</td>
       <td><code>{{.Section}}</code></td>
       <td class="mono">{{.Type}}</td>
-      <td>{{.Title}} — {{.OperatorAction}}{{if .AcceptedReason}}<br><span class="muted">acceptance note: {{.AcceptedReason}}</span>{{end}}</td>
+      <td>{{.Title}} — {{.OperatorAction}}{{if .AcceptedReason}}<br><span class="muted">note: {{.AcceptedReason}}</span>{{end}}</td>
+      <td>
+        {{if .Accepted}}<span class="accepted">✓ {{.AcceptedAt}}</span>
+        {{else if .Acceptable}}
+          <form method="post" action="/accept" class="acceptform">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="hidden" name="action_key" value="{{.Key}}">
+            <input type="text" name="operator" placeholder="your name" size="8" required>
+            <input type="text" name="reason" placeholder="reason" size="18" required>
+            <button type="submit">Accept</button>
+          </form>
+        {{else}}<span class="muted">must resolve</span>{{end}}
+      </td>
     </tr>
     {{end}}
   </table>

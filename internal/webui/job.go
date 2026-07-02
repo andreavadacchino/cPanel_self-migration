@@ -131,6 +131,35 @@ func (j *jobManager) execute(steps []step) {
 	j.mu.Unlock()
 }
 
+// running reports whether an analysis job is currently in progress.
+func (j *jobManager) running() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.busy
+}
+
+// tryReserve atomically claims the single-writer slot (returns false if a
+// run or another reservation already holds it). It is the SAME busy flag
+// start() checks, so a full analysis run and a browser accept — both of
+// which write migration_checklist.json — are mutually exclusive, not just
+// TOCTOU-guarded. Pair every true return with release().
+func (j *jobManager) tryReserve() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.busy {
+		return false
+	}
+	j.busy = true
+	return true
+}
+
+// release frees a slot claimed by tryReserve.
+func (j *jobManager) release() {
+	j.mu.Lock()
+	j.busy = false
+	j.mu.Unlock()
+}
+
 // snapshot returns a copy of the current status for rendering.
 func (j *jobManager) snapshot() jobStatus {
 	j.mu.Lock()
@@ -151,21 +180,6 @@ func pipelineSteps(dir string) []step {
 	diff := filepath.Join(dir, "inventory_diff.json")
 	policy := filepath.Join(dir, "policy_report.json")
 
-	checklistArgv := []string{"inventory", "checklist",
-		"--source", src, "--destination", dst, "--diff", diff, "--policy", policy,
-		"--output-json", filepath.Join(dir, "migration_checklist.json"),
-		"--output-md", filepath.Join(dir, "migration_checklist.md"),
-	}
-	if p := filepath.Join(dir, "dns_import_plan.json"); fileExists(p) {
-		checklistArgv = append(checklistArgv, "--dns-plan", p)
-	}
-	if p := filepath.Join(dir, "report.json"); isApplyReport(p) {
-		checklistArgv = append(checklistArgv, "--migration-report", p)
-	}
-	if p := filepath.Join(dir, "acceptances.json"); fileExists(p) {
-		checklistArgv = append(checklistArgv, "--acceptances", p)
-	}
-
 	return []step{
 		{Name: "account inventory", Argv: []string{"--account-inventory", "--config", host, "--output-dir", dir}},
 		{Name: "inventory diff", Argv: []string{"inventory", "diff",
@@ -174,8 +188,34 @@ func pipelineSteps(dir string) []step {
 		{Name: "inventory policy", Argv: []string{"inventory", "policy",
 			"--diff", diff,
 			"--output-json", policy, "--output-md", filepath.Join(dir, "policy_report.md")}},
-		{Name: "inventory checklist", Argv: checklistArgv},
+		checklistStep(dir),
 	}
+}
+
+// checklistStep builds the (offline) checklist composition step for the run
+// dir, picking up whatever optional inputs are present (dns plan, apply
+// report, acceptances). Shared by the full pipeline and the browser accept
+// flow (UI 2b), so both compose the checklist identically.
+func checklistStep(dir string) step {
+	src := filepath.Join(dir, "inventory_source.json")
+	dst := filepath.Join(dir, "inventory_destination.json")
+	diff := filepath.Join(dir, "inventory_diff.json")
+	policy := filepath.Join(dir, "policy_report.json")
+	argv := []string{"inventory", "checklist",
+		"--source", src, "--destination", dst, "--diff", diff, "--policy", policy,
+		"--output-json", filepath.Join(dir, "migration_checklist.json"),
+		"--output-md", filepath.Join(dir, "migration_checklist.md"),
+	}
+	if p := filepath.Join(dir, "dns_import_plan.json"); fileExists(p) {
+		argv = append(argv, "--dns-plan", p)
+	}
+	if p := filepath.Join(dir, "report.json"); isApplyReport(p) {
+		argv = append(argv, "--migration-report", p)
+	}
+	if p := filepath.Join(dir, "acceptances.json"); fileExists(p) {
+		argv = append(argv, "--acceptances", p)
+	}
+	return step{Name: "inventory checklist", Argv: argv}
 }
 
 func fileExists(path string) bool {
