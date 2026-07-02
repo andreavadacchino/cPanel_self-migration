@@ -178,6 +178,17 @@ module root, non-test `.go` files only): no source file may contain
 have to consciously amend this test to introduce its writer — that is
 the point.
 
+The scan is token-based (go/scanner over string literals and
+identifiers; comments are exempt — design docs and plan comments
+legitimately NAME the write API). A lexical scan is defeated by
+runtime concatenation (`"mass_"+"edit_zone"` — go-reviewer finding),
+so a structural companion test closes that hole: every
+`RunUAPI`/`RunAPI2` call in the module must pass its module and
+function names as plain string literals; a dynamically built name
+fails regardless of its value. Accepted residual limit: a writer that
+bypasses those entry points entirely (hand-built `uapi …` script via
+`Runner.RunScript`) is human-review territory.
+
 ## Testing (TDD)
 
 - Engine (offline, `internal/accountinventory`): table-driven over

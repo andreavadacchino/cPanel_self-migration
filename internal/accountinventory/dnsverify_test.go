@@ -381,6 +381,8 @@ func TestVerifyDNSPlanMalformedOpsFailSafe(t *testing.T) {
 		{"record with empty data", PlanOp{Action: "add", Type: "A", Name: "x.example.com.",
 			Records: []PlanRecord{{Name: "x.example.com.", Type: "A", TTL: 300}}}},
 		{"checkable skip without destination values", PlanOp{Action: "skip", Type: "A", Name: "x.example.com."}},
+		{"replace without destination values", PlanOp{Action: "replace", Type: "A", Name: "x.example.com.",
+			Records: []PlanRecord{{Name: "x.example.com.", Type: "A", TTL: 300, Data: []string{"1.2.3.4"}}}}},
 		{"unknown action", PlanOp{Action: "delete", Type: "A", Name: "x.example.com.",
 			Records: []PlanRecord{{Name: "x.example.com.", Type: "A", TTL: 300, Data: []string{"1.2.3.4"}}}}},
 	}

@@ -1,6 +1,9 @@
 package cpanel
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
 	goscanner "go/scanner"
 	"go/token"
 	"io/fs"
@@ -60,6 +63,11 @@ func TestNoDNSWriteFunctions(t *testing.T) {
 // property is that no code can CALL it, and a call requires the name in a
 // string literal (RunUAPI/cpapi2 argv) or an identifier — so the scan
 // tokenizes each file and checks only those tokens.
+//
+// Known limit: a name built at runtime ("mass_"+"edit_zone") defeats a
+// lexical scan by construction. TestDNSAPICallsUseLiteralNames below
+// closes that hole for the cPanel API entry points by REQUIRING literal
+// module/function arguments — the concatenation itself becomes a failure.
 func TestNoDNSWritePatternsModuleWide(t *testing.T) {
 	root := "../.." // module root from internal/cpanel
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
@@ -103,4 +111,77 @@ func TestNoDNSWritePatternsModuleWide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walk: %v", err)
 	}
+}
+
+// TestDNSAPICallsUseLiteralNames is the structural companion of the
+// lexical scans (go-reviewer finding on PR 6C): every RunUAPI/RunAPI2
+// call in the module must pass its module and function names as PLAIN
+// STRING LITERALS, so the forbidden-pattern scan above is guaranteed to
+// see them. A dynamically built name (concatenation, Sprintf, variable)
+// fails here regardless of its value — the bypass itself is the error.
+//
+// Residual limit, accepted: a writer that avoids RunUAPI/RunAPI2 entirely
+// (a hand-built `uapi …` script through Runner.RunScript) is not caught
+// by this test; new RunScript call sites remain a human-review surface.
+func TestDNSAPICallsUseLiteralNames(t *testing.T) {
+	root := "../.." // module root from internal/cpanel
+	fset := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" || d.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", path, err)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := calleeBaseName(call.Fun)
+			if name != "RunUAPI" && name != "RunAPI2" {
+				return true
+			}
+			if len(call.Args) < 4 {
+				return true // not the (ctx, runner, module, fn, args) shape
+			}
+			for i, arg := range call.Args[2:4] {
+				if lit, ok := arg.(*ast.BasicLit); !ok || lit.Kind != token.STRING {
+					t.Errorf("%s: %s call builds its %s name dynamically — the DNS write scan cannot vet it, use a string literal",
+						fset.Position(call.Pos()), name, []string{"module", "function"}[i])
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+}
+
+// calleeBaseName unwraps generic instantiation (RunUAPI[T]) and package
+// selectors (cpanel.RunUAPI) down to the called identifier.
+func calleeBaseName(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return v.Sel.Name
+	case *ast.IndexExpr:
+		return calleeBaseName(v.X)
+	case *ast.IndexListExpr:
+		return calleeBaseName(v.X)
+	}
+	return ""
 }
