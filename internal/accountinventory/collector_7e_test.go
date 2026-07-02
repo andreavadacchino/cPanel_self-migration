@@ -165,3 +165,18 @@ func TestCollectRedirectsUnavailable(t *testing.T) {
 		t.Fatalf("section = %+v, want unavailable with warning", sec.ConfigSection)
 	}
 }
+
+// A legitimately mailbox-less account (list succeeded, zero entries)
+// must NOT get the narrowed-scope warning.
+func TestCollectEmailFiltersNoWarningWhenNoMailboxes(t *testing.T) {
+	runner := &fakeRunner{responses: map[string][]byte{
+		"Email list_filters": loadFixture(t, "email_list_filters.json"),
+	}}
+	sec := collectEmailFilters(context.Background(), runner, nil, false)
+	if !sec.Available {
+		t.Fatalf("section = %+v, want available", sec.ConfigSection)
+	}
+	if len(sec.Warnings) != 0 {
+		t.Errorf("no warnings expected for a mailbox-less account, got: %v", sec.Warnings)
+	}
+}

@@ -58,3 +58,23 @@ func TestParseListEmailFiltersUnknownRuleShape(t *testing.T) {
 		t.Errorf("enabled = %d, want 1 (from quoted \"1\")", data[0].Enabled)
 	}
 }
+
+// Tie-break regression lock (round-2 reviewer): duplicate filter names
+// must order deterministically regardless of the input order.
+func TestListEmailFiltersTieBreakOrderIndependent(t *testing.T) {
+	oneRule := `{"filtername":"dup","enabled":1,"rules":[{}],"actions":[{}]}`
+	twoRules := `{"filtername":"dup","enabled":1,"rules":[{},{}],"actions":[{}]}`
+	for name, payload := range map[string]string{
+		"one-first": oneRule + "," + twoRules,
+		"two-first": twoRules + "," + oneRule,
+	} {
+		out := []byte(`{"result":{"data":[` + payload + `],"errors":null,"messages":null,"status":1}}`)
+		data, err := ListEmailFilters(t.Context(), &fakeRunner{out: out}, "")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(data) != 2 || len(data[0].Rules) != 1 {
+			t.Errorf("%s: order not deterministic, got %+v", name, data)
+		}
+	}
+}

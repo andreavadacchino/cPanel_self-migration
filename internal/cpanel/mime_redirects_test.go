@@ -49,3 +49,24 @@ func TestParseListRedirectsEmpty(t *testing.T) {
 		t.Errorf("got %d, want 0", len(data))
 	}
 }
+
+// Tie-break regression lock (round-2 reviewer): two entries sharing
+// Domain+Source must come out in the same order regardless of the
+// input (API) order, which is not proven stable across invocations.
+func TestListRedirectsTieBreakOrderIndependent(t *testing.T) {
+	entryA := `{"domain":"d.test","sourceurl":"/old","destination":"https://a.test/","kind":"rewrite","type":"permanent","statuscode":"301","wildcard":0,"matchwww":0}`
+	entryB := `{"domain":"d.test","sourceurl":"/old","destination":"https://b.test/","kind":"rewrite","type":"permanent","statuscode":"301","wildcard":0,"matchwww":0}`
+	for name, payload := range map[string]string{
+		"a-first": entryA + "," + entryB,
+		"b-first": entryB + "," + entryA,
+	} {
+		out := []byte(`{"result":{"data":[` + payload + `],"errors":null,"messages":null,"status":1}}`)
+		data, err := ListRedirects(t.Context(), &fakeRunner{out: out})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(data) != 2 || data[0].Destination != "https://a.test/" {
+			t.Errorf("%s: order not deterministic, got %+v", name, data)
+		}
+	}
+}
