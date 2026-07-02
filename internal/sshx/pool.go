@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
 )
 
@@ -41,16 +43,10 @@ type Pool struct {
 	Dest *Client
 }
 
-// DialBoth opens connections to the source and (if configured) destination
-// hosts, both using the accept-new host-key policy backed by knownHostsPath
-// (default ~/.ssh/known_hosts when empty).
-func DialBoth(ctx context.Context, cfg config.Config, knownHostsPath string) (*Pool, error) {
-	// Honor a pre-cancelled context before any filesystem/TOFU side effect:
-	// AcceptNewHostKey below creates ~/.ssh and the known_hosts file, which a
-	// cancelled run must not do.
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+// hostKeyCallback resolves the accept-new host-key policy backed by
+// knownHostsPath (default ~/.ssh/known_hosts when empty). It creates the
+// known_hosts file, so callers must honor context cancellation FIRST.
+func hostKeyCallback(knownHostsPath string) (ssh.HostKeyCallback, error) {
 	if knownHostsPath == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -58,7 +54,20 @@ func DialBoth(ctx context.Context, cfg config.Config, knownHostsPath string) (*P
 		}
 		knownHostsPath = filepath.Join(home, ".ssh", "known_hosts")
 	}
-	cb, err := AcceptNewHostKey(knownHostsPath)
+	return AcceptNewHostKey(knownHostsPath)
+}
+
+// DialBoth opens connections to the source and (if configured) destination
+// hosts, both using the accept-new host-key policy backed by knownHostsPath
+// (default ~/.ssh/known_hosts when empty).
+func DialBoth(ctx context.Context, cfg config.Config, knownHostsPath string) (*Pool, error) {
+	// Honor a pre-cancelled context before any filesystem/TOFU side effect:
+	// hostKeyCallback below creates ~/.ssh and the known_hosts file, which a
+	// cancelled run must not do.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cb, err := hostKeyCallback(knownHostsPath)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +91,27 @@ func DialBoth(ctx context.Context, cfg config.Config, knownHostsPath string) (*P
 		p.Dest = dest
 	}
 	return p, nil
+}
+
+// DialDest opens a connection to the DESTINATION host only, with the same
+// host-key policy and pre-cancellation guard as DialBoth. `dns verify`
+// (PR 6C) re-fetches destination zones after a migration, when the source
+// server may already be decommissioned — DialBoth always dials the source
+// first, which would be both wasteful and a spurious failure there.
+func DialDest(ctx context.Context, cfg config.Config, knownHostsPath string) (*Client, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !cfg.DestConfigured() {
+		return nil, fmt.Errorf("destination host is not configured (ip, ssh_user and ssh_pass are required)")
+	}
+	cb, err := hostKeyCallback(knownHostsPath)
+	if err != nil {
+		return nil, err
+	}
+	return Dial(ctx, "dest",
+		net.JoinHostPort(cfg.Dest.IP, strconv.Itoa(cfg.Dest.Port)),
+		cfg.Dest.SSHUser, cfg.Dest.SSHPass, cfg.Dest.Timeout, keepaliveInterval, cb)
 }
 
 // Close shuts down both connections. Safe to call once.

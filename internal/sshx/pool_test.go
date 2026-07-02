@@ -115,3 +115,44 @@ func TestDialBothPreCancelNoSideEffects(t *testing.T) {
 		t.Errorf("pre-cancelled DialBoth must not create the known_hosts file (stat err=%v)", err)
 	}
 }
+
+// DialDest (PR 6C) opens the destination connection ONLY: `dns verify`
+// re-fetches destination zones after a migration, when the source server
+// may already be decommissioned — DialBoth would dial it first and fail.
+func TestDialDestConnectsWithoutSource(t *testing.T) {
+	addr := newCmdServer(t, true, okHandler)
+	cfg := config.Config{Dest: cfgToHost(t, addr)} // src BLANK on purpose
+	kh := filepath.Join(t.TempDir(), "known_hosts")
+
+	c, err := DialDest(context.Background(), cfg, kh)
+	if err != nil {
+		t.Fatalf("DialDest: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+}
+
+func TestDialDestNotConfigured(t *testing.T) {
+	kh := filepath.Join(t.TempDir(), "known_hosts")
+	if _, err := DialDest(context.Background(), config.Config{}, kh); err == nil {
+		t.Fatal("DialDest with a blank destination must fail")
+	}
+}
+
+// A pre-cancelled context must fail before any filesystem/TOFU side effect
+// (same guard as DialBoth).
+func TestDialDestPreCancelledContext(t *testing.T) {
+	addr := newCmdServer(t, true, okHandler)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	khDir := filepath.Join(t.TempDir(), "fresh")
+	kh := filepath.Join(khDir, "known_hosts")
+
+	if _, err := DialDest(ctx, config.Config{Dest: cfgToHost(t, addr)}, kh); err == nil {
+		t.Fatal("pre-cancelled context must fail")
+	}
+	if _, statErr := os.Stat(khDir); !os.IsNotExist(statErr) {
+		t.Error("a cancelled dial must not create known_hosts side effects")
+	}
+}
