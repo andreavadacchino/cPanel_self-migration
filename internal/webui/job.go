@@ -55,13 +55,17 @@ type jobManager struct {
 	status jobStatus
 	runner StepRunner
 	dir    string
+	base   context.Context // parent of every run's context (cancelled on ui shutdown)
 }
 
-func newJobManager(dir string, runner StepRunner) *jobManager {
+func newJobManager(dir string, runner StepRunner, base context.Context) *jobManager {
 	if runner == nil {
 		runner = execRunner
 	}
-	return &jobManager{dir: dir, runner: runner, status: jobStatus{State: "idle"}}
+	if base == nil {
+		base = context.Background()
+	}
+	return &jobManager{dir: dir, runner: runner, base: base, status: jobStatus{State: "idle"}}
 }
 
 // start launches the pipeline in the background; errBusy when one is
@@ -79,7 +83,23 @@ func (j *jobManager) start() error {
 }
 
 func (j *jobManager) execute(steps []step) {
-	ctx, cancel := context.WithTimeout(context.Background(), jobTimeout)
+	// A panic in this request-independent goroutine would otherwise take
+	// down the whole ui process (net/http only recovers per-connection):
+	// recover it into a failed run so the dashboard survives and a retry
+	// is possible.
+	defer func() {
+		if r := recover(); r != nil {
+			j.mu.Lock()
+			j.status.State = "failed"
+			j.status.Err = fmt.Sprintf("internal error: %v", r)
+			j.busy = false
+			j.mu.Unlock()
+		}
+	}()
+	// The run context descends from the manager's base (cancelled when the
+	// ui shuts down, so exec.CommandContext kills any in-flight subprocess)
+	// with a hard timeout backstop.
+	ctx, cancel := context.WithTimeout(j.base, jobTimeout)
 	defer cancel()
 	for _, st := range steps {
 		j.mu.Lock()

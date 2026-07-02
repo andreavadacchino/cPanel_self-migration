@@ -438,3 +438,84 @@ func TestSecurityOriginNullRejected(t *testing.T) {
 		t.Errorf("Origin: null post = %d, want 403", rr.Code)
 	}
 }
+
+// TestRunPanicRecovered (reviewer HIGH-2): a panic in the background job
+// goroutine must NOT crash the whole ui process — it must be recovered and
+// surfaced as a failed run, with busy cleared so a retry is possible.
+func TestRunPanicRecovered(t *testing.T) {
+	dir := t.TempDir()
+	panicRunner := func(ctx context.Context, out io.Writer, name string, argv []string) error {
+		panic("boom in " + name)
+	}
+	h := newTestHandler(t, dir, panicRunner)
+	saveValidConfig(t, h)
+	csrf := fetchCSRF(t, h)
+
+	if rr := doReq(h, http.MethodPost, "/run", url.Values{"csrf": {csrf}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("run = %d", rr.Code)
+	}
+	body := waitJob(t, h, "Run failed")
+	if !strings.Contains(body, "internal error") {
+		t.Errorf("a recovered panic must be shown as an internal error:\n%s", body)
+	}
+	// busy must be cleared: a second run is accepted (not 409).
+	waitIdleOrFailed(t, h)
+	if rr := doReq(h, http.MethodPost, "/run", url.Values{"csrf": {csrf}}); rr.Code == http.StatusConflict {
+		t.Error("busy left set after a panic — no retry possible")
+	}
+}
+
+func waitIdleOrFailed(t *testing.T, h http.Handler) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(doReq(h, http.MethodGet, "/", nil).Body.String(), "Run failed") {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestRunCancelledByBaseContext (reviewer HIGH-3): cancelling the base
+// context (as a signal handler would on Ctrl-C) stops the in-flight run —
+// the subprocess watcher lives under this context, so orphaning is avoided.
+func TestRunCancelledByBaseContext(t *testing.T) {
+	dir := t.TempDir()
+	fr := &fakeRunner{gate: make(chan struct{})} // blocks until ctx cancels
+	ctx, cancel := context.WithCancel(context.Background())
+	h, err := New(Options{Dir: dir, Runner: fr.run, BaseContext: ctx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveValidConfig(t, h)
+	csrf := fetchCSRF(t, h)
+	if rr := doReq(h, http.MethodPost, "/run", url.Values{"csrf": {csrf}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("run = %d", rr.Code)
+	}
+
+	cancel() // simulate Ctrl-C on the ui process
+	body := waitJob(t, h, "Run failed")
+	if !strings.Contains(body, "context canceled") && !strings.Contains(body, "cancel") {
+		t.Errorf("a cancelled run must end failed with the cancellation cause:\n%s", body)
+	}
+}
+
+// TestMutatingRoutesRejectNonPost (reviewer coverage gap): /config and /run
+// answer only POST — GET/PUT/DELETE get 405 with the Allow header.
+func TestMutatingRoutesRejectNonPost(t *testing.T) {
+	h := newTestHandler(t, t.TempDir(), nil)
+	for _, path := range []string{"/config", "/run"} {
+		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+			req := httptest.NewRequest(method, path, nil)
+			req.Host = testHost
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s = %d, want 405", method, path, rr.Code)
+			}
+			if rr.Header().Get("Allow") != "POST" {
+				t.Errorf("%s %s Allow = %q, want POST", method, path, rr.Header().Get("Allow"))
+			}
+		}
+	}
+}
