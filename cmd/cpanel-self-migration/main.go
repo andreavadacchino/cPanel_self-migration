@@ -46,6 +46,17 @@ func main() {
 			os.Exit(runInventoryChecklistCmd(os.Args[3:]))
 		}
 	}
+	// The `dns` namespace never falls through to the migration flow: before
+	// PR 6C these tokens were silently ignored by flag.Parse and, with a
+	// resolvable config, started a full migration dry-run — an unknown dns
+	// subcommand is an error instead.
+	if len(os.Args) >= 2 && os.Args[1] == "dns" {
+		if len(os.Args) >= 3 && os.Args[2] == "verify" {
+			os.Exit(runDNSVerifyCmd(os.Args[3:]))
+		}
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration dns verify --plan dns_import_plan.json …")
+		os.Exit(2)
+	}
 
 	var (
 		apply       = flag.Bool("apply", false, "create missing domains + migrate the selected data (default: dry-run)")

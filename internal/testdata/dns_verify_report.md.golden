@@ -1,0 +1,48 @@
+# DNS Verify Report
+
+- **Plan**: dns_import_plan.json (sha256 ccc)
+- **Generated**: t
+- **Verdict**: NOT CLEAN
+
+**Summary**: 1 applied, 0 unchanged, 1 pending, 1 drift, 1 manual review, 0 not checked, 1 untracked; 0 unavailable zone(s), 1 manual zone(s)
+
+The verdict gates on pending, drift, unavailable zones and manual zones; manual ops and untracked rrsets are reported for review only.
+
+## Zones excluded from the plan (each one keeps the verdict NOT CLEAN — re-run the pipeline)
+
+| Zone | Reason |
+|------|--------|
+| missing.example | zone missing on destination — create it via WHM/park first, then re-run |
+
+## Zone example.com (fetched via uapi)
+
+### DRIFT (1)
+
+| Type | Name | Reason | Expected | Observed |
+|------|------|--------|----------|----------|
+| A | same.example.com. | live rrset no longer matches the plan-time destination state | 38.224.109.78 | 5.5.5.5 |
+
+### PENDING (1)
+
+| Type | Name | Reason | Expected | Observed |
+|------|------|--------|----------|----------|
+| CNAME | www.example.com. | rrset still missing on the destination (plan-time state) | example.com. |  |
+
+### MANUAL REVIEW (1)
+
+| Type | Name | Reason | Expected | Observed |
+|------|------|--------|----------|----------|
+| NS | example.com. | NS/delegation is registrar/WHM territory — never written |  | ns1.new.example. |
+
+### APPLIED (1)
+
+| Type | Name | Reason | Expected | Observed |
+|------|------|--------|----------|----------|
+| A | new.example.com. |  | 38.224.109.78 | 38.224.109.78 |
+
+### Untracked live rrsets (1, postdate the plan — review only)
+
+| Type | Name | Values |
+|------|------|--------|
+| TXT | postplan.example.com. | added later |
+
