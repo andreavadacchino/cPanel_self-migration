@@ -128,3 +128,40 @@ are). Save one file per call into a local capture dir — never commit
 raw captures; anonymize into `internal/testdata/*_realserver.json`
 keeping format (relative vs absolute names, string numerics, segment
 splits) intact.
+
+**Capture transfer caveat:** `uapi` JSON is NOT byte-stable across
+invocations (per-record key order is randomized), so an integrity
+checksum is only meaningful against a capture saved to a server-side
+file first. When relaying captures through a chat/tool transport,
+verify md5 per chunk (or per `fold -w 64` line) against server-computed
+sums — a corrupted base64 payload can still decode to VALID but WRONG
+JSON, which no parser will catch.
+
+## Real-data smoke of `inventory dns-plan` (2026-07-02, post PR #13)
+
+The doctorbike.it capture (64 lines, byte-verified md5) was converted
+to inventory JSON through the REAL collector path (`FetchDNSZoneUAPI` +
+`toDNSRecordEntries`, throwaway harness per repo convention) and fed to
+the release binary in three scenarios. italplant.com was deliberately
+skipped: same shapes, double transfer cost, no new signal.
+
+| Scenario | Result |
+|---|---|
+| A: vs empty destination zone, `--ip-map 194.76.118.193=38.224.109.78` | 44 add, 5 manual, 11 skip, 0 informational |
+| B: vs identical destination, same map (pre-cutover state) | 32 replace, 4 manual, 24 skip |
+| C: vs identical destination, identity map (idempotence) | 0 add, 0 replace, 4 manual, 56 skip |
+
+Verified against the design, on real data: the 5 manual in A are
+exactly NS (delegation) + the 4 SPF TXT carrying the source IP; the 11
+skip are the 9 `_acme-challenge` + 1 `_cpanel-dcv-test-record` + SOA;
+all 44 adds carry translated addresses and TTL capped 14400→3600
+(`ttl_capped` set); DKIM TXT round-trip as 2 segments; **zero delete
+ops in every scenario**; NS equal in B/C → skip; two runs of scenario A
+are byte-identical modulo `generated_at`.
+
+**Refinement candidate for 6C (only real finding):** in scenario C the
+4 SPF TXT are flagged `manual` even though the map is an identity
+(`from == to`), i.e. the TXT needs no rewrite by construction. Safe
+direction (fail-safe), but a known false positive for the
+same-server/idempotence case: consider skipping the TXT-manual rule
+when every matched map entry is an identity mapping.
