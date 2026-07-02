@@ -51,6 +51,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 6C | `dns verify`: read-only per-op verification of destination zones against a dns plan (`--fail-on-drift`, stale-plan sha256 gate, `sshx.DialDest`, structural literal-names safety test) | #29 |
 | UI-3 | apply/run monitor: dashboard tails events.jsonl (monitor-only, zero-JS, stall detection, bounded parse/render) | #30 |
 | fix | dispatch: `inventory` missing/unknown subcommand → exit 2 + usage (was: silent fall-through to the migration flow); E2E dispatch tests via TestMain re-exec | #32 |
+| 7E-pre | real-server captures for email routing / default address / filters / redirects (`PR7E_PRE_CAPTURES.md`: list_mxs local+remote pair, list_default_address covers subdomains, filters empty everywhere, Mime::list_redirects = .htaccess harvest with CMS noise) | #33 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -192,8 +193,10 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
   perimeter). The per-item lines already exist in
   `logs/migration_report.log`; the checklist upgrade does NOT depend on
   this.
-- **PR 7E — inventory expansion wave 1** (capture-first like 6B-pre):
-  email routing, default address, email filters, redirects.
+- **PR 7E — inventory expansion wave 1** (captures DONE, see
+  `PR7E_PRE_CAPTURES.md`): collectors for email routing, default
+  address, email filters, redirects + diff/policy/checklist wiring +
+  the DKIM `CONFIRM_DNS_RECORD` action (7A smoke finding 3).
 - **Real-smoke refinements** (`PR7A_REAL_SMOKE.md`, findings 1 and 2
   already fixed — #18 and the SSL-expired/wildcard follow-up): (3)
   regenerated-DKIM reviews are silent — deserve a dedicated operator
