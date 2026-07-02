@@ -313,3 +313,44 @@ func TestChecklistWarnsAboutUnverifiedMXWhenDNSSkipped(t *testing.T) {
 		t.Errorf("warnings = %v, want the unverified-MX warning", c.Warnings)
 	}
 }
+
+// Round-2 reviewer MEDIUM: the unverified-MX warning must be scoped to
+// zones that actually host a routing domain — an unrelated zone hiccup
+// must not cry wolf.
+func TestChecklistMXWarningScopedToRoutingZones(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	// An extra, unrelated zone unavailable on the destination only; the
+	// routing domain's own zone stays fully compared.
+	src.DNS.Zones = append(src.DNS.Zones, DNSZoneResult{
+		Available: true, Zone: "unrelated.example", Method: "uapi",
+		Records: []DNSRecordEntry{}, Warnings: []string{}, Errors: []string{},
+	})
+	dest.DNS.Zones = append(dest.DNS.Zones, DNSZoneResult{
+		Available: false, Zone: "unrelated.example", Method: "unavailable",
+		Records: []DNSRecordEntry{}, Warnings: []string{}, Errors: []string{},
+	})
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+	for _, w := range c.Warnings {
+		if strings.Contains(w, "MX exchangers behind email routing") {
+			t.Fatalf("warning fired for an unrelated skipped zone: %v", c.Warnings)
+		}
+	}
+
+	// The routing domain's own zone unavailable → the warning MUST fire.
+	src2 := chkInventory("source", "1.2.3.4", "srcacct")
+	dest2 := chkInventory("destination", "5.6.7.8", "srcacct")
+	dest2.DNS.Zones[0].Available = false
+	dest2.DNS.Zones[0].Method = "unavailable"
+	c2 := BuildChecklist(chkInput(src2, dest2, nil, chkApplyReport()))
+	found := false
+	for _, w := range c2.Warnings {
+		if strings.Contains(w, "MX exchangers behind email routing") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want the unverified-MX warning for the routing domain's own zone", c2.Warnings)
+	}
+}

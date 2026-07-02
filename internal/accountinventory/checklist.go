@@ -398,10 +398,13 @@ func (b *checklistBuilder) evalRecreateSection(sec *ChecklistSection, name strin
 // check.
 func (b *checklistBuilder) evalEmailRoutingSection(sec *ChecklistSection, findings []PolicyFinding) {
 	// The routing diff compares the routing MODE only; the exchangers
-	// live in the dns section. When the dns comparison was skipped the
-	// operator must know the MX rrsets behind this routing were never
-	// verified — a generic "dns incomplete" note is not enough.
-	if dnsSec, ok := b.in.Diff.Sections["dns"]; ok && len(dnsSec.Skipped) > 0 && sec.SourceCount > 0 {
+	// live in the dns section. When the dns comparison relevant to a
+	// routing domain was skipped, the operator must know the MX rrsets
+	// behind this routing were never verified — a generic "dns
+	// incomplete" note is not enough. Scoped to the routing domains'
+	// own zones: an unrelated zone hiccup must not cry wolf.
+	if dnsSec, ok := b.in.Diff.Sections["dns"]; ok && sec.SourceCount > 0 &&
+		dnsSkipTouchesRouting(dnsSec.Skipped, b.in.Source.EmailRouting.Items) {
 		b.warnings = append(b.warnings,
 			"dns comparison was skipped — the MX exchangers behind email routing were not verified; compare them manually before cutover")
 	}
@@ -417,6 +420,30 @@ func (b *checklistBuilder) evalEmailRoutingSection(sec *ChecklistSection, findin
 				"Email Routing differs between source and destination; a wrong local/remote value silently breaks delivery.")
 		}
 	}
+}
+
+// dnsSkipTouchesRouting reports whether a dns Skipped entry affects a
+// mail-routing domain. A whole-section skip carries no "zone " prefix
+// and leaves every exchanger unverified; a per-zone skip ("zone <name>
+// unavailable on one side — records not compared") matters only when
+// that zone hosts one of the routing domains.
+func dnsSkipTouchesRouting(skipped []string, items []EmailRoutingEntry) bool {
+	for _, s := range skipped {
+		rest, perZone := strings.CutPrefix(s, "zone ")
+		if !perZone {
+			return true
+		}
+		zone := rest
+		if i := strings.IndexByte(zone, ' '); i >= 0 {
+			zone = zone[:i]
+		}
+		for _, it := range items {
+			if it.Domain == zone || strings.HasSuffix(it.Domain, "."+zone) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (b *checklistBuilder) evalDefaultAddressSection(sec *ChecklistSection, findings []PolicyFinding) {
