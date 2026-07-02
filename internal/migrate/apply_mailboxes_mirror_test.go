@@ -83,6 +83,7 @@ func TestApplyMailboxesMirrorAbsentSourceFailsClosed(t *testing.T) {
 	if res.failed != 1 {
 		t.Fatalf("failed = %d, want 1 (an absent source must fail-close the destructive mirror)", res.failed)
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@example.com", Status: "failed"})
 	out := file.String()
 	if !strings.Contains(out, "absent on source") || !strings.Contains(out, "left intact") {
 		t.Fatalf("report must say the source was absent and the live dest was left intact:\n%s", out)
@@ -130,6 +131,7 @@ func TestApplyMailboxesMirrorEmptyReadableSourceProceeds(t *testing.T) {
 	if res.failed != 0 {
 		t.Fatalf("failed = %d, want 0 (an empty-but-present source is a valid mirror target):\n%s", res.failed, file.String())
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@example.com", Status: "migrated"})
 	// MirrorBox ran: the previous dest-only mail was moved aside to <user>-bak.
 	mirrorPathExists(t, filepath.Join(dstHome, "mail", "example.com", "info-bak", "cur", "1.msg"))
 }
@@ -169,6 +171,7 @@ func TestApplyMailboxesMirrorUnreadableSourceFailsClosed(t *testing.T) {
 	if res.failed != 1 {
 		t.Fatalf("failed = %d, want 1 (an unreadable source must fail-close the destructive mirror)", res.failed)
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@example.com", Status: "failed"})
 	out := file.String()
 	if !strings.Contains(out, "unreadable") || !strings.Contains(out, "left intact") {
 		t.Fatalf("report must say the source was unreadable and the live dest was left intact:\n%s", out)
@@ -212,6 +215,7 @@ func TestApplyMailboxesMirrorPopulatedSourceMirrorsLiveDest(t *testing.T) {
 	if res.failed != 0 {
 		t.Fatalf("failed = %d, want 0 (a populated source must mirror cleanly):\n%s", res.failed, file.String())
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@example.com", Status: "migrated"})
 	// The dest-only mail is preserved in -bak, out of the live mailbox...
 	mirrorPathExists(t, filepath.Join(dstHome, "mail", "example.com", "info-bak", "cur", "9.msg"))
 	// ...and the live dest now mirrors the source exactly.
@@ -293,6 +297,7 @@ func TestApplyMailboxesMirrorSourceVanishesAfterGateFailsClosed(t *testing.T) {
 	if res.failed != 1 {
 		t.Fatalf("failed = %d, want 1 (a source that vanished after the gate must FAIL, not report synced):\n%s", res.failed, file.String())
 	}
+	assertMailItems(t, res.items, applyItem{Item: "info@example.com", Status: "failed"})
 	out := file.String()
 	if !strings.Contains(out, "mirror left the destination EMPTY") || !strings.Contains(out, "info-bak") {
 		t.Fatalf("report must name the empty-destination mirror failure and the -bak recovery dir:\n%s", out)

@@ -33,13 +33,37 @@ func (w *Writer) Write(ev Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	safe := ev
-	if m, ok := safe.Data.(map[string]any); ok {
-		safe.Data = RedactMap(m)
-	}
+	safe.Data = redactData(safe.Data)
 	if err := w.enc.Encode(safe); err != nil {
 		return fmt.Errorf("events: write: %w", err)
 	}
 	return nil
+}
+
+// redactData routes ANY Data payload through the key-based redaction net,
+// not just map[string]any: a typed struct payload (e.g. the apply phase
+// events) is marshaled to its JSON object form and redacted as a map, so a
+// future payload with a sensitive field name cannot silently bypass
+// RedactMap. Non-object payloads (arrays, scalars) and payloads that fail
+// to marshal pass through unchanged — redaction is KEY-based, so there is
+// no key to match on them (a marshal failure surfaces identically at
+// Encode time anyway).
+func redactData(v any) any {
+	switch d := v.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		return RedactMap(d)
+	}
+	b, err := jsonMarshal(v)
+	if err != nil {
+		return v
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return v
+	}
+	return RedactMap(m)
 }
 
 func (w *Writer) Close() error {

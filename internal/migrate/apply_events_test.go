@@ -46,6 +46,21 @@ func (c *eventCollector) find(phase events.Phase, typ events.EventType) (events.
 	return events.Event{}, false
 }
 
+// assertMailItems verifies the per-item outcomes recorded by applyMailboxes
+// (item + status; the note text is already pinned by each test's report-line
+// assertions).
+func assertMailItems(t *testing.T, got []applyItem, want ...applyItem) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("recorded items = %+v, want %d item(s): %+v", got, len(want), want)
+	}
+	for i := range want {
+		if got[i].Item != want[i].Item || got[i].Status != want[i].Status {
+			t.Errorf("items[%d] = %+v, want {%s %s}", i, got[i], want[i].Item, want[i].Status)
+		}
+	}
+}
+
 // TestRunApplyEmitsAllPhaseEventsInOrder drives runApply through every flow
 // (mail with one no-hash mailbox, files and databases with empty plans) and
 // pins the full apply event sequence: each of the seven apply phases emits
@@ -188,6 +203,43 @@ func TestRunApplyEventDataCarriesBlockedDomains(t *testing.T) {
 	for _, it := range mail.Items {
 		if it.Status != "skipped" {
 			t.Errorf("mailbox %s status = %q, want skipped (its domain is blocked)", it.Item, it.Status)
+		}
+	}
+}
+
+// TestRunApplyCancelledContextEmitsPhaseFailed pins the interrupt shape: a
+// context already cancelled when the domain step runs surfaces as
+// phase_failed for create_domains (the step's SSH round-trip errors), no
+// phase_completed for it, and no later phase ever starts.
+func TestRunApplyCancelledContextEmitsPhaseFailed(t *testing.T) {
+	outDir := t.TempDir()
+	pool := applyDomainsRefreshPool(t, domainListEnvelope("example.com"), "", "")
+	pd := migrationData{
+		SrcDomains: []model.Domain{{Name: "example.com", Type: model.Addon}},
+		Mailboxes:  []model.Mailbox{{Domain: "example.com", User: "info"}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	col := &eventCollector{}
+
+	err := runApply(ctx, pool, config.Config{}, pd,
+		Options{DoMail: true, OutputDir: outDir, RunID: "run-evtest", Events: col.emitter()},
+		testLogger(), "src", "dest", "now")
+	if err == nil {
+		t.Fatal("runApply with a cancelled context should error")
+	}
+
+	if _, ok := col.find(events.PhaseCreateDomains, events.EventPhaseCompleted); ok {
+		t.Error("create_domains must not report completed under a cancelled context")
+	}
+	if _, ok := col.find(events.PhaseCreateDomains, events.EventPhaseFailed); !ok {
+		t.Error("create_domains phase_failed event not found for the cancelled context")
+	}
+	for _, ph := range []events.Phase{events.PhaseMigrateMail, events.PhaseVerifyMail} {
+		for _, e := range col.all() {
+			if e.Phase == ph {
+				t.Errorf("no %s event may be emitted after the interrupt, got %s", ph, e.Type)
+			}
 		}
 	}
 }

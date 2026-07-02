@@ -38,6 +38,25 @@ func TestPhaseCollectorRecordsCompletedInOrderOnce(t *testing.T) {
 			t.Errorf("completed[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
+	if !c.applyPhaseSeen() {
+		t.Error("applyPhaseSeen = false, want true: migrate_mail phase_failed and create_domains completed were observed")
+	}
+}
+
+// TestPhaseCollectorApplySeenRequiresApplyPhase: analyze/compare/connect
+// events alone must not mark the run as having entered the apply flow.
+func TestPhaseCollectorApplySeenRequiresApplyPhase(t *testing.T) {
+	c := newPhaseCollector()
+	c.observe(events.Event{Phase: events.PhaseConnect, Type: events.EventPhaseCompleted})
+	c.observe(events.Event{Phase: events.PhaseAnalyzeMail, Type: events.EventPhaseCompleted})
+	c.observe(events.Event{Phase: events.PhaseCompareMail, Type: events.EventPhaseFailed})
+	if c.applyPhaseSeen() {
+		t.Error("applyPhaseSeen = true, want false: no apply phase was ever emitted")
+	}
+	c.observe(events.Event{Phase: events.PhaseMigrateDB, Type: events.EventPhaseStarted})
+	if !c.applyPhaseSeen() {
+		t.Error("applyPhaseSeen = false, want true after an apply phase_started")
+	}
 }
 
 // TestBuildRunReportIncludesPhasesAndArtifacts verifies the collected phases
@@ -64,8 +83,11 @@ func TestBuildRunReportIncludesPhasesAndArtifacts(t *testing.T) {
 	}
 }
 
-// TestRunArtifactsChecksExistence pins the honesty rule: artifacts are
-// recorded only when the file actually exists on disk.
+// TestRunArtifactsChecksExistence pins the honesty rules: artifacts are
+// recorded only when the file actually exists on disk AND this run provably
+// entered the apply flow — an --apply run that failed before runApply
+// (connect/analyze error) must not claim a stale migration_report.log left
+// in the same outDir by a previous run.
 func TestRunArtifactsChecksExistence(t *testing.T) {
 	outDir := t.TempDir()
 
@@ -91,11 +113,15 @@ func TestRunArtifactsChecksExistence(t *testing.T) {
 		t.Errorf("artifacts = %v, want both files recorded", arts)
 	}
 
-	// A dry-run must not claim the migration report log even if a stale one
-	// exists from a previous apply; events.jsonl is only recorded when
-	// --json-events was set.
+	// No apply phase seen (dry-run, or an apply run that died before
+	// runApply): the stale report log from a previous run is NOT claimed;
+	// events.jsonl is only recorded when --json-events was set.
 	arts = runArtifacts(outDir, false, false)
 	if len(arts) != 0 {
-		t.Errorf("dry-run without --json-events → artifacts = %v, want empty", arts)
+		t.Errorf("no apply phase seen and no --json-events → artifacts = %v, want empty", arts)
+	}
+	arts = runArtifacts(outDir, false, true)
+	if _, ok := arts["migration_report_log"]; ok {
+		t.Errorf("artifacts = %v: a run that never entered the apply flow must not claim the stale report log", arts)
 	}
 }

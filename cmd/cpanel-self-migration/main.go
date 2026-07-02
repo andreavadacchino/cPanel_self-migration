@@ -246,7 +246,7 @@ func main() {
 
 	if *reportJSON {
 		rpt := buildRunReport(opts, cfg, startedAt, finishedAt, runErr, ctx.Err(),
-			collector.completed(), runArtifacts(outDir, opts.Apply, *jsonEvents))
+			collector.completed(), runArtifacts(outDir, collector.applyPhaseSeen(), *jsonEvents))
 		rptPath := filepath.Join(outDir, "report.json")
 		if werr := events.WriteReport(rptPath, rpt); werr != nil {
 			fmt.Fprintln(os.Stderr, "warning: could not write report.json:", werr)
@@ -402,27 +402,43 @@ func buildRunReport(opts migrate.Options, cfg config.Config, startedAt, finished
 
 // phaseCollector records completed phases from the event stream, in
 // first-completion order and deduplicated, for report.json's
-// phases_completed. Mutex-guarded so a future concurrent emitter cannot
-// corrupt it (the race CI job is authoritative).
+// phases_completed. It also tracks whether ANY apply-phase event was
+// observed (started/completed/failed) — proof this run actually entered
+// runApply. Mutex-guarded so a future concurrent emitter cannot corrupt it
+// (the race CI job is authoritative).
 type phaseCollector struct {
-	mu     sync.Mutex
-	seen   map[events.Phase]bool
-	phases []events.Phase
+	mu        sync.Mutex
+	seen      map[events.Phase]bool
+	phases    []events.Phase
+	applySeen bool
 }
 
 func newPhaseCollector() *phaseCollector {
 	return &phaseCollector{seen: map[events.Phase]bool{}}
 }
 
+// applyPhases is the set of phases only runApply emits.
+var applyPhases = map[events.Phase]bool{
+	events.PhaseCreateDomains: true,
+	events.PhaseMigrateMail:   true, events.PhaseVerifyMail: true,
+	events.PhaseCopyFiles: true, events.PhaseVerifyFiles: true,
+	events.PhaseMigrateDB: true, events.PhaseVerifyDB: true,
+}
+
 // observe records e when it is a phase_completed event for a named phase;
-// run-level events (no phase) and every other event type are ignored.
+// run-level events (no phase) and every other event type are ignored for
+// phases_completed, but any apply-phase event marks the run as having
+// entered the apply flow.
 func (c *phaseCollector) observe(e events.Event) {
-	if e.Type != events.EventPhaseCompleted || e.Phase == "" {
+	if e.Phase == "" {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.seen[e.Phase] {
+	if applyPhases[e.Phase] {
+		c.applySeen = true
+	}
+	if e.Type != events.EventPhaseCompleted || c.seen[e.Phase] {
 		return
 	}
 	c.seen[e.Phase] = true
@@ -436,13 +452,23 @@ func (c *phaseCollector) completed() []events.Phase {
 	return append([]events.Phase{}, c.phases...)
 }
 
+// applyPhaseSeen reports whether this run emitted any apply-phase event.
+func (c *phaseCollector) applyPhaseSeen() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.applySeen
+}
+
 // runArtifacts records the run's artifact files in report.json, by
 // EXISTENCE CHECK only — never on trust. The migration report log is
-// claimed only for apply runs (a dry-run must not claim a stale one from a
-// previous apply), events.jsonl only when --json-events was set.
-func runArtifacts(outDir string, apply, jsonEvents bool) map[string]string {
+// claimed only when THIS run provably entered the apply flow
+// (applyPhaseSeen): migration_report.log has a fixed name in outDir, so an
+// apply run that failed before runApply (connect/analyze error) must not
+// claim a stale log left by a previous run. events.jsonl is recorded only
+// when --json-events was set (this run created it).
+func runArtifacts(outDir string, applyPhaseSeen, jsonEvents bool) map[string]string {
 	arts := map[string]string{}
-	if apply {
+	if applyPhaseSeen {
 		if p := filepath.Join(outDir, "logs", "migration_report.log"); fileIsRegular(p) {
 			arts["migration_report_log"] = p
 		}
