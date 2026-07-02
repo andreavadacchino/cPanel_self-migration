@@ -47,11 +47,13 @@ func main() {
 				os.Exit(runInventoryPolicyCmd(os.Args[3:]))
 			case "dns-plan":
 				os.Exit(runInventoryDNSPlanCmd(os.Args[3:]))
+			case "email-plan":
+				os.Exit(runInventoryEmailPlanCmd(os.Args[3:]))
 			case "checklist":
 				os.Exit(runInventoryChecklistCmd(os.Args[3:]))
 			}
 		}
-		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory <diff|policy|dns-plan|checklist> … (each has its own --help)")
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory <diff|policy|dns-plan|email-plan|checklist> … (each has its own --help)")
 		os.Exit(2)
 	}
 	// The `dns` namespace never falls through to the migration flow: before
