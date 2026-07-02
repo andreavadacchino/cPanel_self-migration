@@ -140,6 +140,23 @@ Sessione dedicata con utente presente, zona sacrificale su principiadv.online,
 protocollo CLAUDE.md completo. 6C (`dns verify --fail-on-drift`) è già il
 certificatore post-apply.
 
+**Modello di cutover per-account (definito con l'utente, 2026-07-03, dopo
+la scoperta del cluster DNS in Fase 0.2):** la campagna migra UN account
+alla volta; lo switch DNS di ciascun account sfrutta il cluster stesso —
+il ruolo sync del peer NS su .78 resta NORMALMENTE standalone e viene
+aperto solo nella finestra di cutover del singolo account (minuti):
+flip a sync → 6D apply sulla zona locale di .78 (il salvataggio propaga la
+zona al NS di produzione = switch) → verifica propagazione PUBBLICA (dig
+al NS + resolver esterno, da aggiungere al 6D) → flip back a standalone.
+Poi: finestra TTL con doppia erogazione (contenuti identici, innocua) →
+delta mail finale (`--apply --mail`, merge incrementale) → **sospensione
+dell'account su .193 (whm_suspend_account)** — NON opzionale: è parte
+della sicurezza dello switch (un AutoSSL sul source ri-pusherebbe la zona
+vecchia al NS = rollback accidentale; la sospensione lo previene).
+⚠️ Mai `removeacct` su NESSUN lato durante la campagna (delete di zona
+propagata = dominio offline): gli account source restano sospesi come
+dato storico.
+
 ## FASE 4 — Campagna 100+ account
 
 - **4A accounts.yaml + runner di campagna** (1-2 PR): lista coppie
