@@ -52,6 +52,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | UI-3 | apply/run monitor: dashboard tails events.jsonl (monitor-only, zero-JS, stall detection, bounded parse/render) | #30 |
 | fix | dispatch: `inventory` missing/unknown subcommand → exit 2 + usage (was: silent fall-through to the migration flow); E2E dispatch tests via TestMain re-exec | #32 |
 | 7E-pre | real-server captures for email routing / default address / filters / redirects (`PR7E_PRE_CAPTURES.md`: list_mxs local+remote pair, list_default_address covers subdomains, filters empty everywhere, Mime::list_redirects = .htaccess harvest with CMS noise) | #33 |
+| 7E-1 | inventory sections email_routing / default_address / email_filters / redirects (4 read-only UAPI calls, filter bodies never in artifacts, deterministic tie-breaks, narrowed-scope warning); diff/policy/checklist unchanged until 7E-2 | #34 |
 
 ## The full pipeline (all read-only / offline)
 
