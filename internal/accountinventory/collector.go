@@ -269,38 +269,7 @@ func collectDNS(ctx context.Context, r cpanel.Runner, domains []DomainEntry) DNS
 		}
 		seen[zone] = true
 
-		zr := DNSZoneResult{
-			Zone:     zone,
-			Records:  []DNSRecordEntry{},
-			Warnings: []string{},
-			Errors:   []string{},
-		}
-
-		records, err := cpanel.FetchDNSZoneUAPI(ctx, r, zone)
-		if err == nil {
-			zr.Available = true
-			zr.Method = "uapi"
-			zr.SourceFunction = "DNS::parse_zone"
-			zr.Records = toDNSRecordEntries(records)
-			zr.RawIncluded = hasRawRecords(records)
-			sec.Zones = append(sec.Zones, zr)
-			continue
-		}
-
-		records, err = cpanel.FetchDNSZoneAPI2(ctx, r, zone)
-		if err == nil {
-			zr.Available = true
-			zr.Method = "api2"
-			zr.SourceFunction = "ZoneEdit::fetchzone_records"
-			zr.Records = toDNSRecordEntries(records)
-			zr.RawIncluded = hasRawRecords(records)
-		} else {
-			zr.Available = false
-			zr.Method = "unavailable"
-			zr.Warnings = append(zr.Warnings, fmt.Sprintf("DNS zone %s unavailable: %v", zone, err))
-		}
-
-		sec.Zones = append(sec.Zones, zr)
+		sec.Zones = append(sec.Zones, FetchDNSZone(ctx, r, zone))
 	}
 
 	anyAvailable := false
@@ -324,6 +293,44 @@ func collectDNS(ctx context.Context, r cpanel.Runner, domains []DomainEntry) DNS
 	}
 
 	return sec
+}
+
+// FetchDNSZone fetches one zone with the collector's exact semantics:
+// UAPI DNS::parse_zone first, API2 ZoneEdit::fetchzone_records fallback,
+// unavailable-with-warning when both fail (never fatal). Exported for
+// `dns verify` (PR 6C), which re-fetches destination zones and must see
+// the same shapes the inventory saw.
+func FetchDNSZone(ctx context.Context, r cpanel.Runner, zone string) DNSZoneResult {
+	zr := DNSZoneResult{
+		Zone:     zone,
+		Records:  []DNSRecordEntry{},
+		Warnings: []string{},
+		Errors:   []string{},
+	}
+
+	records, err := cpanel.FetchDNSZoneUAPI(ctx, r, zone)
+	if err == nil {
+		zr.Available = true
+		zr.Method = "uapi"
+		zr.SourceFunction = "DNS::parse_zone"
+		zr.Records = toDNSRecordEntries(records)
+		zr.RawIncluded = hasRawRecords(records)
+		return zr
+	}
+
+	records, err = cpanel.FetchDNSZoneAPI2(ctx, r, zone)
+	if err == nil {
+		zr.Available = true
+		zr.Method = "api2"
+		zr.SourceFunction = "ZoneEdit::fetchzone_records"
+		zr.Records = toDNSRecordEntries(records)
+		zr.RawIncluded = hasRawRecords(records)
+	} else {
+		zr.Available = false
+		zr.Method = "unavailable"
+		zr.Warnings = append(zr.Warnings, fmt.Sprintf("DNS zone %s unavailable: %v", zone, err))
+	}
+	return zr
 }
 
 func toDNSRecordEntries(records []cpanel.DNSRecord) []DNSRecordEntry {

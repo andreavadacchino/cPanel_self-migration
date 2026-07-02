@@ -567,3 +567,51 @@ func TestCollectMailboxWarningNotFatal(t *testing.T) {
 		t.Errorf("expected a warning about mailboxes, got: %v", result.Source.Warnings)
 	}
 }
+
+// FetchDNSZone (PR 6C) is the per-zone fetch extracted from collectDNS so
+// `dns verify` re-fetches destination zones with the exact collector
+// semantics: UAPI parse_zone first, API2 fallback, unavailable-with-warning.
+func TestFetchDNSZoneUAPI(t *testing.T) {
+	runner := &fakeRunner{responses: map[string][]byte{
+		"DNS parse_zone": loadFixture(t, "dns_parse_zone.json"),
+	}}
+	zr := FetchDNSZone(context.Background(), runner, "example.com")
+	if !zr.Available || zr.Method != "uapi" || zr.SourceFunction != "DNS::parse_zone" {
+		t.Fatalf("zone = %+v, want available uapi DNS::parse_zone", zr)
+	}
+	if zr.Zone != "example.com" {
+		t.Errorf("zone name = %q", zr.Zone)
+	}
+	if len(zr.Records) == 0 {
+		t.Error("expected records from the fixture")
+	}
+}
+
+func TestFetchDNSZoneFallbackAPI2(t *testing.T) {
+	uapiFail := []byte(`{"result":{"data":null,"errors":["The function \"parse_zone\" does not exist in module \"DNS\"."],"status":0}}`)
+	runner := &fakeRunner{responses: map[string][]byte{
+		"DNS parse_zone":             uapiFail,
+		"ZoneEdit fetchzone_records": loadFixture(t, "dns_fetchzone_records.json"),
+	}}
+	zr := FetchDNSZone(context.Background(), runner, "example.com")
+	if !zr.Available || zr.Method != "api2" || zr.SourceFunction != "ZoneEdit::fetchzone_records" {
+		t.Fatalf("zone = %+v, want available api2 ZoneEdit::fetchzone_records", zr)
+	}
+	if len(zr.Records) == 0 {
+		t.Error("expected records from the fixture")
+	}
+}
+
+func TestFetchDNSZoneUnavailable(t *testing.T) {
+	uapiFail := []byte(`{"result":{"data":null,"errors":["boom"],"status":0}}`)
+	runner := &fakeRunner{responses: map[string][]byte{
+		"DNS parse_zone": uapiFail,
+	}}
+	zr := FetchDNSZone(context.Background(), runner, "example.com")
+	if zr.Available || zr.Method != "unavailable" {
+		t.Fatalf("zone = %+v, want unavailable", zr)
+	}
+	if len(zr.Warnings) != 1 || !contains(zr.Warnings[0], "example.com") {
+		t.Errorf("warnings = %v, want one naming the zone", zr.Warnings)
+	}
+}
