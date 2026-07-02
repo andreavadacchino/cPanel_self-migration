@@ -26,6 +26,11 @@ func TestUpdateDomainTypeIssuesPolicy(t *testing.T) {
 		{"main destination blocked", model.Addon, model.Main, "main_domain", true, true, "destination has main"},
 		{"conflicting docroot type blocked", model.Addon, model.Addon, "parked_domain", true, true, "docroot type parked_domain"},
 		{"unknown docroot type blocked", model.Addon, model.Addon, "weird_domain", true, true, "docroot type weird_domain"},
+		{"same-name main to main allowed", model.Main, model.Main, "main_domain", false, false, ""},
+		{"main to main with parked docroot blocked", model.Main, model.Main, "parked_domain", true, true, "docroot type parked_domain"},
+		{"main to main with unknown docroot blocked", model.Main, model.Main, "weird_domain", true, true, "docroot type weird_domain"},
+		{"main to parked still blocked", model.Main, model.Parked, "parked_domain", true, true, "destination has parked"},
+		{"main to addon still expected mapping", model.Main, model.Addon, "addon_domain", false, false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -51,6 +56,44 @@ func TestUpdateDomainTypeIssuesPolicy(t *testing.T) {
 				t.Fatalf("Reason() = %q, missing %q", issue.Reason(), c.wantReason)
 			}
 		})
+	}
+}
+
+func TestUpdateDomainTypeIssuesMainToMainWithoutDocrootFailsClosed(t *testing.T) {
+	pd := migrationData{
+		SrcDomains:  []model.Domain{{Name: "example.com", Type: model.Main}},
+		DestDomains: []model.Domain{{Name: "example.com", Type: model.Main}},
+		// No DestDocroots entry: the destination docroot cannot be validated,
+		// so the same-name main→main carve-out must NOT apply.
+	}
+	updateDomainTypeIssuesForUses(&pd, []selectedDomainUse{{Domain: "example.com", Flow: "web", Item: "/home/src/example.com"}})
+	issue, ok := domainTypeIssue(pd, "example.com")
+	if !ok {
+		t.Fatalf("type issue missing for main→main without destination docroot: %+v", pd.DomainTypeIssues)
+	}
+	if !issue.BlockWeb || !issue.BlockDBConfig {
+		t.Fatalf("main→main without destination docroot should fail closed: %+v", issue)
+	}
+}
+
+func TestUpdateDomainTypeIssuesMainToMainWithDuplicateDocrootFailsClosed(t *testing.T) {
+	pd := migrationData{
+		SrcDomains:  []model.Domain{{Name: "example.com", Type: model.Main}},
+		DestDomains: []model.Domain{{Name: "example.com", Type: model.Main}},
+		// Two docroot rows for the same canonical domain: uniqueDestDocrootEntry
+		// collapses this to hasDoc=false, so the carve-out must NOT apply.
+		DestDocroots: []cpanel.DomainDataEntry{
+			{Domain: "example.com", DocumentRoot: "/home/dest/public_html", Type: "main_domain"},
+			{Domain: "Example.COM", DocumentRoot: "/home/dest/public_html/alias", Type: "main_domain"},
+		},
+	}
+	updateDomainTypeIssuesForUses(&pd, []selectedDomainUse{{Domain: "example.com", Flow: "web", Item: "/home/src/example.com"}})
+	issue, ok := domainTypeIssue(pd, "example.com")
+	if !ok {
+		t.Fatalf("type issue missing for main→main with duplicate destination docroots: %+v", pd.DomainTypeIssues)
+	}
+	if !issue.BlockWeb || !issue.BlockDBConfig {
+		t.Fatalf("main→main with duplicate destination docroots should fail closed: %+v", issue)
 	}
 }
 

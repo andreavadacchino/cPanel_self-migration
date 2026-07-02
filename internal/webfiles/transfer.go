@@ -66,7 +66,7 @@ func (t Transfer) CopyDocroot(ctx context.Context, item WebPlanItem, prog Progre
 	if item.SrcDocroot == "" || item.DestDocroot == "" {
 		return SyncResult{}, fmt.Errorf("%s: missing docroot (src=%q dest=%q)", item.Domain, item.SrcDocroot, item.DestDocroot)
 	}
-	if _, err := CanonicalDestDocroot(ctx, t.Dest, item.DestDocroot); err != nil {
+	if _, err := CanonicalDestDocroot(ctx, t.Dest, item.DestDocroot, item.AllowDestPublicHTMLRoot); err != nil {
 		return SyncResult{}, fmt.Errorf("%s: destination docroot preflight: %w", item.Domain, err)
 	}
 
@@ -79,7 +79,7 @@ func (t Transfer) CopyDocroot(ctx context.Context, item WebPlanItem, prog Progre
 		// No transfer entries at all. Preserve the destination aside and leave a
 		// fresh empty docroot instead of wiping live content based on an empty source.
 		logx.Debug("CopyDocroot %s: source has no transfer entries — backing up the destination instead of wiping it", item.Domain)
-		return t.backupDest(ctx, item.DestDocroot)
+		return t.backupDest(ctx, item.DestDocroot, item.AllowDestPublicHTMLRoot)
 	}
 	dirOnly := true
 	var bytes int64
@@ -99,7 +99,7 @@ func (t Transfer) CopyDocroot(ctx context.Context, item WebPlanItem, prog Progre
 		// directories, and verifyWebFiles will expect them. Preserve old destination
 		// content aside, then stream the directory entries into the fresh live root.
 		logx.Debug("CopyDocroot %s: source has only empty directories — backing up destination before streaming directories", item.Domain)
-		backup, err := t.backupDest(ctx, item.DestDocroot)
+		backup, err := t.backupDest(ctx, item.DestDocroot, item.AllowDestPublicHTMLRoot)
 		if err != nil {
 			return res, err
 		}
@@ -107,7 +107,7 @@ func (t Transfer) CopyDocroot(ctx context.Context, item WebPlanItem, prog Progre
 	} else {
 		// Empty the destination ONCE, before any extract. Doing it per-batch would
 		// wipe earlier batches.
-		if err := t.emptyDest(ctx, item.DestDocroot); err != nil {
+		if err := t.emptyDest(ctx, item.DestDocroot, item.AllowDestPublicHTMLRoot); err != nil {
 			return res, fmt.Errorf("%s: empty destination docroot: %w", item.Domain, err)
 		}
 	}
@@ -121,7 +121,7 @@ func (t Transfer) CopyDocroot(ctx context.Context, item WebPlanItem, prog Progre
 		if prog != nil {
 			prog.SetBatch(i+1, len(batches))
 		}
-		if err := t.syncBatch(ctx, item.SrcDocroot, item.DestDocroot, batch, prog); err != nil {
+		if err := t.syncBatch(ctx, item.SrcDocroot, item.DestDocroot, item.AllowDestPublicHTMLRoot, batch, prog); err != nil {
 			return res, fmt.Errorf("%s: batch %d/%d: %w", item.Domain, i+1, len(batches), err)
 		}
 	}
@@ -184,9 +184,9 @@ func (t Transfer) listSrcFiles(ctx context.Context, docroot string, onList func(
 }
 
 // emptyDest runs the guarded empty-docroot script on the destination.
-func (t Transfer) emptyDest(ctx context.Context, docroot string) error {
+func (t Transfer) emptyDest(ctx context.Context, docroot string, allowRoot bool) error {
 	logx.Debug("emptyDest %s: guarded clean (preserving %s)", docroot, strings.Join(systemExcludes, ", "))
-	_, err := t.Dest.RunScript(ctx, emptyDestScript(), map[string]string{"DEST_DOCROOT": docroot})
+	_, err := t.Dest.RunScript(ctx, emptyDestScript(), destDocrootEnv(docroot, allowRoot))
 	return err
 }
 
@@ -197,8 +197,8 @@ func (t Transfer) emptyDest(ctx context.Context, docroot string) error {
 // source without losing the old files. The public_html root itself is rejected by
 // the destination containment guard. An absent/already-empty docroot is a no-op.
 // Writes ONLY on the destination.
-func (t Transfer) backupDest(ctx context.Context, docroot string) (SyncResult, error) {
-	out, err := t.Dest.RunScript(ctx, backupDestScript(), map[string]string{"DEST_DOCROOT": docroot})
+func (t Transfer) backupDest(ctx context.Context, docroot string, allowRoot bool) (SyncResult, error) {
+	out, err := t.Dest.RunScript(ctx, backupDestScript(), destDocrootEnv(docroot, allowRoot))
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("back up destination docroot %s: %w", docroot, err)
 	}
@@ -210,7 +210,7 @@ func (t Transfer) backupDest(ctx context.Context, docroot string) (SyncResult, e
 // syncBatch streams one batch of entries via the tar bridge, with retries. The
 // entry list is fed to the source tar via stdin (--files-from=-), so even a long
 // list never hits an argv limit.
-func (t Transfer) syncBatch(ctx context.Context, srcDocroot, destDocroot string, batch []FileEntry, prog ProgressSink) error {
+func (t Transfer) syncBatch(ctx context.Context, srcDocroot, destDocroot string, allowRoot bool, batch []FileEntry, prog ProgressSink) error {
 	names := make([]string, len(batch))
 	for i, f := range batch {
 		names[i] = f.RelPath
@@ -227,7 +227,7 @@ func (t Transfer) syncBatch(ctx context.Context, srcDocroot, destDocroot string,
 	}
 	label := fmt.Sprintf("webfiles batch %s (%d entries)", srcDocroot, len(batch))
 	return sshx.RetryBatch(ctx, label, t.Timeout, addBytes, func(bctx context.Context, onBytes func(int64)) error {
-		return t.streamOnce(bctx, srcDocroot, destDocroot, fileList, onBytes)
+		return t.streamOnce(bctx, srcDocroot, destDocroot, allowRoot, fileList, onBytes)
 	})
 }
 
@@ -241,8 +241,8 @@ func (t Transfer) syncBatch(ctx context.Context, srcDocroot, destDocroot string,
 // the bridge is called with a nil env map (it reserves SSH Setenv delivery for
 // secrets like the DB import's MYSQL_PWD). The destination was already emptied by
 // emptyDest, so a plain extract (source wins) is correct.
-func (t Transfer) streamOnce(ctx context.Context, srcDocroot, destDocroot, fileList string, onBytes func(int64)) error {
+func (t Transfer) streamOnce(ctx context.Context, srcDocroot, destDocroot string, allowRoot bool, fileList string, onBytes func(int64)) error {
 	srcCmd := sshx.WithEnv(srcTarCmd, map[string]string{"SRC_DOCROOT": srcDocroot})
-	destCmd := sshx.WithEnv(extractCmd, map[string]string{"DEST_DOCROOT": destDocroot})
+	destCmd := sshx.WithEnv(extractCmd, destDocrootEnv(destDocroot, allowRoot))
 	return sshx.BridgeProgress(ctx, t.Src, srcCmd, nil, strings.NewReader(fileList), t.Dest, destCmd, nil, onBytes)
 }

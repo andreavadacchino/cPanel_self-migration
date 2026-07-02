@@ -93,6 +93,9 @@ func updateDomainTypeIssuesForUses(pd *migrationData, uses []selectedDomainUse) 
 }
 
 func classifyDomainTypeIssue(src, dest model.Domain, doc cpanel.DomainDataEntry, hasDoc bool) (DomainTypeIssue, bool) {
+	if sameNameMainToMain(src, dest, doc, hasDoc) {
+		return DomainTypeIssue{}, false
+	}
 	expected := model.ExpectedDestinationType(src.Type)
 	mismatch := !model.CompatibleDestinationType(src.Type, dest.Type)
 	issue := DomainTypeIssue{
@@ -131,6 +134,28 @@ func classifyDomainTypeIssue(src, dest model.Domain, doc cpanel.DomainDataEntry,
 		return DomainTypeIssue{}, false
 	}
 	return issue, true
+}
+
+// sameNameMainToMain reports the 1:1 account-migration layout: the source MAIN
+// domain exists on the destination as the destination account's own MAIN
+// domain under the same FQDN (a destination account rebuilt for this exact
+// domain). In that layout the destination main docroot IS the intended target
+// of the migration, not another site's home, so no type issue is raised. The
+// destination docroot must be present, unique and of type main_domain —
+// anything else keeps the fail-closed blocking behavior.
+//
+// KEEP IN LOCKSTEP with WebPlanItem.AllowDestPublicHTMLRoot in
+// internal/webfiles/plan.go (BuildPlan): this predicate is the authorization
+// checkpoint that lets a web item run at all; that flag relaxes the
+// public_html-root filesystem guard for the same layout. Loosening either
+// without the other silently changes what the pair authorizes.
+func sameNameMainToMain(src, dest model.Domain, doc cpanel.DomainDataEntry, hasDoc bool) bool {
+	docType, ok := domainTypeFromDocrootType(doc.Type)
+	return src.Type == model.Main &&
+		dest.Type == model.Main &&
+		domainname.Equal(src.Name, dest.Name) &&
+		hasDoc &&
+		ok && docType == model.Main
 }
 
 func selectedDomainUsesByDomain(uses []selectedDomainUse) map[string][]selectedDomainUse {

@@ -33,7 +33,7 @@ func ValidateDestTargets(ctx context.Context, r Runner, items []WebPlanItem) ([]
 		if it.Skip || it.DestDocroot == "" {
 			continue
 		}
-		canon, err := CanonicalDestDocroot(ctx, r, it.DestDocroot)
+		canon, err := CanonicalDestDocroot(ctx, r, it.DestDocroot, it.AllowDestPublicHTMLRoot)
 		if err != nil {
 			issues = append(issues, DestTargetIssue{
 				Domain: it.Domain,
@@ -70,8 +70,10 @@ func ValidateDestTargets(ctx context.Context, r Runner, items []WebPlanItem) ([]
 
 // CanonicalDestDocroot returns the destination host's canonical path for docroot,
 // after applying the same containment guard used by empty/backup/extract.
-func CanonicalDestDocroot(ctx context.Context, r Runner, docroot string) (string, error) {
-	out, err := r.RunScript(ctx, canonicalDestDocrootScript(), map[string]string{"DEST_DOCROOT": docroot})
+// allowRoot is the per-docroot opt-in (WebPlanItem.AllowDestPublicHTMLRoot) that
+// lets the guard accept ~/public_html itself as the target.
+func CanonicalDestDocroot(ctx context.Context, r Runner, docroot string, allowRoot bool) (string, error) {
+	out, err := r.RunScript(ctx, canonicalDestDocrootScript(), destDocrootEnv(docroot, allowRoot))
 	if err != nil {
 		return "", fmt.Errorf("canonicalize destination docroot %q: %w", docroot, err)
 	}
@@ -89,4 +91,16 @@ func canonicalDestDocrootScript() string {
 	return destDocrootGuardScript() + `d="$(guard_dest_docroot "$DEST_DOCROOT")" || exit $?
 printf '%s\n' "$d"
 `
+}
+
+// destDocrootEnv is the single source for the guarded destination scripts' env:
+// the docroot plus, only when the plan item opted in, the guard's
+// ALLOW_PUBLIC_HTML_ROOT flag. Never set the flag unconditionally — its absence
+// is what keeps the public_html root refusal active for every other docroot.
+func destDocrootEnv(docroot string, allowRoot bool) map[string]string {
+	env := map[string]string{"DEST_DOCROOT": docroot}
+	if allowRoot {
+		env["ALLOW_PUBLIC_HTML_ROOT"] = "1"
+	}
+	return env
 }
