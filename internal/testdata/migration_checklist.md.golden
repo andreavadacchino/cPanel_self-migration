@@ -1,0 +1,75 @@
+# Migration Checklist — srcacct
+
+**Overall: BLOCKED**
+
+- **Generated**: 2026-07-02T10:00:00Z
+- **Chain verified**: no — diff/policy do not record their input hashes yet (PR 7B)
+
+## Summary
+
+- OK: 5
+- Expected differences: 2
+- Manual actions: 7
+- Review required: 0
+- Blocked: 1
+- Not migrated by tool: 0
+- Not inventoried: 4
+- Not accessible without root: 2
+
+## Sections
+
+- 🟡 **domains** — 1 expected difference(s), migrated by tool (run_level evidence)
+- ✅ **web_files** — ok — migrated by tool (run_level evidence)
+- ✅ **mailboxes** — ok — migrated by tool (run_level evidence)
+- ✅ **databases** — ok — migrated by tool (run_level evidence)
+- ✅ **forwarders** — ok
+- ➖ **autoresponders** — not applicable
+- ➖ **ftp** — not applicable
+- 🟡 **ssl** — 1 manual action(s), 1 expected difference(s)
+- 🛠 **php** — 1 manual action(s)
+- ✅ **dns** — ok
+- 🔴 **cron** — 1 blocker(s), 1 manual action(s)
+- ⚠️ **email_routing** — not inventoried, 1 manual action(s)
+- ⚠️ **default_address** — not inventoried, 1 manual action(s)
+- ⚠️ **email_filters** — not inventoried, 1 manual action(s)
+- ⚠️ **redirects** — not inventoried, 1 manual action(s)
+- ⚠️ **quota_package** — not accessible without root
+- ⚠️ **server_level_config** — not accessible without root
+
+## Manual actions (7)
+
+| ID | Blocking | Section | Type | Action |
+|----|----------|---------|------|--------|
+| MA-001 | no | ssl | ACCEPT_EXPECTED_DIFFERENCE | Acknowledge the reissued certificate for main.example — The destination certificate differs from the source but is currently valid; ackno... |
+| MA-002 | no | php | CHECK_PHP_COMPATIBILITY | Check PHP compatibility for main.example — Test the site against the destination PHP configuration before cutover. |
+| MA-003 | **yes** | cron | ADAPT_CRON_PATH | Recreate active cron job — Recreate this cron job on the destination adapting the /home/<user> paths to the new account. |
+| MA-004 | **yes** | email_routing | CONFIRM_EMAIL_ROUTING | Confirm the email routing setting on both servers — Compare cPanel Email Routing (local / remote / automatic) between source and destinat... |
+| MA-005 | **yes** | default_address | MANUAL_CHECK_REQUIRED | Check the default (catch-all) address — Compare the default address setting per domain; a lost catch-all silently drops mail. |
+| MA-006 | **yes** | email_filters | MANUAL_CHECK_REQUIRED | Check account and per-mailbox email filters — Review Email Filters on the source and recreate any that matter on the destination. |
+| MA-007 | no | redirects | MANUAL_CHECK_REQUIRED | Check cPanel redirects — Review cPanel > Redirects on the source and recreate any that matter on the destination. |
+
+## Before shutting down the old server
+
+1. [MA-003] Recreate active cron job — Recreate this cron job on the destination adapting the /home/<user> paths to the new account.
+2. [MA-004] Confirm the email routing setting on both servers — Compare cPanel Email Routing (local / remote / automatic) between source and destination; a wrong value silently breaks delivery.
+3. [MA-005] Check the default (catch-all) address — Compare the default address setting per domain; a lost catch-all silently drops mail.
+4. [MA-006] Check account and per-mailbox email filters — Review Email Filters on the source and recreate any that matter on the destination.
+
+## Post-cutover checks
+
+1. Load every site over HTTPS and confirm the homepage renders from the destination.
+2. Send and receive a test message for at least one mailbox per domain.
+3. Run AutoSSL on the destination and confirm every domain serves a valid certificate.
+4. Verify public DNS resolves every domain to the destination server once TTLs expire.
+5. Confirm recreated cron jobs actually ran (check their output/log once).
+
+## Inputs
+
+| Input | Present | File | SHA256 |
+|-------|---------|------|--------|
+| source inventory | yes | inventory_source.json | aaa |
+| destination inventory | yes | inventory_destination.json | bbb |
+| diff | yes | inventory_diff.json | ccc |
+| policy | yes | policy_report.json | ddd |
+| dns plan | no |  |  |
+| migration report | yes | report.json | eee |
