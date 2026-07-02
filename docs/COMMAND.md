@@ -362,6 +362,11 @@ From the page you can:
   checklist, picking up `acceptances.json`/`dns_import_plan.json`/apply
   `report.json` when present). One run at a time; the page auto-refreshes
   with per-step progress and output tails. `--apply` stays terminal-only.
+- **accept a reviewed manual action** inline (name + reason): the UI
+  upserts `acceptances.json` (bound to the current checklist's sha256)
+  and regenerates the checklist immediately, so the verdict updates
+  without a full re-run. Non-acceptable actions (lost active cron, MX to
+  confirm) are refused — they must be resolved.
 
 ```bash
 cpanel-self-migration ui [--dir ./run-artifacts] [--listen 127.0.0.1:8422]
