@@ -104,3 +104,18 @@ func TestDispatchDNSRefusesUnknown(t *testing.T) {
 		t.Errorf("stderr missing dns usage line:\n%s", stderr)
 	}
 }
+
+// The `email` namespace (PR 2B-1) has the same contract: an unknown or
+// missing subcommand exits 2 with the email usage, never falling through
+// to the migration flow.
+func TestDispatchEmailRefusesUnknown(t *testing.T) {
+	for _, args := range [][]string{{"email", "bogus"}, {"email"}} {
+		code, stderr := runDispatchChild(t, args...)
+		if code != 2 {
+			t.Fatalf("%v: exit code = %d, want 2; stderr:\n%s", args, code, stderr)
+		}
+		if !strings.Contains(stderr, "usage: cpanel-self-migration email <apply|verify>") {
+			t.Errorf("%v: stderr missing email usage line:\n%s", args, stderr)
+		}
+	}
+}

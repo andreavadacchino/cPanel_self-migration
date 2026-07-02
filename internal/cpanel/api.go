@@ -75,11 +75,33 @@ func uapiArgsScript(module, fn string, args map[string]string) (string, map[stri
 // It returns an error if the SSH command fails, the JSON is unparseable, or
 // the UAPI status is not success (1), including any reported error messages.
 func RunUAPI[T any](ctx context.Context, c Runner, module, fn string, args map[string]string) (T, error) {
+	data, _, err := runUAPIExec[T](ctx, c, module, fn, args)
+	return data, err
+}
+
+// RunUAPIRaw is RunUAPI returning ALSO the verbatim response bytes. It
+// exists for the email-apply pre-write backup, which archives the raw
+// server state alongside the normalized entries (2B design). Callers must
+// only use it for responses that carry no secret (the raw bytes typically
+// end up in an artifact file). Like RunUAPI/RunAPI2, its module/function
+// arguments MUST be plain string literals — TestDNSAPICallsUseLiteralNames
+// covers this entry point too.
+func RunUAPIRaw[T any](ctx context.Context, c Runner, module, fn string, args map[string]string) (T, []byte, error) {
+	return runUAPIExec[T](ctx, c, module, fn, args)
+}
+
+// runUAPIExec is the shared body of RunUAPI/RunUAPIRaw. It is
+// deliberately package-private: the literal-names structural guard checks
+// the PUBLIC entry points, and this helper receives names those entry
+// points already exposed to the guard. An in-package call with a
+// dynamically built name would be the same (accepted, human-reviewed)
+// residual surface as a hand-built Runner.RunScript snippet.
+func runUAPIExec[T any](ctx context.Context, c Runner, module, fn string, args map[string]string) (T, []byte, error) {
 	var zero T
 	script, env := uapiArgsScript(module, fn, args)
 	out, err := c.RunScript(ctx, script, env)
 	if err != nil {
-		return zero, fmt.Errorf("%s::%s: %w", module, fn, err)
+		return zero, nil, fmt.Errorf("%s::%s: %w", module, fn, err)
 	}
 	logx.Debug("%s::%s: UAPI call succeeded (%d bytes response)", module, fn, len(out))
 	// Opt-in, OFF by default (see debug.go): the normal path logs only the length
@@ -90,7 +112,11 @@ func RunUAPI[T any](ctx context.Context, c Runner, module, fn string, args map[s
 	if rawResponseDebug {
 		logx.Debug("%s::%s: raw response (secrets redacted): %s", module, fn, redactJSONForDebug(out))
 	}
-	return parseUAPI[T](module, fn, out)
+	data, err := parseUAPI[T](module, fn, out)
+	if err != nil {
+		return zero, nil, err
+	}
+	return data, out, nil
 }
 
 // api2ArgsScript builds a tiny bash snippet that invokes `cpapi2` with the
