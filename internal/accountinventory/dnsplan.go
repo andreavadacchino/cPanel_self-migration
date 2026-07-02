@@ -431,6 +431,18 @@ func classify(op *PlanOp, k rrsetKey, records []DNSRecordEntry, destSets map[rrs
 			}
 		}
 		if len(matched) > 0 {
+			// Real-data refinement (docs/dev/PR7A_REAL_SMOKE.md): when the
+			// destination rrset ALREADY equals the source values with every
+			// mapped address substituted, there is nothing to rewrite —
+			// refusing it as manual was a pure false positive (identity
+			// maps included). Any other destination state keeps failing
+			// safe into manual below.
+			if dv, ok := destSets[k]; ok &&
+				valuesEqual(translateTXTValues(records, ipMap), sortedValues(dv, zone)) {
+				op.Action = ActionSkip
+				op.Reason = "destination already matches the ip-map translation — nothing to rewrite"
+				return
+			}
 			addrs := make([]string, 0, len(matched))
 			for a := range matched {
 				addrs = append(addrs, a)
@@ -467,6 +479,60 @@ func classify(op *PlanOp, k rrsetKey, records []DNSRecordEntry, destSets map[rrs
 	sort.Slice(op.Records, func(i, j int) bool {
 		return strings.Join(op.Records[i].Data, "\x00") < strings.Join(op.Records[j].Data, "\x00")
 	})
+}
+
+// translateTXTValues renders the sorted comparable values of a TXT rrset
+// with every mapped source address substituted by its destination address.
+// The substitution is SIMULTANEOUS and single-pass over the original
+// string: substituted output is never re-scanned. A sequential
+// ReplaceAll-per-entry loop would cascade — a cyclic map (two accounts
+// swapping servers: A→B plus B→A) would cancel itself out, regenerate the
+// original value, and falsely skip a stale, unmigrated destination.
+// Matching stays as naive as the detection that precedes it (plain
+// substring, longer addresses first so an address that prefixes another
+// cannot be corrupted by it): a wrong result simply fails the equality
+// check and the rrset stays manual — fail-safe.
+func translateTXTValues(records []DNSRecordEntry, ipMap map[string]string) []string {
+	froms := make([]string, 0, len(ipMap))
+	for from := range ipMap {
+		froms = append(froms, from)
+	}
+	sort.Slice(froms, func(i, j int) bool {
+		if len(froms[i]) != len(froms[j]) {
+			return len(froms[i]) > len(froms[j])
+		}
+		return froms[i] < froms[j]
+	})
+	vals := make([]string, 0, len(records))
+	for _, r := range records {
+		vals = append(vals, substituteOnce(r.TxtData, froms, ipMap))
+	}
+	sort.Strings(vals)
+	return vals
+}
+
+// substituteOnce performs one left-to-right pass over s, replacing each
+// occurrence of any mapped address with its target exactly once; the
+// replacement text is emitted, never re-matched.
+func substituteOnce(s string, froms []string, ipMap map[string]string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		replaced := false
+		for _, from := range froms { // longest-first, deterministic
+			if strings.HasPrefix(s[i:], from) {
+				b.WriteString(ipMap[from])
+				i += len(from)
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String()
 }
 
 func isHostValidationName(canonical string) bool {

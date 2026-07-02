@@ -198,8 +198,10 @@ differ after translation), `skip` (equal, TTL-only drift, SOA,
 host-validation records `_acme-challenge*`/`_cpanel-dcv-test-record`),
 `manual` (never applied, no override: NS/delegation, unsupported record
 types, CNAME cross-type conflicts, A/AAAA with any un-mapped address,
-TXT containing a mapped source IP — e.g. SPF). Destination-only rrsets
-are listed as informational and **never deleted**.
+TXT containing a mapped source IP — e.g. SPF — unless the destination
+already carries exactly the ip-map translation, which is a `skip`).
+Destination-only rrsets are listed as informational and **never
+deleted**.
 
 Safety rules: every A/AAAA value must have an `--ip-map` entry
 (identity `X=X` authorizes a verbatim copy); written TTLs are capped at

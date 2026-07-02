@@ -52,7 +52,9 @@ successful apply report was provided.
    destination first. Fix belongs in the plan: if the destination rrset
    equals the source rrset after ip-map string substitution → `skip`.
    (Same false positive family as the identity-map case seen in the 6B
-   smoke.)
+   smoke.) **FIXED** in the follow-up PR: `classify()` now skips when
+   the destination already matches the translation; re-running this
+   smoke gives 0 manual DNS ops and 11 blocking actions, all legitimate.
 2. **Expired source certificates still gate** — the source carries
    several EXPIRED certs; when their domain grouping is missing on the
    destination they surface as removed. The valid-coverage downgrade
