@@ -49,7 +49,11 @@ func checklistSectionHeadline(s ChecklistSection) string {
 		parts = append(parts, fmt.Sprintf("%d blocker(s)", len(s.Blockers)))
 	}
 	if n := len(s.ManualActionRefs); n > 0 {
-		parts = append(parts, fmt.Sprintf("%d manual action(s)", n))
+		if acc := len(s.AcceptedByOperator); acc > 0 {
+			parts = append(parts, fmt.Sprintf("%d manual action(s) (%d accepted)", n, acc))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d manual action(s)", n))
+		}
 	}
 	if n := len(s.ExpectedDifferences); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d expected difference(s)", n))

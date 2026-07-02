@@ -311,7 +311,8 @@ func (b *checklistBuilder) buildInventoriedSection(name string) ChecklistSection
 // (manual_required, or not_migrated_by_tool for a non-migratable area whose
 // destination is empty) > review_required > expected_difference >
 // not_applicable > ok. ACCEPT_EXPECTED_DIFFERENCE acknowledgments never
-// change a section's status.
+// change a section's status, and neither do operator-ACCEPTED actions
+// (PR 7D): a formally accepted action stops counting as real work.
 func (b *checklistBuilder) resolveStatus(name string, sec *ChecklistSection, blockers, reviews, findingsCount int) string {
 	realActions := 0
 	for _, idx := range b.sectionActions[name] {
@@ -933,16 +934,25 @@ func (b *checklistBuilder) addActionRaw(section, typ string, blocking bool, deri
 		DerivedFrom: derivedFrom, Title: title, Detail: detail,
 		Evidence: ev, OperatorAction: operator, Acceptable: acceptable,
 	}
-	if acc, ok := b.acceptByKey[a.Key]; ok && !b.acceptMatched[a.Key] {
-		b.acceptMatched[a.Key] = true
-		if a.Acceptable {
-			a.Accepted = true
-			a.AcceptedBy = acc.AcceptedBy
-			a.AcceptedAt = acc.AcceptedAt
-			a.AcceptedReason = acc.Reason
+	if acc, ok := b.acceptByKey[a.Key]; ok {
+		if !b.acceptMatched[a.Key] {
+			b.acceptMatched[a.Key] = true
+			if a.Acceptable {
+				a.Accepted = true
+				a.AcceptedBy = acc.AcceptedBy
+				a.AcceptedAt = acc.AcceptedAt
+				a.AcceptedReason = acc.Reason
+			} else {
+				b.warnings = append(b.warnings, fmt.Sprintf(
+					"acceptances: action %s (%s) is not acceptable — it must be resolved, the acceptance was ignored", a.Key, typ))
+			}
 		} else {
+			// Two structurally identical actions (e.g. the same cron job
+			// scheduled twice, both lost) share the same content key. Only
+			// the FIRST matching action was accepted — say so, or the
+			// second would silently keep gating with no explanation.
 			b.warnings = append(b.warnings, fmt.Sprintf(
-				"acceptances: action %s (%s) is not acceptable — it must be resolved, the acceptance was ignored", a.Key, typ))
+				"acceptances: key %s matches more than one identical action — only the first was accepted, the other(s) still require attention", a.Key))
 		}
 	}
 	b.actions = append(b.actions, a)

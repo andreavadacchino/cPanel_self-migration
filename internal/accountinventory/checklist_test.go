@@ -1063,7 +1063,7 @@ func TestBuildChecklistDeterministicAndConsistent(t *testing.T) {
 		t.Errorf("summary.manual_actions = %d, want %d", a.Summary.ManualActions, len(a.ManualActions))
 	}
 	if a.Summary.Accepted != 0 {
-		t.Errorf("summary.accepted = %d, want 0 (reserved for PR 7D)", a.Summary.Accepted)
+		t.Errorf("summary.accepted = %d, want 0 (no acceptance file was provided)", a.Summary.Accepted)
 	}
 }
 
@@ -1306,5 +1306,79 @@ func TestBuildChecklistAcceptanceDuplicateFirstWins(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("warnings = %v, want a duplicate-entry warning for %s", c.Warnings, key)
+	}
+}
+
+// TestBuildChecklistAcceptanceDuplicateIdenticalActionsWarn (reviewer HIGH):
+// two structurally identical actions (the same disabled cron job scheduled
+// twice, both lost) share the same content key. Only the FIRST is accepted;
+// the second must surface a warning instead of silently keeping the gate.
+func TestBuildChecklistAcceptanceDuplicateIdenticalActionsWarn(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dup := CronJobEntry{
+		Type: "standard", Minute: "5", Hour: "1", DayOfMonth: "*", Month: "*", DayOfWeek: "*",
+		CommandRedacted: "php /usr/local/bin/report.php --token=****",
+		CommandSHA256:   "sha256:eee", RawLineSHA256: "sha256:fff", Enabled: false, LineNumber: 3,
+		Warnings: []string{},
+	}
+	dup2 := dup
+	dup2.LineNumber = 4
+	src.Cron.Jobs = append(src.Cron.Jobs, dup, dup2)
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	base := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+	var keys []string
+	for _, a := range base.ManualActions {
+		if a.Type == MActionRecreateCron && !a.BlockingCutover {
+			keys = append(keys, a.Key)
+		}
+	}
+	if len(keys) != 2 || keys[0] != keys[1] {
+		t.Fatalf("want 2 identical non-blocking RECREATE_CRON keys, got %v", keys)
+	}
+
+	c := BuildChecklist(chkInputWithAcceptances(src, dest, chkApplyReport(),
+		[]OperatorAcceptance{chkAcceptance(keys[0])}))
+
+	if c.Summary.Accepted != 1 {
+		t.Errorf("summary.accepted = %d, want 1: only the first identical action is accepted", c.Summary.Accepted)
+	}
+	found := false
+	for _, w := range c.Warnings {
+		if strings.Contains(w, "more than one identical action") && strings.Contains(w, keys[0]) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("warnings = %v, want the multi-match warning for key %s", c.Warnings, keys[0])
+	}
+}
+
+// TestBuildChecklistAllAcceptedNeverReadyToCutover (reviewer coverage gap):
+// accepting EVERY acceptable action can raise the verdict at most to
+// READY_WITH_MANUAL_NOTES — an acceptance is a formal note, not an eraser.
+func TestBuildChecklistAllAcceptedNeverReadyToCutover(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+
+	base := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+	var accs []OperatorAcceptance
+	for _, a := range base.ManualActions {
+		if a.Acceptable {
+			accs = append(accs, chkAcceptance(a.Key))
+		}
+	}
+	if len(accs) == 0 {
+		t.Fatal("no acceptable actions in the baseline — scenario invalid")
+	}
+
+	c := BuildChecklist(chkInputWithAcceptances(src, dest, chkApplyReport(), accs))
+
+	if c.Summary.Accepted != len(accs) {
+		t.Fatalf("summary.accepted = %d, want %d", c.Summary.Accepted, len(accs))
+	}
+	if c.OverallStatus != OverallReadyWithManualNotes {
+		t.Errorf("overall = %q, want %q — never READY_TO_CUTOVER while accepted actions exist",
+			c.OverallStatus, OverallReadyWithManualNotes)
 	}
 }

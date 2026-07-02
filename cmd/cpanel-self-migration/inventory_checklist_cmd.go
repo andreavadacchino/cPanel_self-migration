@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/accountinventory"
@@ -222,6 +223,9 @@ func loadAcceptancesFile(path string) ([]accountinventory.OperatorAcceptance, st
 	if f.Mode != accountinventory.AcceptanceFileMode {
 		return nil, "", fmt.Errorf("%s: not an operator acceptance file (mode %q)", path, f.Mode)
 	}
+	if f.FormatVersion != 1 {
+		return nil, "", fmt.Errorf("%s: unsupported acceptance format_version %d (this build understands 1)", path, f.FormatVersion)
+	}
 	if f.ChecklistSHA256 == "" {
 		return nil, "", fmt.Errorf("%s: checklist_sha256 is required (the sha256 of the checklist file the operator reviewed)", path)
 	}
@@ -238,7 +242,13 @@ func loadAcceptancesFile(path string) ([]accountinventory.OperatorAcceptance, st
 		}
 	}
 	if f.ChecklistFile != "" {
-		sum, err := fileSHA256(f.ChecklistFile)
+		// A relative checklist_file is resolved against the acceptance
+		// file's own directory, so the pair can be moved together.
+		checklistPath := f.ChecklistFile
+		if !filepath.IsAbs(checklistPath) {
+			checklistPath = filepath.Join(filepath.Dir(path), checklistPath)
+		}
+		sum, err := fileSHA256(checklistPath)
 		if err != nil {
 			return nil, fmt.Sprintf(
 				"acceptances REJECTED: the referenced checklist %s could not be hashed (%v) — nothing was accepted",

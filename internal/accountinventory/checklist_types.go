@@ -180,7 +180,7 @@ const AcceptanceFileMode = "operator-acceptances"
 
 // ChecklistSummary counts sections by status, plus totals for expected
 // differences (entries, not sections), manual actions, and operator
-// acceptances (always 0 in v0).
+// acceptances (populated when an acceptance file matches, PR 7D).
 type ChecklistSummary struct {
 	OK                       int `json:"ok"`
 	ExpectedDifferences      int `json:"expected_differences"`

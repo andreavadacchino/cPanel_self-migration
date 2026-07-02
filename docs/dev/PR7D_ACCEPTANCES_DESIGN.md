@@ -45,6 +45,8 @@ self-invalidate — the fail-safe direction is automatic.
 - `checklist_file` (optional): when present, the CLI hashes that file and a
   mismatch with `checklist_sha256` REJECTS the whole acceptance file
   (warning; the checklist is still generated, just without acceptances).
+  A relative path resolves against the acceptance file's own directory;
+  `format_version` must be 1.
 - Per entry: `action_key`, `reason`, `accepted_by`, `accepted_at` required;
   `action_id` is display-only.
 
