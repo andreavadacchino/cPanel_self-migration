@@ -68,8 +68,10 @@ func getIndex(t *testing.T, dir string) (*httptest.ResponseRecorder, string) {
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = testHost // httptest defaults to example.com, which the rebinding gate rejects
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/", nil))
+	h.ServeHTTP(rr, req)
 	return rr, rr.Body.String()
 }
 
@@ -149,8 +151,10 @@ func TestHandlerServesNoArbitraryFiles(t *testing.T) {
 		"/../../../etc/passwd",
 		"/static/../inventory_source.json",
 	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Host = testHost
 		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, path, nil))
+		h.ServeHTTP(rr, req)
 		if rr.Code != http.StatusNotFound {
 			t.Errorf("GET %s = %d (body %q), want 404", path, rr.Code, rr.Body.String()[:min(80, rr.Body.Len())])
 		}
@@ -216,8 +220,10 @@ func TestHandlerMutatingMethodsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		req := httptest.NewRequest(method, "/", nil)
+		req.Host = testHost
 		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, httptest.NewRequest(method, "/", nil))
+		h.ServeHTTP(rr, req)
 		if rr.Code != http.StatusMethodNotAllowed {
 			t.Errorf("%s / = %d, want 405", method, rr.Code)
 		}
