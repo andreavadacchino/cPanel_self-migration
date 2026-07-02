@@ -37,6 +37,46 @@
 - ⚠️ **quota_package** — not accessible without root
 - ⚠️ **server_level_config** — not accessible without root
 
+## Coverage
+
+| Area | State | Note |
+|------|-------|------|
+| domains | covered |  |
+| web_files | covered |  |
+| mailboxes | covered |  |
+| databases | covered |  |
+| forwarders | covered |  |
+| autoresponders | covered |  |
+| ftp | covered |  |
+| ssl | covered |  |
+| php | covered |  |
+| dns | covered |  |
+| cron | covered |  |
+| email_routing | covered |  |
+| default_address | covered |  |
+| email_filters | covered |  |
+| redirects | covered |  |
+| quota_package | root_only | package assignment, quotas and bandwidth limits are WHM territory |
+| server_level_config | root_only | PHP handlers, web server, firewall and system crons are not visible with account-level access |
+| api_tokens | not_collected | API token NAMES are listable user-level; secrets are never retrievable — historical-dossier material |
+| autoresponder_bodies | not_collected | autoresponder message BODIES (round-trippable, Fase 2B prerequisite) — today autoresponders are inventoried without bodies |
+| boxtrapper | not_collected | BoxTrapper enable state and configuration |
+| contact_info | not_collected | account contact addresses and notification preferences |
+| directory_privacy | not_collected | password-protected directories (~/.htpasswds) — the protection passwords are at stake on transfer |
+| domain_aliases | not_collected | parked/alias domains as a dedicated field — today folded into the domains listing |
+| email_filter_rules | not_collected | full filter RULES (round-trippable, Fase 2B prerequisite) — today only per-account/per-mailbox counts are collected |
+| git_repositories | not_collected | cPanel-registered git repositories (working trees travel with the home transfer, the registrations do not) |
+| hotlink_protection | not_collected | hotlink protection configuration |
+| leech_protection | not_collected | leech protection configuration |
+| mailbox_quota_limits | not_collected | per-mailbox quota LIMITS — usage is collected, the configured limit is not |
+| mailing_lists | not_collected | Mailman mailing lists (member rosters are root-only and cannot be migrated user-level) |
+| mime_handlers | not_collected | custom MIME types and Apache handlers |
+| passenger_apps | not_collected | registered Passenger/Node/Python applications — files travel with the transfer, the registrations do not |
+| spamassassin | not_collected | SpamAssassin enable state and user_prefs (~/.spamassassin is outside the docroot copy) |
+| ssh_keys | not_collected | SSH key METADATA (names/fingerprints only — private keys are never collected) |
+| team_users | not_collected | cPanel Team user accounts (their passwords cannot be migrated) |
+| webdisk_accounts | not_collected | WebDisk accounts (passwords would need regeneration on the destination) |
+
 ## Manual actions (3)
 
 | ID | Key | Blocking | Section | Type | Action |

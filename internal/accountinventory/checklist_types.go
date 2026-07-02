@@ -211,6 +211,10 @@ type MigrationChecklist struct {
 	Sections      []ChecklistSection `json:"sections"`
 	ManualActions []ManualAction     `json:"manual_actions"`
 	Warnings      []string           `json:"warnings"`
+	// CoverageManifest declares EVERY area the tool knows about with its
+	// coverage state (PR 1A). Purely declarative: it feeds no action, no
+	// summary count and no verdict — see coverage.go.
+	CoverageManifest []CoverageArea `json:"coverage_manifest"`
 }
 
 // MigrationReportInfo mirrors the subset of report.json (events.RunReport)

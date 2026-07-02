@@ -99,14 +99,15 @@ func BuildChecklist(in ChecklistInput) MigrationChecklist {
 	b.chainMismatch = chainMismatch
 
 	c := MigrationChecklist{
-		Mode:          "migration-checklist",
-		FormatVersion: 1,
-		Account:       in.Source.Account.User,
-		Inputs:        in.InputRefs,
-		ChainVerified: chainVerified,
-		Sections:      []ChecklistSection{},
-		ManualActions: []ManualAction{},
-		Warnings:      []string{},
+		Mode:             "migration-checklist",
+		FormatVersion:    1,
+		Account:          in.Source.Account.User,
+		Inputs:           in.InputRefs,
+		ChainVerified:    chainVerified,
+		Sections:         []ChecklistSection{},
+		ManualActions:    []ManualAction{},
+		Warnings:         []string{},
+		CoverageManifest: CoverageAreas(),
 	}
 	for _, name := range checklistSectionOrder {
 		c.Sections = append(c.Sections, b.buildSection(name))
