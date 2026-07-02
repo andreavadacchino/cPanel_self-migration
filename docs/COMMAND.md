@@ -108,6 +108,7 @@ make build
 | `inventory_diff.md`         | `inventory diff`          |
 | `policy_report.json` / `.md`| `inventory policy`        |
 | `dns_import_plan.json` / `.md` | `inventory dns-plan`   |
+| `dns_verify_report.json` / `.md` | `dns verify`         |
 | `migration_checklist.json` / `.md` | `inventory checklist` |
 
 ## Subcommand: `inventory diff`
@@ -218,6 +219,46 @@ effective ip-map for auditability.
 
 Exit codes: `0` plan generated, `1` missing/invalid input (including
 malformed `--ip-map` values) or write failure, `2` flag usage error.
+
+## Subcommand: `dns verify`
+
+Read-only verification of the DESTINATION zones against a
+`dns_import_plan.json`: re-fetches each plan zone over SSH (destination
+only — the source is never dialed, it may already be decommissioned)
+with the collector's own fetch (UAPI `DNS::parse_zone`, API2 fallback)
+and reports, per planned op, whether the live zone matches the plan.
+Use it to certify a manual DNS edit session done from the plan
+worksheet, or (future 6D) a `dns apply`. Design:
+`docs/dev/PR6C_DNS_VERIFY_DESIGN.md`.
+
+```bash
+cpanel-self-migration dns verify \
+  --plan ./dns_import_plan.json \
+  [--config ./host.yaml] \
+  [--source ./inventory_source.json] \
+  [--destination ./inventory_destination.json] \
+  [--output-json ./dns_verify_report.json] \
+  [--output-md ./dns_verify_report.md] \
+  [--fail-on-drift]
+```
+
+Per-op statuses: `applied` (add/replace landed), `unchanged` (checkable
+skip still matches), `pending` (zone still in the plan-time state),
+`drift` (matches neither), `manual_review` (manual ops, reported only),
+`not_checked` (SOA / host-validation skips). Live rrsets that postdate
+the plan are listed as `untracked` (informational). The `clean` verdict
+gates on pending + drift + unavailable zones + **manual zones** (a plan
+that computed no ops for a zone cannot be verified — re-run the
+pipeline); manual ops and untracked rrsets never gate.
+
+Stale-plan gate: with `--source`/`--destination`, the file hashes must
+match the plan's embedded `source_sha256`/`destination_sha256`, or the
+whole run is refused (exit `3`) before any SSH.
+
+Exit codes: `0` verify ran and reports were written (even with drift),
+`1` invalid input / config / SSH dial / write failure, `2` flag usage
+error, `3` gated refusal (stale plan, or `--fail-on-drift` with a
+verdict that is not clean).
 
 ## Subcommand: `inventory checklist`
 
