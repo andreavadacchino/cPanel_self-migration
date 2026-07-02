@@ -492,6 +492,249 @@ func TestBuildChecklistSSLRemovedUncoveredStaysBlocked(t *testing.T) {
 	}
 }
 
+// Real-smoke finding 2 (PR7A_REAL_SMOKE.md): old wildcard certificate
+// generations already EXPIRED on the source must not gate the cutover when
+// their grouping is missing on the destination — there is nothing valid to
+// migrate.
+func TestBuildChecklistSSLRemovedExpiredOnSourceIsExpected(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	// Two expired wildcard generations share the same diff key; the
+	// destination never regains a wildcard cert (AutoSSL per-vhost only).
+	src.SSL.Items = append(src.SSL.Items,
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3 gen1",
+			ValidFrom: 1_500_000_000, ValidUntil: chkCertExpiredUntil, ValidationType: "dv"},
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3 gen2",
+			ValidFrom: 1_600_000_000, ValidUntil: chkCertExpiredUntil, ValidationType: "dv"},
+	)
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	ssl := chkSection(t, c, "ssl")
+	if ssl.Status == SectionBlocked {
+		t.Errorf("ssl status = %q: a source-expired certificate group must not block the cutover", ssl.Status)
+	}
+	found := false
+	for _, d := range ssl.ExpectedDifferences {
+		if d.Key == "*.main.example,main.example" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected differences %v: want the expired source certificate group", ssl.ExpectedDifferences)
+	}
+	if acts := chkActionsOf(c, "ssl", MActionAcceptExpectedDiff); len(acts) == 0 {
+		t.Error("want a non-blocking ACCEPT_EXPECTED_DIFFERENCE acknowledgment for the expired source certificate")
+	} else {
+		for _, a := range acts {
+			if a.BlockingCutover {
+				t.Error("ACCEPT_EXPECTED_DIFFERENCE must never block the cutover")
+			}
+		}
+	}
+	if acts := chkActionsOf(c, "ssl", MActionReissueSSL); len(acts) != 0 {
+		t.Errorf("got %d REISSUE_SSL actions, want none: nothing valid was lost", len(acts))
+	}
+}
+
+// Fail-safe: if ANY generation in the removed group is still valid on the
+// source, the group is live and its loss keeps blocking.
+func TestBuildChecklistSSLRemovedGroupWithValidGenerationStaysBlocked(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	src.SSL.Items = append(src.SSL.Items,
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3 gen1",
+			ValidFrom: 1_500_000_000, ValidUntil: chkCertExpiredUntil, ValidationType: "dv"},
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3 gen2",
+			ValidFrom: 1_700_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+	)
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	ssl := chkSection(t, c, "ssl")
+	if ssl.Status != SectionBlocked {
+		t.Errorf("ssl status = %q, want %q: one generation is still valid on the source", ssl.Status, SectionBlocked)
+	}
+	if acts := chkActionsOf(c, "ssl", MActionReissueSSL); len(acts) == 0 {
+		t.Error("want a blocking REISSUE_SSL action: a still-valid wildcard certificate was lost")
+	}
+}
+
+// Fail-safe: an unknown expiry (ValidUntil == 0) is NOT proof of expiry.
+func TestBuildChecklistSSLRemovedUnknownExpiryStaysBlocked(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	src.SSL.Items = append(src.SSL.Items,
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3",
+			ValidFrom: 1_500_000_000, ValidUntil: 0, ValidationType: "dv"},
+	)
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	ssl := chkSection(t, c, "ssl")
+	if ssl.Status != SectionBlocked {
+		t.Errorf("ssl status = %q, want %q: unknown expiry must stay fail-safe", ssl.Status, SectionBlocked)
+	}
+}
+
+// Fail-safe: a source certificate with NO domain list surfaces as the
+// "(no domain list)" placeholder ref, which can never match a real Domains
+// key — even when that certificate is itself expired, the removal must keep
+// blocking (the tool cannot prove which domains it covered).
+func TestBuildChecklistSSLNoDomainListExpiredStaysBlocked(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	src.SSL.Items = append(src.SSL.Items,
+		SSLEntry{Domains: "", Issuer: "R3",
+			ValidFrom: 1_500_000_000, ValidUntil: chkCertExpiredUntil, ValidationType: "dv"},
+	)
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	ssl := chkSection(t, c, "ssl")
+	if ssl.Status != SectionBlocked {
+		t.Errorf("ssl status = %q, want %q: an unmatchable placeholder key must never downgrade", ssl.Status, SectionBlocked)
+	}
+	if acts := chkActionsOf(c, "ssl", MActionReissueSSL); len(acts) == 0 {
+		t.Error("want a blocking REISSUE_SSL action for the certificate without a domain list")
+	}
+}
+
+// Fail-safe: one expired generation followed by one with UNKNOWN expiry
+// under the same key — the unknown entry must veto the downgrade even after
+// an expired entry was already seen.
+func TestBuildChecklistSSLRemovedExpiredThenUnknownStaysBlocked(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	src.SSL.Items = append(src.SSL.Items,
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3 gen1",
+			ValidFrom: 1_500_000_000, ValidUntil: chkCertExpiredUntil, ValidationType: "dv"},
+		SSLEntry{Domains: "*.main.example,main.example", Issuer: "R3 gen2",
+			ValidFrom: 1_600_000_000, ValidUntil: 0, ValidationType: "dv"},
+	)
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	ssl := chkSection(t, c, "ssl")
+	if ssl.Status != SectionBlocked {
+		t.Errorf("ssl status = %q, want %q: an unknown-expiry generation must veto the expired-group downgrade", ssl.Status, SectionBlocked)
+	}
+}
+
+func TestCertDomainCovers(t *testing.T) {
+	cases := []struct {
+		certDom, dom string
+		want         bool
+	}{
+		{"main.example", "main.example", true},         // exact
+		{"*.main.example", "shop.main.example", true},  // one extra label
+		{"*.main.example", "main.example", false},      // never the base itself
+		{"*.main.example", "a.b.main.example", false},  // never multi-label
+		{"*.main.example", "*.main.example", true},     // literal wildcard match
+		{"*.main.example", "*.other.example", false},   // wildcard query, other zone
+		{"*.", "x", false},                             // bare wildcard, empty base
+		{"*.a.b", "*.c.a.b", false},                    // wildcard query never synthesized
+		{"shop.main.example", "*.main.example", false}, // per-host never covers a wildcard
+		{"*.main.example", ".main.example", false},     // empty label
+		{"", "", true}, // pre-existing exact-match semantics
+		{"", "main.example", false},
+	}
+	for _, tc := range cases {
+		if got := certDomainCovers(tc.certDom, tc.dom); got != tc.want {
+			t.Errorf("certDomainCovers(%q, %q) = %v, want %v", tc.certDom, tc.dom, got, tc.want)
+		}
+	}
+}
+
+// Semantic wildcard coverage: a valid destination wildcard covers the
+// single-label subdomain a removed per-host certificate used to serve.
+func TestBuildChecklistSSLRemovedCoveredByWildcardIsExpected(t *testing.T) {
+	src := chkInventory("source", "1.2.3.4", "srcacct")
+	dest := chkInventory("destination", "5.6.7.8", "srcacct")
+	src.SSL.Items = append(src.SSL.Items,
+		SSLEntry{Domains: "shop.main.example", Issuer: "R3",
+			ValidFrom: 1_700_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+	)
+	dest.SSL.Items = append(dest.SSL.Items,
+		SSLEntry{Domains: "*.main.example", Issuer: "E1",
+			ValidFrom: 1_790_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+	)
+
+	c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+	ssl := chkSection(t, c, "ssl")
+	if ssl.Status == SectionBlocked {
+		t.Errorf("ssl status = %q: shop.main.example is covered by the valid destination wildcard", ssl.Status)
+	}
+	found := false
+	for _, d := range ssl.ExpectedDifferences {
+		if d.Key == "shop.main.example" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected differences %v: want the wildcard-covered certificate", ssl.ExpectedDifferences)
+	}
+}
+
+// Wildcard coverage limits (fail-safe): *.base never covers the base domain
+// itself, multi-label subdomains, or anything when the wildcard is expired;
+// a lost wildcard is never covered by per-host certificates.
+func TestBuildChecklistSSLWildcardCoverageLimits(t *testing.T) {
+	cases := []struct {
+		name    string
+		srcCert SSLEntry
+		dstCert SSLEntry
+	}{
+		{
+			name: "base domain not covered by wildcard",
+			srcCert: SSLEntry{Domains: "other.example", Issuer: "R3",
+				ValidFrom: 1_700_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+			dstCert: SSLEntry{Domains: "*.other.example", Issuer: "E1",
+				ValidFrom: 1_790_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+		},
+		{
+			name: "multi-label subdomain not covered by wildcard",
+			srcCert: SSLEntry{Domains: "a.b.main.example", Issuer: "R3",
+				ValidFrom: 1_700_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+			dstCert: SSLEntry{Domains: "*.main.example", Issuer: "E1",
+				ValidFrom: 1_790_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+		},
+		{
+			name: "expired destination wildcard covers nothing",
+			srcCert: SSLEntry{Domains: "shop.main.example", Issuer: "R3",
+				ValidFrom: 1_700_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+			dstCert: SSLEntry{Domains: "*.main.example", Issuer: "E1",
+				ValidFrom: 1_500_000_000, ValidUntil: chkCertExpiredUntil, ValidationType: "dv"},
+		},
+		{
+			name: "valid wildcard never covered by per-host certificates",
+			srcCert: SSLEntry{Domains: "*.main.example", Issuer: "R3",
+				ValidFrom: 1_700_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+			dstCert: SSLEntry{Domains: "shop.main.example", Issuer: "E1",
+				ValidFrom: 1_790_000_000, ValidUntil: chkCertValidUntil, ValidationType: "dv"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := chkInventory("source", "1.2.3.4", "srcacct")
+			dest := chkInventory("destination", "5.6.7.8", "srcacct")
+			src.SSL.Items = append(src.SSL.Items, tc.srcCert)
+			dest.SSL.Items = append(dest.SSL.Items, tc.dstCert)
+
+			c := BuildChecklist(chkInput(src, dest, nil, chkApplyReport()))
+
+			ssl := chkSection(t, c, "ssl")
+			if ssl.Status != SectionBlocked {
+				t.Errorf("ssl status = %q, want %q", ssl.Status, SectionBlocked)
+			}
+			if acts := chkActionsOf(c, "ssl", MActionReissueSSL); len(acts) == 0 {
+				t.Error("want a blocking REISSUE_SSL action for the uncovered certificate")
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Manual actions taxonomy
 // ---------------------------------------------------------------------------
