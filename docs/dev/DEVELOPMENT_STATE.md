@@ -45,7 +45,7 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 7B | provenance chain: diff/policy record input hashes, checklist verifies `chain_verified` | #19 |
 | 7A-ssl-fix | checklist SSL: expired source cert groups → expected, RFC 6125 wildcard coverage | #21 |
 | 7C | apply evidence: phase events (+per-item data), report.json `phases_completed`/`artifacts`, checklist `per_item` | #22 |
-| 7D | operator acceptances: stable action keys, acceptances.json, `--acceptances` (gate clearing, fail-safe) | — |
+| 7D | operator acceptances: stable action keys, acceptances.json, `--acceptances` (gate clearing, fail-safe) | #23 |
 
 ## The full pipeline (all read-only / offline)
 
