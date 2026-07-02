@@ -161,9 +161,6 @@ in Orbit — `doctorbike.it` and `italplant.com` are and were used.
 
 ## Suggested next steps (not started)
 
-- **PR 7B — provenance chain**: `inventory diff`/`inventory policy`
-  record the sha256 of their own inputs; `inventory checklist` validates
-  the chain and flips `chain_verified` to true. Small, offline.
 - **PR 7C — apply evidence**: emit the already-defined apply phase events
   (`events/event.go:31-37`, defined but never emitted) with per-item data
   and populate `report.json` `phases_completed`/`artifacts`, so the

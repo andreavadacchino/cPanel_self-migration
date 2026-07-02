@@ -131,6 +131,10 @@ order-insensitively per zone; cron jobs are matched by their redacted
 command hash — the raw command is never reconstructed. Sections marked
 `available:false` on either side are skipped with a warning.
 
+The diff records the SHA-256 of the raw bytes of both input files
+(`source_sha256`/`destination_sha256`): the checklist verifies the
+provenance chain against them.
+
 Exit codes: `0` diff generated (differences are NOT an error), `1`
 missing/invalid input or write failure, `2` flag usage error.
 
@@ -170,6 +174,10 @@ gate without parsing JSON:
 cpanel-self-migration inventory policy --diff ./inventory_diff.json --fail-on-blockers \
   && echo "migration can proceed"
 ```
+
+The report records the SHA-256 of the raw bytes of the consumed diff
+(`input_diff_sha256`): the checklist verifies the provenance chain
+against it.
 
 ## Subcommand: `inventory dns-plan`
 
@@ -272,10 +280,15 @@ Manual actions carry a stable ID (`MA-001`…), a type
 `blocking_cutover` flag; the Markdown report lists the blocking ones
 under "Before shutting down the old server".
 
-The checklist embeds the SHA-256 of every input file. `chain_verified`
-stays `false` for now: the diff/policy artifacts do not yet record the
-hashes of *their own* inputs, so the chain inventory → diff → policy
-cannot be proven end-to-end (planned as PR 7B).
+The checklist embeds the SHA-256 of every input file and verifies the
+**provenance chain** (PR 7B): the hashes the diff, the policy report and
+the DNS plan record about their OWN inputs must match the files being
+composed. All links match → `chain_verified: true`. Hashes missing
+(artifacts from older builds) → `false` with a "not verifiable" warning,
+no gating. A hash **mismatch** (an artifact generated from different
+files) → `false`, an explicit warning, and any `READY_*` verdict is
+capped to `NOT_READY` — a composition proven inconsistent can never
+read as ready.
 
 Exit codes: `0` checklist generated (manual actions and blockers are
 findings, not process errors), `1` missing/invalid input or write

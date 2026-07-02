@@ -47,6 +47,11 @@ type checklistBuilder struct {
 
 	actions        []ManualAction
 	sectionActions map[string][]int // section -> indexes into actions
+
+	// chainMismatch is set when the provenance verification finds a
+	// PROVEN hash mismatch (not a mere absence): the composition is
+	// inconsistent and a READY_* verdict must be capped.
+	chainMismatch bool
 }
 
 // BuildChecklist is the engine entry point.
@@ -72,10 +77,16 @@ func BuildChecklist(in ChecklistInput) MigrationChecklist {
 	}
 	b.computeEvidence()
 
+	chainVerified, chainWarnings, chainMismatch := verifyProvenanceChain(in)
+	b.warnings = append(b.warnings, chainWarnings...)
+	b.chainMismatch = chainMismatch
+
 	c := MigrationChecklist{
 		Mode:          "migration-checklist",
 		FormatVersion: 1,
 		Account:       in.Source.Account.User,
+		Inputs:        in.InputRefs,
+		ChainVerified: chainVerified,
 		Sections:      []ChecklistSection{},
 		ManualActions: []ManualAction{},
 		Warnings:      []string{},
@@ -696,6 +707,70 @@ func (b *checklistBuilder) summarize(c *MigrationChecklist) {
 	default:
 		c.OverallStatus = OverallReadyToCutover
 	}
+
+	// A PROVEN provenance mismatch means the artifacts were not derived
+	// from these inventories: any READY_* verdict is unreliable and is
+	// capped to NOT_READY. Worse verdicts stand — the cap never improves.
+	if b.chainMismatch &&
+		(c.OverallStatus == OverallReadyToCutover || c.OverallStatus == OverallReadyWithManualNotes) {
+		c.OverallStatus = OverallNotReady
+	}
+}
+
+// verifyProvenanceChain compares the hashes the CALLER computed for the
+// raw input files (InputRefs) against the hashes each artifact records
+// about its OWN inputs. It never hashes anything itself. Missing hashes
+// (artifacts produced before PR 7B, or programmatic use without refs)
+// leave the chain unverified without gating; a mismatch is evidence the
+// composition is inconsistent and is reported for the overall cap.
+func verifyProvenanceChain(in ChecklistInput) (verified bool, warnings []string, mismatch bool) {
+	refs := in.InputRefs
+	var emptyRefs []string
+	if refs.SourceInventory.SHA256 == "" {
+		emptyRefs = append(emptyRefs, "source inventory")
+	}
+	if refs.DestinationInventory.SHA256 == "" {
+		emptyRefs = append(emptyRefs, "destination inventory")
+	}
+	if refs.Diff.SHA256 == "" {
+		emptyRefs = append(emptyRefs, "diff")
+	}
+	if len(emptyRefs) == 3 {
+		return false, nil, false // fully programmatic use: nothing to verify against
+	}
+
+	var missing []string
+	// check compares one recorded-vs-expected link; an empty expected ref
+	// means the caller could not provide it — the link is skipped here and
+	// reported once via emptyRefs (partial refs must never be silent).
+	check := func(artifact, input, recorded, expected string) {
+		switch {
+		case expected == "":
+			// reported via emptyRefs
+		case recorded == "":
+			missing = append(missing, fmt.Sprintf("%s does not record the hash of its %s", artifact, input))
+		case recorded != expected:
+			mismatch = true
+			warnings = append(warnings, fmt.Sprintf(
+				"provenance chain mismatch: %s was generated from a DIFFERENT %s (hash mismatch) — regenerate the pipeline from fresh inventories",
+				artifact, input))
+		}
+	}
+	check("diff", "source inventory", in.Diff.SourceSHA256, refs.SourceInventory.SHA256)
+	check("diff", "destination inventory", in.Diff.DestinationSHA256, refs.DestinationInventory.SHA256)
+	check("policy report", "diff", in.Policy.InputDiffSHA256, refs.Diff.SHA256)
+	if in.DNSPlan != nil {
+		check("dns plan", "source inventory", in.DNSPlan.SourceSHA256, refs.SourceInventory.SHA256)
+		check("dns plan", "destination inventory", in.DNSPlan.DestinationSHA256, refs.DestinationInventory.SHA256)
+	}
+	if len(emptyRefs) > 0 {
+		missing = append(missing, "the caller provided no reference hash for: "+strings.Join(emptyRefs, ", "))
+	}
+	if len(missing) > 0 {
+		warnings = append(warnings, "provenance chain not verifiable: "+
+			strings.Join(missing, "; ")+" (artifact generated before PR 7B?)")
+	}
+	return !mismatch && len(missing) == 0, warnings, mismatch
 }
 
 // coreEvidenceMissing: an area the tool is SUPPOSED to migrate has data on

@@ -99,9 +99,9 @@ func WriteChecklistMarkdown(path string, c MigrationChecklist) error {
 	fmt.Fprintf(&sb, "# Migration Checklist — %s\n\n", mdCell(c.Account, 60))
 	fmt.Fprintf(&sb, "**Overall: %s**\n\n", c.OverallStatus)
 	fmt.Fprintf(&sb, "- **Generated**: %s\n", c.GeneratedAt)
-	chain := "no — diff/policy do not record their input hashes yet (PR 7B)"
+	chain := "no — input hashes missing or mismatched (see warnings)"
 	if c.ChainVerified {
-		chain = "yes"
+		chain = "yes — inventories → diff → policy (→ dns plan) hashes all match"
 	}
 	fmt.Fprintf(&sb, "- **Chain verified**: %s\n\n", chain)
 

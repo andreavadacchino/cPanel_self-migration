@@ -193,5 +193,11 @@ type ChecklistInput struct {
 	Policy          PolicyReport
 	DNSPlan         *DNSPlan
 	MigrationReport *MigrationReportInfo
-	Now             time.Time
+	// InputRefs carries the file/sha256 references of every input as the
+	// caller read them; the engine copies them into the checklist and
+	// verifies the provenance chain against the hashes the artifacts
+	// record about their OWN inputs (PR 7B). Zero value → chain not
+	// verifiable, chain_verified stays false.
+	InputRefs ChecklistInputs
+	Now       time.Time
 }

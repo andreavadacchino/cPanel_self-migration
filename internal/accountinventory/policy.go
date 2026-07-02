@@ -47,13 +47,17 @@ type PolicySummary struct {
 }
 
 type PolicyReport struct {
-	Mode          string          `json:"mode"`
-	GeneratedAt   string          `json:"generated_at"`
-	InputDiff     string          `json:"input_diff"`
-	OverallStatus string          `json:"overall_status"`
-	Summary       PolicySummary   `json:"summary"`
-	Findings      []PolicyFinding `json:"findings"`
-	Warnings      []string        `json:"warnings"`
+	Mode        string `json:"mode"`
+	GeneratedAt string `json:"generated_at"`
+	InputDiff   string `json:"input_diff"`
+	// InputDiffSHA256 hashes the raw bytes of the consumed diff file (set
+	// by the CLI); the checklist verifies the provenance chain against it
+	// (PR 7B). omitempty keeps older artifacts parseable.
+	InputDiffSHA256 string          `json:"input_diff_sha256,omitempty"`
+	OverallStatus   string          `json:"overall_status"`
+	Summary         PolicySummary   `json:"summary"`
+	Findings        []PolicyFinding `json:"findings"`
+	Warnings        []string        `json:"warnings"`
 }
 
 func severityStatus(severity string) string {
