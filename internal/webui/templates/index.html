@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-{{if .JobRunning}}<meta http-equiv="refresh" content="2">{{end}}
+{{if or .JobRunning .MonitorLive}}<meta http-equiv="refresh" content="2">{{end}}
 <title>cpanel-self-migration — dashboard</title>
 <style>
   :root { color-scheme: light; }
@@ -84,6 +84,28 @@
     </details>
   {{end}}
 </div>
+{{end}}
+
+{{if .Monitor}}
+<h2>Run monitor</h2>
+<div class="status {{if eq .Monitor.State "failed"}}failed{{else if .Monitor.Live}}running{{else}}completed{{end}}">
+  <strong>{{if .Monitor.IsApply}}APPLY{{else}}Run{{end}} {{.Monitor.State}}{{if .Monitor.Stalled}} — stalled: no events for over 10 minutes, the process may have been interrupted{{end}}</strong>
+  — {{.Monitor.RunID}} — started {{.Monitor.StartedAt}}, last event {{.Monitor.LastEventAt}}
+  <span class="muted">(read from events.jsonl — the migration itself runs in the terminal)</span>
+  {{if .Monitor.Truncated}}<div class="muted">events.jsonl is large — only the most recent part was read.</div>{{end}}
+  {{if .Monitor.ParseNote}}<div class="muted">{{.Monitor.ParseNote}}</div>{{end}}
+  {{if .Monitor.Phases}}
+  <table>
+    <tr><th>Phase</th><th>State</th><th>Detail</th></tr>
+    {{range .Monitor.Phases}}<tr><td>{{.Phase}}</td><td>{{.State}}</td><td>{{.Summary}}</td></tr>{{end}}
+  </table>
+  {{end}}
+  {{if .Monitor.Errors}}
+  <ul>{{range .Monitor.Errors}}<li>{{.}}</li>{{end}}</ul>
+  {{end}}
+</div>
+{{else}}
+<p class="muted">No events.jsonl in this directory — start the migration with <code>--json-events</code> to monitor it here.</p>
 {{end}}
 
 {{if .Stale}}
