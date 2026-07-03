@@ -201,6 +201,46 @@ func fetchEmailLiveState(ctx context.Context, client cpanel.Runner, domains []st
 	return live, fwdBackup, defBackup, arBackup
 }
 
+// fetchAutoresponderAddress is the targeted form of the fresh re-check
+// bound to a SINGLE op: one list call (existence is provable only via the
+// list — 2B-2-pre fact 4) plus ONE get for the op's own address when it is
+// present. It avoids the O(domain-size) body sweep of
+// fetchAutorespondersWithRaw for per-op guard re-checks and verify-afters
+// (go-review 2B-2 round 2 finding 2); the returned slice carries at most
+// the one entry the caller's EvaluateEmailOp/EmailOutcomePresent looks at.
+func fetchAutoresponderAddress(ctx context.Context, client cpanel.Runner, domain, address string) ([]accountinventory.AutoresponderEntry, error) {
+	list, err := cpanel.ListAutoresponders(ctx, client, domain)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range list {
+		addr := a.Email
+		if !strings.Contains(addr, "@") {
+			addr = addr + "@" + domain
+		}
+		if !strings.EqualFold(strings.TrimSpace(addr), strings.TrimSpace(address)) {
+			continue
+		}
+		entry := accountinventory.AutoresponderEntry{
+			Email: addr, Domain: domain, Subject: a.Subject, Interval: int(a.Interval),
+		}
+		det, err := cpanel.GetAutoresponder(ctx, client, addr)
+		if err == nil {
+			entry.From = det.From
+			entry.Body = det.Body
+			entry.IsHTML = int(det.IsHTML)
+			entry.Interval = int(det.Interval)
+			entry.Start = int64(det.Start)
+			entry.Stop = int64(det.Stop)
+			entry.Charset = det.Charset
+			entry.Subject = det.Subject
+			entry.BodyCollected = true
+		}
+		return []accountinventory.AutoresponderEntry{entry}, nil
+	}
+	return nil, nil
+}
+
 // fetchAutorespondersWithRaw lists one domain's autoresponders and reads
 // each body (existence gated on the list — 2B-2-pre fact 4). A failed
 // per-address body read keeps the entry with BodyCollected=false: the
@@ -389,6 +429,34 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 		case op.Section == accountinventory.EmailSectionForwarders && op.Action == accountinventory.EmailActionCreate:
 			writeErr = cpanel.AddForwarder(ctx, client, op.Domain, op.Email, op.Forward)
 		case op.Section == accountinventory.EmailSectionDefaultAddress && op.Action == accountinventory.EmailActionSet:
+			// set_default_address OVERWRITES the catch-all, so it gets the
+			// same fresh pre-write re-check as the autoresponder create:
+			// the run-start batch snapshot is stale by the time this op
+			// reaches the write loop, and an unconditional set would
+			// silently destroy a value a human raced in (unrecoverable —
+			// rollback restores the BACKUP value, not the human's).
+			// go-review 2B-2 round 2 finding 1. Forwarders deliberately
+			// have no re-check: add_forwarder is additive and deduped.
+			freshDefaults, derr := cpanel.ListDefaultAddresses(ctx, client)
+			if derr != nil {
+				results[w.idx].Status = accountinventory.EmailOpRefused
+				results[w.idx].StatusReason = "pre-write default-address re-check failed: " + derr.Error()
+				continue
+			}
+			miniLive := accountinventory.EmailLiveState{
+				DefaultsListed: true,
+				Defaults:       normalizeDefaults(freshDefaults),
+			}
+			decision, reason := accountinventory.EvaluateEmailOp(op, miniLive, plan.DestinationUser)
+			switch decision {
+			case accountinventory.EmailDecisionAlready:
+				results[w.idx].Status = accountinventory.EmailOpAlready
+				continue
+			case accountinventory.EmailDecisionRefused:
+				results[w.idx].Status = accountinventory.EmailOpRefused
+				results[w.idx].StatusReason = reason
+				continue
+			}
 			writeErr = cpanel.SetDefaultAddress(ctx, client, op.Domain, op.Value)
 		case op.Section == accountinventory.EmailSectionAutoresponders && op.Action == accountinventory.EmailActionCreate:
 			// add_auto_responder UPSERTS (2B-2-pre fact 7), so the batch
@@ -398,7 +466,7 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 			// verify-after can only see the post-write state. Collapse
 			// the guard-to-write window with a fresh per-address re-check
 			// IMMEDIATELY before the write (go-review 2B-2 finding 1).
-			freshEntries, _, _, ferr := fetchAutorespondersWithRaw(ctx, client, op.Domain)
+			freshEntries, ferr := fetchAutoresponderAddress(ctx, client, op.Domain, op.Key)
 			if ferr != nil {
 				results[w.idx].Status = accountinventory.EmailOpRefused
 				results[w.idx].StatusReason = "pre-write autoresponder re-check failed: " + ferr.Error()
@@ -477,7 +545,7 @@ func refetchEmailSection(ctx context.Context, client cpanel.Runner, op accountin
 		live.DefaultsListed = true
 		live.Defaults = normalizeDefaults(entries)
 	case accountinventory.EmailSectionAutoresponders:
-		entries, _, _, err := fetchAutorespondersWithRaw(ctx, client, op.Domain)
+		entries, err := fetchAutoresponderAddress(ctx, client, op.Domain, op.Key)
 		if err != nil {
 			return live, err
 		}

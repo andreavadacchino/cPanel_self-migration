@@ -63,6 +63,13 @@ case "$mod $fn" in
     if ! grep -qF "$a|$fwdemail" "$FW"; then
       echo "$a|$fwdemail" >> "$FW"
     fi
+    # race simulation hook: creating the race-default-trigger forwarder
+    # concurrently rewrites the domain default (a human racing the tool).
+    if [ "$email" = "race-default-trigger" ]; then
+      grep -v "^$domain|" "$DF" > "$DF.tmp" || true
+      mv "$DF.tmp" "$DF"
+      echo "$domain|important@human.com" >> "$DF"
+    fi
     echo "{\"result\":{\"status\":1,\"data\":{\"forward\":\"$fwdemail\",\"domain\":\"$domain\",\"email\":\"$a\"}}}"
     ;;
   "Email delete_forwarder")
@@ -811,5 +818,57 @@ func TestEmailApplyCmdAutoresponderMidRunRaceIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "Foreign content.") {
 		t.Fatalf("foreign autoresponder content destroyed: %s", b)
+	}
+}
+
+
+func TestEmailApplyCmdDefaultSetMidRunRaceIsRefused(t *testing.T) {
+	// go-review 2B-2 round 2, finding 1 (HIGH): set_default_address
+	// OVERWRITES the catch-all, so it needs the same fresh pre-write
+	// re-check as the autoresponder create — the run-start batch snapshot
+	// is stale by the time the default op reaches the write loop. The
+	// stub simulates the race: writing the race-default-trigger forwarder
+	// concurrently sets the domain default to a human's value.
+	cfgPath, stateDir := setupEmailServer(t)
+	setEmailStubState(t, stateDir, nil, []string{"example.com|acct"})
+	dir := t.TempDir()
+
+	src := writeEmailPlanInventory(t, dir, "src_dr.json", "source", "acct",
+		[]accountinventory.ForwarderEntry{
+			{Source: "race-default-trigger@example.com", Destination: "x@y.com", Domain: "example.com"},
+		},
+		[]accountinventory.DefaultAddressEntry{
+			{Domain: "example.com", DefaultAddress: "catchall@src.com"},
+		})
+	dest := writeEmailPlanInventory(t, dir, "dest_dr.json", "destination", "acct", nil,
+		[]accountinventory.DefaultAddressEntry{
+			{Domain: "example.com", DefaultAddress: "acct"},
+		})
+	planPath := filepath.Join(dir, "email_apply_plan_dr.json")
+	if code := runInventoryEmailPlanCmd([]string{
+		"--source", src, "--destination", dest,
+		"--output-json", planPath, "--output-md", filepath.Join(dir, "email_apply_plan_dr.md"),
+	}); code != 0 {
+		t.Fatalf("email-plan: code = %d, want 0", code)
+	}
+
+	reportPath := filepath.Join(dir, "email_apply_report.json")
+	code := runEmailApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", reportPath, "--output-md", filepath.Join(dir, "email_apply_report.md"),
+	})
+	if code != exitDriftGate {
+		t.Fatalf("apply with mid-run default race: code = %d, want %d (refused)", code, exitDriftGate)
+	}
+	rep := readEmailApplyReport(t, reportPath)
+	if rep.Summary.Applied != 1 || rep.Summary.Refused != 1 {
+		t.Fatalf("summary = %+v, want 1 applied (forwarder) + 1 refused (default)", rep.Summary)
+	}
+	// The human's default must be UNTOUCHED — an unconditional set would
+	// have silently overwritten it (and rollback would restore the backup
+	// value, not the human's, making the loss unrecoverable).
+	state := readEmailStubState(t, stateDir, "defaults.txt")
+	if !strings.Contains(state, "important@human.com") {
+		t.Fatalf("stub defaults = %q — the human's default was destroyed", state)
 	}
 }
