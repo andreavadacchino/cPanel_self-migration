@@ -45,9 +45,19 @@ data to migrate. The writer is unit-tested, go-reviewed, and the
 individual primitives are byte-verified (PR2A_PRE_CAPTURES.md). The
 end-to-end write-path remains untested — declared as an honest residual.
 
+## Update 2026-07-03 (smoke-total session): cron primitive LIVE-PROVEN ✅
+
+Smoke: `InstallCrontab` installed `0 3 * * * /bin/true # smoke-total-cron`
+on .78 (empty crontab baseline). Verified present via `ReadCrontabRaw`.
+Rollback: reinstalled without the line. Verified removed. The cron
+write primitive is **LIVE-PROVEN** via throwaway harness.
+
+The end-to-end tool pipeline (plan → apply → verify → rollback via
+the CLI binary) is NOT tested because the `cron apply` command file
+does not exist yet. The primitive behavior is proven.
+
 ## Conclusion
 
 The 2A code is unit-tested, go-reviewed (adversarial), Docker-verified,
-and the write primitive is individually byte-proven. The zero-op pipeline
-path is validated. The end-to-end cron write-path smoke is NOT achievable
-with giorginisposi (0 cron jobs on source) — honest residual.
+write primitive LIVE-PROVEN (smoke-total session). The `cron apply` CLI
+command file is remaining work.
