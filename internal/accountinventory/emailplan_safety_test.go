@@ -22,6 +22,7 @@ func TestEmailPlanSourcesAreOfflineByConstruction(t *testing.T) {
 		"add_auto_responder",
 		"delete_auto_responder",
 		"store_filter",
+		"delete_filter",
 		"setmxcheck",
 	}
 	forbiddenImports := []string{

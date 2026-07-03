@@ -19,9 +19,10 @@ func TestChecklistSourcesAreOfflineByConstruction(t *testing.T) {
 	writeCalls := []string{
 		"mass_edit_zone", "add_pop", "addaddondomain", "addsubdomain",
 		"create_user", "create_database", "set_privileges",
-		// email-config writers (PR 2B-1): the checklist stays offline.
+		// email-config writers (PR 2B-1/2B-3): the checklist stays offline.
 		"add_forwarder", "set_default_address", "delete_forwarder",
-		"add_auto_responder", "delete_auto_responder", "store_filter", "setmxcheck",
+		"add_auto_responder", "delete_auto_responder",
+		"store_filter", "delete_filter", "setmxcheck",
 	}
 	files, err := filepath.Glob("checklist*.go")
 	if err != nil {

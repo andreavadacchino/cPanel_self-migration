@@ -155,6 +155,103 @@ func DeleteAutoresponder(ctx context.Context, c Runner, email string) error {
 	return nil
 }
 
+// StoreFilter creates or overwrites an email filter:
+// Email::store_filter filtername= match_type= part1= match1= val1=
+// [action1= dest1=] [account=] (2B-3-pre facts 1/5/6).
+// ⚠️ store_filter UPSERTS: callers must have proven the filter absent
+// or content-identical via a fresh re-list + get — the apply guard
+// refuses otherwise (never-overwrite posture).
+func StoreFilter(ctx context.Context, c Runner, filtername, account string,
+	rules []FilterRuleDecoded, actions []FilterActionDecoded) error {
+	args := map[string]string{
+		"filtername": filtername,
+		"match_type": "is",
+	}
+	if account != "" {
+		args["account"] = account
+	}
+	for i, r := range rules {
+		idx := strconv.Itoa(i + 1)
+		args["part"+idx] = r.Part
+		args["match"+idx] = r.Match
+		args["val"+idx] = r.Val
+	}
+	for i, a := range actions {
+		idx := strconv.Itoa(i + 1)
+		args["action"+idx] = a.Action
+		if a.Dest != nil && *a.Dest != "" {
+			args["dest"+idx] = *a.Dest
+		}
+	}
+	_, err := RunUAPI[json.RawMessage](ctx, c, "Email", "store_filter", args)
+	if err != nil {
+		return err
+	}
+	logx.Debug("StoreFilter(%q, account=%q): ok", filtername, account)
+	return nil
+}
+
+// DeleteFilter removes one email filter:
+// Email::delete_filter filtername= [account=] (2B-3-pre fact 8).
+// This is the ROLLBACK primitive: the only filter deletes the tool ever
+// emits are the inverses of its own applied creates.
+func DeleteFilter(ctx context.Context, c Runner, filtername, account string) error {
+	args := map[string]string{"filtername": filtername}
+	if account != "" {
+		args["account"] = account
+	}
+	_, err := RunUAPI[json.RawMessage](ctx, c, "Email", "delete_filter", args)
+	if err != nil {
+		return err
+	}
+	logx.Debug("DeleteFilter(%q, account=%q): ok", filtername, account)
+	return nil
+}
+
+// SetMXCheck sets the mail-routing mode for a domain via API2
+// Email::setmxcheck (no UAPI equivalent — 2B-3-pre fact 11).
+// Valid mxcheck values: local, remote, auto, secondary.
+// ⚠️ This is a DESTRUCTIVE set: the apply guard must re-check the
+// current value immediately before calling (same pattern as
+// set_default_address).
+func SetMXCheck(ctx context.Context, c Runner, domain, mxcheck string) error {
+	_, err := RunAPI2[json.RawMessage](ctx, c, "Email", "setmxcheck", map[string]string{
+		"domain":  domain,
+		"mxcheck": mxcheck,
+	})
+	if err != nil {
+		return err
+	}
+	logx.Debug("SetMXCheck(%s -> %s): ok", domain, mxcheck)
+	return nil
+}
+
+// ListMXsWithRaw is ListMXs plus the verbatim response bytes, for the
+// pre-write backup.
+func ListMXsWithRaw(ctx context.Context, c Runner) ([]MailRoutingEntry, []byte, error) {
+	data, raw, err := RunUAPIRaw[[]MailRoutingEntry](ctx, c, "Email", "list_mxs", nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	logx.Debug("ListMXsWithRaw: %d domain(s)", len(data))
+	return data, raw, nil
+}
+
+// ListEmailFiltersWithRaw is ListEmailFilters plus the verbatim response
+// bytes, for the pre-write backup.
+func ListEmailFiltersWithRaw(ctx context.Context, c Runner, account string) ([]EmailFilterEntry, []byte, error) {
+	var args map[string]string
+	if account != "" {
+		args = map[string]string{"account": account}
+	}
+	data, raw, err := RunUAPIRaw[[]EmailFilterEntry](ctx, c, "Email", "list_filters", args)
+	if err != nil {
+		return nil, nil, err
+	}
+	logx.Debug("ListEmailFiltersWithRaw(%q): %d filter(s)", account, len(data))
+	return data, raw, nil
+}
+
 // ListAutorespondersWithRaw is ListAutoresponders plus the verbatim
 // response bytes, for the pre-write backup (2B design: raw + normalized).
 func ListAutorespondersWithRaw(ctx context.Context, c Runner, domain string) ([]AutoresponderEntry, []byte, error) {

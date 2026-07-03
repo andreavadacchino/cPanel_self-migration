@@ -535,24 +535,94 @@ func TestEmailPlanDestOnlyAutorespondersAreInformational(t *testing.T) {
 	}
 }
 
-func TestEmailPlanFiltersAlwaysManual(t *testing.T) {
+func TestEmailPlanFiltersSingleRuleCreate(t *testing.T) {
 	src := epInventory("source", "acct", "example.com")
 	src.EmailFilters.Items = []EmailFilterEntry{
-		{Account: "", FilterName: "spam", Enabled: true, RuleCount: 2, ActionCount: 1},
+		{Account: "", FilterName: "simple", Enabled: true, RuleCount: 1, ActionCount: 1,
+			Rules:          []FilterRule{{Part: "$header_From:", Match: "contains", Val: "spam@x.com"}},
+			Actions:        []FilterAction{{Action: "fail"}},
+			RulesCollected: true},
 	}
 	dest := epInventory("destination", "acct", "example.com")
 
 	p := BuildEmailPlan(src, dest, nil)
-	op := findEmailOp(t, p, "email_filters", "(account-level)/spam")
-	if op.Action != EmailActionManual {
-		t.Fatalf("action = %q, want manual", op.Action)
+	op := findEmailOp(t, p, "email_filters", "(account-level)/simple")
+	if op.Action != EmailActionCreate {
+		t.Fatalf("single-rule filter: action = %q, want create (reason %q)", op.Action, op.Reason)
 	}
-	if !strings.Contains(op.Reason, "2B-3") {
-		t.Errorf("reason %q should name the PR that will implement it", op.Reason)
+	if op.Filter == nil || len(op.Filter.Rules) != 1 {
+		t.Fatalf("filter content missing or wrong rule count")
 	}
 }
 
-func TestEmailPlanRoutingSkipWhenIdenticalManualWhenNot(t *testing.T) {
+func TestEmailPlanFiltersMultiRuleManual(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	src.EmailFilters.Items = []EmailFilterEntry{
+		{Account: "", FilterName: "multi", Enabled: true, RuleCount: 2, ActionCount: 1,
+			Rules: []FilterRule{
+				{Part: "$header_From:", Match: "contains", Val: "a@x.com"},
+				{Part: "$header_Subject:", Match: "contains", Val: "SPAM"},
+			},
+			Actions:        []FilterAction{{Action: "fail"}},
+			RulesCollected: true},
+	}
+	dest := epInventory("destination", "acct", "example.com")
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "email_filters", "(account-level)/multi")
+	if op.Action != EmailActionManual {
+		t.Fatalf("multi-rule filter: action = %q, want manual", op.Action)
+	}
+	if !strings.Contains(op.Reason, "match_type") {
+		t.Errorf("reason %q should mention match_type", op.Reason)
+	}
+}
+
+func TestEmailPlanFiltersIdenticalSkip(t *testing.T) {
+	rule := FilterRule{Part: "$header_From:", Match: "contains", Val: "spam@x.com"}
+	action := FilterAction{Action: "fail"}
+	src := epInventory("source", "acct", "example.com")
+	src.EmailFilters.Items = []EmailFilterEntry{
+		{Account: "", FilterName: "same", Enabled: true, RuleCount: 1, ActionCount: 1,
+			Rules: []FilterRule{rule}, Actions: []FilterAction{action}, RulesCollected: true},
+	}
+	dest := epInventory("destination", "acct", "example.com")
+	dest.EmailFilters.Items = []EmailFilterEntry{
+		{Account: "", FilterName: "same", Enabled: true, RuleCount: 1, ActionCount: 1,
+			Rules: []FilterRule{rule}, Actions: []FilterAction{action}, RulesCollected: true},
+	}
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "email_filters", "(account-level)/same")
+	if op.Action != EmailActionSkip {
+		t.Fatalf("identical filter: action = %q, want skip", op.Action)
+	}
+}
+
+func TestEmailPlanFiltersDifferentDestManual(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	src.EmailFilters.Items = []EmailFilterEntry{
+		{Account: "", FilterName: "diff", Enabled: true, RuleCount: 1, ActionCount: 1,
+			Rules:          []FilterRule{{Part: "$header_From:", Match: "contains", Val: "spam@x.com"}},
+			Actions:        []FilterAction{{Action: "fail"}},
+			RulesCollected: true},
+	}
+	dest := epInventory("destination", "acct", "example.com")
+	dest.EmailFilters.Items = []EmailFilterEntry{
+		{Account: "", FilterName: "diff", Enabled: true, RuleCount: 1, ActionCount: 1,
+			Rules:          []FilterRule{{Part: "$header_To:", Match: "is", Val: "other@x.com"}},
+			Actions:        []FilterAction{{Action: "finish"}},
+			RulesCollected: true},
+	}
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "email_filters", "(account-level)/diff")
+	if op.Action != EmailActionManual {
+		t.Fatalf("different filter: action = %q, want manual", op.Action)
+	}
+}
+
+func TestEmailPlanRoutingSkipWhenIdenticalSetWhenNot(t *testing.T) {
 	src := epInventory("source", "acct", "example.com")
 	src.EmailRouting.Items = []EmailRoutingEntry{{Domain: "example.com", Routing: "remote"}}
 	dest := epInventory("destination", "acct", "example.com")
@@ -560,8 +630,11 @@ func TestEmailPlanRoutingSkipWhenIdenticalManualWhenNot(t *testing.T) {
 
 	p := BuildEmailPlan(src, dest, nil)
 	op := findEmailOp(t, p, "email_routing", "example.com")
-	if op.Action != EmailActionManual {
-		t.Fatalf("differing routing: action = %q, want manual (reason %q)", op.Action, op.Reason)
+	if op.Action != EmailActionSet {
+		t.Fatalf("differing routing: action = %q, want set (reason %q)", op.Action, op.Reason)
+	}
+	if op.Value != "remote" {
+		t.Errorf("set value = %q, want remote", op.Value)
 	}
 
 	dest.EmailRouting.Items = []EmailRoutingEntry{{Domain: "example.com", Routing: "remote"}}

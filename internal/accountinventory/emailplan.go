@@ -86,6 +86,18 @@ type EmailPlanOp struct {
 	// action: the destination address had NO autoresponder (a differing
 	// one is terminal manual — the writer never overwrites).
 	Autoresponder *EmailAutoresponderContent `json:"autoresponder,omitempty"`
+	// Filter carries the full content payload of a filter create op
+	// (PR 2B-3). Single-rule only (match_type not round-trippable).
+	Filter *EmailFilterContent `json:"filter,omitempty"`
+}
+
+// EmailFilterContent is the round-trippable filter content (2B-3-pre
+// facts 1–6): exactly the fields the writer sends and the verify paths
+// compare. ⚠️ match_type is NOT round-trippable (fact 10): single-rule
+// filters use "is" as the safe default; multi-rule filters are MANUAL.
+type EmailFilterContent struct {
+	Rules   []FilterRule   `json:"rules"`
+	Actions []FilterAction `json:"actions"`
 }
 
 // EmailAutoresponderContent is the round-trippable autoresponder content
@@ -262,7 +274,7 @@ func BuildEmailPlan(src, dest NormalizedInventory, policy *PolicyReport) EmailAp
 	planForwarders(&plan, src, dest)
 	planDefaultAddresses(&plan, src, dest)
 	planAutoresponders(&plan, src, dest)
-	planFilters(&plan, src)
+	planFilters(&plan, src, dest)
 	planRouting(&plan, src, dest)
 
 	plan.PolicyFindings = emailPolicyFindings(policy)
@@ -618,28 +630,153 @@ func planAutoresponders(plan *EmailApplyPlan, src, dest NormalizedInventory) {
 	}
 }
 
-// planFilters carries every source email filter as a terminal manual op:
-// the collector stores counts only (redaction posture), so the rules
-// cannot be round-tripped until 2B-3.
-func planFilters(plan *EmailApplyPlan, src NormalizedInventory) {
-	if !src.EmailFilters.Available {
+// filtersEquivalent reports whether two COLLECTED filters are
+// content-identical: same rules (part, match, val in order) and same
+// actions (action, dest in order). opt is always null (2B-3-pre fact 3)
+// and is ignored. match_type is NOT round-trippable (fact 10) and is
+// therefore not compared.
+func filtersEquivalent(a, b EmailFilterEntry) bool {
+	if len(a.Rules) != len(b.Rules) || len(a.Actions) != len(b.Actions) {
+		return false
+	}
+	for i := range a.Rules {
+		if a.Rules[i].Part != b.Rules[i].Part ||
+			a.Rules[i].Match != b.Rules[i].Match ||
+			a.Rules[i].Val != b.Rules[i].Val {
+			return false
+		}
+	}
+	for i := range a.Actions {
+		ar, br := a.Actions[i], b.Actions[i]
+		if ar.Action != br.Action {
+			return false
+		}
+		aDest, bDest := "", ""
+		if ar.Dest != nil {
+			aDest = *ar.Dest
+		}
+		if br.Dest != nil {
+			bDest = *br.Dest
+		}
+		if aDest != bDest {
+			return false
+		}
+	}
+	return true
+}
+
+// filterContentFromEntry builds the plan's EmailFilterContent from an
+// inventory EmailFilterEntry's collected rules and actions.
+func filterContentFromEntry(f EmailFilterEntry) *EmailFilterContent {
+	rules := make([]FilterRule, len(f.Rules))
+	copy(rules, f.Rules)
+	actions := make([]FilterAction, len(f.Actions))
+	for i, a := range f.Actions {
+		actions[i] = FilterAction{Action: a.Action}
+		if a.Dest != nil {
+			d := *a.Dest
+			actions[i].Dest = &d
+		}
+	}
+	return &EmailFilterContent{
+		Rules:   rules,
+		Actions: actions,
+	}
+}
+
+// filterKey builds the deterministic plan key for a filter:
+// "account/filtername" (account="" for account-level).
+func filterKey(f EmailFilterEntry) string {
+	account := f.Account
+	if account == "" {
+		account = "(account-level)"
+	}
+	return account + "/" + f.FilterName
+}
+
+// planFilters applies the 2B-3 rule table to the email filter section.
+// Rules are now collected in clear (option A, 2B-3 gate). Single-rule
+// filters with collected bodies → create/skip/manual; multi-rule
+// filters → MANUAL (match_type not round-trippable, 2B-3-pre fact 10).
+// ⚠️ store_filter UPSERTS (fact 5): a differing destination filter is
+// terminal manual — the writer never overwrites somebody's rules.
+// Dest-only filters are informational, never deleted.
+func planFilters(plan *EmailApplyPlan, src, dest NormalizedInventory) {
+	if !src.EmailFilters.Available || !dest.EmailFilters.Available {
+		side := "source"
+		if src.EmailFilters.Available {
+			side = "destination"
+		}
 		plan.ManualSections = append(plan.ManualSections, EmailManualSection{
 			Section: EmailSectionFilters,
-			Reason:  "email_filters section unavailable on source — re-run that inventory",
+			Reason:  fmt.Sprintf("email_filters section unavailable on %s — re-run that inventory", side),
 		})
 		return
 	}
-	for _, f := range src.EmailFilters.Items {
-		account := f.Account
-		if account == "" {
-			account = "(account-level)"
+
+	destByKey := map[string]EmailFilterEntry{}
+	destPresent := map[string]bool{}
+	for _, f := range dest.EmailFilters.Items {
+		key := filterKey(f)
+		if !destPresent[key] {
+			destPresent[key] = true
+			destByKey[key] = f
 		}
-		plan.Ops = append(plan.Ops, EmailPlanOp{
+	}
+
+	srcSeen := map[string]bool{}
+	for _, f := range src.EmailFilters.Items {
+		key := filterKey(f)
+		if srcSeen[key] {
+			continue
+		}
+		srcSeen[key] = true
+
+		op := EmailPlanOp{
 			Section:     EmailSectionFilters,
-			Key:         account + "/" + f.FilterName,
+			Key:         key,
+			Domain:      "",
 			SourceValue: fmt.Sprintf("%d rule(s), %d action(s), enabled=%v", f.RuleCount, f.ActionCount, f.Enabled),
-			Action:      EmailActionManual,
-			Reason:      "email filter apply lands in 2B-3 (filter rule round-trip, pending the redaction decision) — recreate by hand or wait",
+		}
+
+		d, onDest := destByKey[key]
+		if onDest {
+			op.DestinationValue = fmt.Sprintf("%d rule(s), %d action(s), enabled=%v", d.RuleCount, d.ActionCount, d.Enabled)
+		}
+
+		switch {
+		case !f.RulesCollected:
+			op.Action = EmailActionManual
+			op.Reason = "the source inventory carries no filter rules (pre-2B-3 artifact or a failed per-filter read) — re-run --account-inventory on the source, then re-plan"
+		case len(f.Rules) > 1:
+			op.Action = EmailActionManual
+			op.Reason = fmt.Sprintf("multi-rule filter (%d rules) — the match_type (AND/OR join) is not round-trippable (cPanel API does not return it); recreate by hand", len(f.Rules))
+		case onDest && !d.RulesCollected:
+			op.Action = EmailActionManual
+			op.Reason = "a filter exists on the destination but its inventory carries no rules (pre-2B-3 artifact or a failed per-filter read) — re-run the destination inventory, then re-plan"
+		case onDest && filtersEquivalent(f, d):
+			op.Action = EmailActionSkip
+			op.Filter = filterContentFromEntry(f)
+		case onDest:
+			op.Action = EmailActionManual
+			op.Reason = "a filter with DIFFERENT content already exists on the destination — the write call upserts (never-overwrite); resolve by hand (terminal)"
+		default:
+			op.Action = EmailActionCreate
+			op.Filter = filterContentFromEntry(f)
+			op.Email = f.Account
+		}
+		plan.Ops = append(plan.Ops, op)
+	}
+
+	for _, f := range dest.EmailFilters.Items {
+		key := filterKey(f)
+		if srcSeen[key] {
+			continue
+		}
+		plan.Informational = append(plan.Informational, EmailPlanInfo{
+			Section: EmailSectionFilters,
+			Key:     key,
+			Value:   fmt.Sprintf("%d rule(s), %d action(s)", f.RuleCount, f.ActionCount),
 		})
 	}
 }
@@ -673,11 +810,15 @@ func planRouting(plan *EmailApplyPlan, src, dest NormalizedInventory) {
 		}
 		destVal, ok := destByDomain[domain]
 		op.DestinationValue = destVal
-		if ok && destVal == r.Routing {
-			op.Action = EmailActionSkip
-		} else {
+		switch {
+		case !ok:
 			op.Action = EmailActionManual
-			op.Reason = "email routing apply (the API2 routing write) lands in 2B-3 — set by hand or wait"
+			op.Reason = fmt.Sprintf("domain %s is missing on the destination routing list — create it first, then re-plan", domain)
+		case destVal == r.Routing:
+			op.Action = EmailActionSkip
+		default:
+			op.Action = EmailActionSet
+			op.Value = r.Routing
 		}
 		plan.Ops = append(plan.Ops, op)
 	}

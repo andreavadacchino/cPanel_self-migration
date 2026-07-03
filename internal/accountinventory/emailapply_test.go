@@ -399,3 +399,218 @@ func TestComputeEmailRollbackDegradedAutorespondersAreManual(t *testing.T) {
 		t.Errorf("degraded rollback must flag autoresponders as MANUAL, notes = %v", notes)
 	}
 }
+
+// --- EvaluateEmailOp: filter create (2B-3) ---------------------------------
+
+func eaFilterCreateOp() EmailPlanOp {
+	return EmailPlanOp{
+		Section: EmailSectionFilters, Action: EmailActionCreate,
+		Key: "(account-level)/test-filter",
+		Filter: &EmailFilterContent{
+			Rules:   []FilterRule{{Part: "$header_From:", Match: "contains", Val: "spam@x.com"}},
+			Actions: []FilterAction{{Action: "fail"}},
+		},
+	}
+}
+
+func eaFilterLive(filters []EmailFilterEntry) EmailLiveState {
+	return EmailLiveState{
+		ForwardersByDomain:  map[string][]ForwarderEntry{},
+		ForwarderListErrors: map[string]string{},
+		DefaultsListed:      true,
+		FiltersByAccount:    map[string][]EmailFilterEntry{"": filters},
+		FilterListErrors:    map[string]string{},
+		RoutingListed:       true,
+	}
+}
+
+func TestEvaluateFilterCreate(t *testing.T) {
+	op := eaFilterCreateOp()
+
+	t.Run("absent -> write", func(t *testing.T) {
+		live := eaFilterLive(nil)
+		if d, r := EvaluateEmailOp(op, live, "acct"); d != EmailDecisionWrite {
+			t.Errorf("decision = %q (%s), want write", d, r)
+		}
+	})
+
+	t.Run("content-identical -> already", func(t *testing.T) {
+		live := eaFilterLive([]EmailFilterEntry{{
+			FilterName:     "test-filter",
+			Rules:          []FilterRule{{Part: "$header_From:", Match: "contains", Val: "spam@x.com"}},
+			Actions:        []FilterAction{{Action: "fail"}},
+			RulesCollected: true,
+		}})
+		if d, _ := EvaluateEmailOp(op, live, "acct"); d != EmailDecisionAlready {
+			t.Errorf("decision = %q, want already", d)
+		}
+	})
+
+	t.Run("different content -> refused", func(t *testing.T) {
+		live := eaFilterLive([]EmailFilterEntry{{
+			FilterName:     "test-filter",
+			Rules:          []FilterRule{{Part: "$header_To:", Match: "is", Val: "other@x.com"}},
+			Actions:        []FilterAction{{Action: "finish"}},
+			RulesCollected: true,
+		}})
+		d, r := EvaluateEmailOp(op, live, "acct")
+		if d != EmailDecisionRefused {
+			t.Errorf("decision = %q (%s), want refused", d, r)
+		}
+	})
+
+	t.Run("rules unreadable -> refused", func(t *testing.T) {
+		live := eaFilterLive([]EmailFilterEntry{{
+			FilterName:     "test-filter",
+			RulesCollected: false,
+		}})
+		d, r := EvaluateEmailOp(op, live, "acct")
+		if d != EmailDecisionRefused {
+			t.Errorf("decision = %q (%s), want refused", d, r)
+		}
+	})
+
+	t.Run("nil payload -> refused", func(t *testing.T) {
+		nilOp := eaFilterCreateOp()
+		nilOp.Filter = nil
+		live := eaFilterLive(nil)
+		d, r := EvaluateEmailOp(nilOp, live, "acct")
+		if d != EmailDecisionRefused {
+			t.Errorf("decision = %q (%s), want refused", d, r)
+		}
+	})
+
+	t.Run("re-list failed -> refused", func(t *testing.T) {
+		live := eaFilterLive(nil)
+		live.FilterListErrors[""] = "ssh timeout"
+		d, r := EvaluateEmailOp(op, live, "acct")
+		if d != EmailDecisionRefused {
+			t.Errorf("decision = %q (%s), want refused", d, r)
+		}
+	})
+}
+
+// --- EvaluateEmailOp: routing set (2B-3) -----------------------------------
+
+func eaRoutingSetOp() EmailPlanOp {
+	return EmailPlanOp{
+		Section: EmailSectionRouting, Action: EmailActionSet,
+		Domain: "example.com", Key: "example.com",
+		Value: "remote", DestinationValue: "local",
+	}
+}
+
+func eaRoutingLive(routing string) EmailLiveState {
+	return EmailLiveState{
+		ForwardersByDomain:  map[string][]ForwarderEntry{},
+		ForwarderListErrors: map[string]string{},
+		DefaultsListed:      true,
+		FiltersByAccount:    map[string][]EmailFilterEntry{},
+		FilterListErrors:    map[string]string{},
+		RoutingEntries:      []EmailRoutingEntry{{Domain: "example.com", Routing: routing}},
+		RoutingListed:       true,
+	}
+}
+
+func TestEvaluateRoutingSet(t *testing.T) {
+	op := eaRoutingSetOp()
+
+	t.Run("plan-time state holds -> write", func(t *testing.T) {
+		if d, r := EvaluateEmailOp(op, eaRoutingLive("local"), "acct"); d != EmailDecisionWrite {
+			t.Errorf("decision = %q (%s), want write", d, r)
+		}
+	})
+
+	t.Run("already set -> already", func(t *testing.T) {
+		if d, _ := EvaluateEmailOp(op, eaRoutingLive("remote"), "acct"); d != EmailDecisionAlready {
+			t.Errorf("decision = %q, want already", d)
+		}
+	})
+
+	t.Run("third value -> refused", func(t *testing.T) {
+		d, r := EvaluateEmailOp(op, eaRoutingLive("secondary"), "acct")
+		if d != EmailDecisionRefused {
+			t.Errorf("decision = %q (%s), want refused", d, r)
+		}
+	})
+
+	t.Run("re-list failed -> refused", func(t *testing.T) {
+		live := eaRoutingLive("local")
+		live.RoutingListed = false
+		live.RoutingError = "ssh timeout"
+		d, r := EvaluateEmailOp(op, live, "acct")
+		if d != EmailDecisionRefused {
+			t.Errorf("decision = %q (%s), want refused", d, r)
+		}
+	})
+
+	t.Run("domain vanished -> refused", func(t *testing.T) {
+		live := eaRoutingLive("local")
+		live.RoutingEntries = nil
+		d, r := EvaluateEmailOp(op, live, "acct")
+		if d != EmailDecisionRefused {
+			t.Errorf("decision = %q (%s), want refused", d, r)
+		}
+	})
+}
+
+// --- ComputeEmailRollback: filter + routing (2B-3) -------------------------
+
+func TestRollbackFilterCreate(t *testing.T) {
+	report := EmailApplyReport{
+		RunMode: "apply",
+		Results: []EmailOpResult{{
+			EmailPlanOp: EmailPlanOp{
+				Section: EmailSectionFilters, Action: EmailActionCreate,
+				Key: "(account-level)/test-filter",
+				Filter: &EmailFilterContent{
+					Rules:   []FilterRule{{Part: "$header_From:", Match: "contains", Val: "spam@x.com"}},
+					Actions: []FilterAction{{Action: "fail"}},
+				},
+			},
+			Status: EmailOpApplied,
+		}},
+	}
+	ops, err := ComputeEmailRollback(report, EmailBackup{})
+	if err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Kind != EmailRollbackFilterRemove {
+		t.Fatalf("ops = %+v, want 1 filter_remove", ops)
+	}
+	if ops[0].Address != "test-filter" || ops[0].Account != "" {
+		t.Errorf("rollback op = %+v, want address=test-filter account=''", ops[0])
+	}
+	if ops[0].Filter == nil {
+		t.Error("rollback op must carry the filter content for the equivalence guard")
+	}
+}
+
+func TestRollbackRoutingSet(t *testing.T) {
+	report := EmailApplyReport{
+		RunMode: "apply",
+		Results: []EmailOpResult{{
+			EmailPlanOp: EmailPlanOp{
+				Section: EmailSectionRouting, Action: EmailActionSet,
+				Domain: "example.com", Key: "example.com",
+				Value: "remote",
+			},
+			Status: EmailOpApplied,
+		}},
+	}
+	backup := EmailBackup{
+		Routing: &EmailBackupSection{
+			Routing: []EmailRoutingEntry{{Domain: "example.com", Routing: "local"}},
+		},
+	}
+	ops, err := ComputeEmailRollback(report, backup)
+	if err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if len(ops) != 1 || ops[0].Kind != EmailRollbackRoutingRestore {
+		t.Fatalf("ops = %+v, want 1 routing_restore", ops)
+	}
+	if ops[0].Value != "local" || ops[0].ExpectedCurrent != "remote" {
+		t.Errorf("rollback op = %+v, want value=local expected=remote", ops[0])
+	}
+}

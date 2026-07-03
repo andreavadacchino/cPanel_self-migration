@@ -56,6 +56,17 @@ type EmailLiveState struct {
 	AutorespondersByDomain map[string][]AutoresponderEntry
 	// AutoresponderListErrors records domains whose re-list failed.
 	AutoresponderListErrors map[string]string
+	// FiltersByAccount holds the fresh filter list per account scope
+	// ("" = account-level). Each entry's RulesCollected is true when
+	// get_filter succeeded for it (PR 2B-3).
+	FiltersByAccount map[string][]EmailFilterEntry
+	// FilterListErrors records account scopes whose re-list failed.
+	FilterListErrors map[string]string
+	// RoutingEntries holds the fresh routing list (all domains).
+	RoutingEntries []EmailRoutingEntry
+	// RoutingListed is true when the routing re-list succeeded.
+	RoutingListed bool
+	RoutingError  string
 }
 
 // destForwardTargets returns the canonical target set for one source
@@ -106,6 +117,53 @@ func autoresponderContentEquivalent(c *EmailAutoresponderContent, e Autoresponde
 	}, e)
 }
 
+// splitFilterKey inverts filterKey: "account/filtername" → account, filtername.
+// "(account-level)/name" → "", "name".
+func splitFilterKey(key string) (account, filtername string) {
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 {
+		return "", key
+	}
+	account = parts[0]
+	if account == "(account-level)" {
+		account = ""
+	}
+	return account, parts[1]
+}
+
+// filterFor returns the live filter entry for an account+name key.
+func (l EmailLiveState) filterFor(account, filtername string) (EmailFilterEntry, bool) {
+	for _, f := range l.FiltersByAccount[account] {
+		if f.FilterName == filtername {
+			return f, true
+		}
+	}
+	return EmailFilterEntry{}, false
+}
+
+// filterContentEquivalent compares a plan payload against a live entry
+// using the same field comparisons as filtersEquivalent.
+func filterContentEquivalent(c *EmailFilterContent, e EmailFilterEntry) bool {
+	if c == nil || !e.RulesCollected {
+		return false
+	}
+	return filtersEquivalent(EmailFilterEntry{
+		Rules:          c.Rules,
+		Actions:        c.Actions,
+		RulesCollected: true,
+	}, e)
+}
+
+// routingFor returns the live routing value for a domain.
+func (l EmailLiveState) routingFor(domain string) (string, bool) {
+	for _, r := range l.RoutingEntries {
+		if strings.ToLower(strings.TrimSpace(r.Domain)) == strings.ToLower(strings.TrimSpace(domain)) {
+			return r.Routing, true
+		}
+	}
+	return "", false
+}
+
 // defaultFor returns the live default address for a domain.
 func (l EmailLiveState) defaultFor(domain string) (string, bool) {
 	for _, d := range l.Defaults {
@@ -135,6 +193,13 @@ func EmailOutcomePresent(op EmailPlanOp, live EmailLiveState, destUser string) b
 	case op.Section == EmailSectionAutoresponders && op.Action == EmailActionCreate:
 		e, ok := live.autoresponderFor(op.Domain, op.Key)
 		return ok && autoresponderContentEquivalent(op.Autoresponder, e)
+	case op.Section == EmailSectionFilters && op.Action == EmailActionCreate:
+		account, filtername := splitFilterKey(op.Key)
+		e, ok := live.filterFor(account, filtername)
+		return ok && filterContentEquivalent(op.Filter, e)
+	case op.Section == EmailSectionRouting && op.Action == EmailActionSet:
+		cur, ok := live.routingFor(op.Domain)
+		return ok && cur == op.Value
 	}
 	return false
 }
@@ -207,6 +272,46 @@ func EvaluateEmailOp(op EmailPlanOp, live EmailLiveState, destUser string) (deci
 		}
 		return EmailDecisionRefused, fmt.Sprintf(
 			"an autoresponder with different content appeared on %s since the plan — the writer never overwrites (the add call would destroy it); re-plan and review", op.Key)
+
+	case op.Section == EmailSectionFilters && op.Action == EmailActionCreate:
+		if op.Filter == nil {
+			return EmailDecisionRefused, fmt.Sprintf("filter create op for %s carries no content payload — malformed or hand-edited plan", op.Key)
+		}
+		account, filtername := splitFilterKey(op.Key)
+		if msg, failed := live.FilterListErrors[account]; failed {
+			return EmailDecisionRefused, fmt.Sprintf("fresh filter re-list failed for account %q: %s", account, msg)
+		}
+		e, present := live.filterFor(account, filtername)
+		if !present {
+			return EmailDecisionWrite, ""
+		}
+		if !e.RulesCollected {
+			return EmailDecisionRefused, fmt.Sprintf(
+				"a filter %q exists on the destination but its rules could not be read — cannot prove equality, refusing fail-closed", filtername)
+		}
+		if filterContentEquivalent(op.Filter, e) {
+			return EmailDecisionAlready, ""
+		}
+		return EmailDecisionRefused, fmt.Sprintf(
+			"a filter %q with different content appeared on the destination since the plan — the write call upserts (never-overwrite); re-plan and review", filtername)
+
+	case op.Section == EmailSectionRouting && op.Action == EmailActionSet:
+		if !live.RoutingListed {
+			return EmailDecisionRefused, "fresh routing re-list failed: " + live.RoutingError
+		}
+		cur, ok := live.routingFor(op.Domain)
+		if !ok {
+			return EmailDecisionRefused, fmt.Sprintf("domain %s no longer appears in the routing list", op.Domain)
+		}
+		if cur == op.Value {
+			return EmailDecisionAlready, ""
+		}
+		if cur == op.DestinationValue {
+			return EmailDecisionWrite, ""
+		}
+		return EmailDecisionRefused, fmt.Sprintf(
+			"routing for %s changed since the plan (plan-time %q, now %q) — re-plan and review",
+			op.Domain, op.DestinationValue, cur)
 	}
 	return EmailDecisionRefused, fmt.Sprintf("op %s/%s is not actionable (action %q)", op.Section, op.Key, op.Action)
 }
@@ -315,6 +420,10 @@ type EmailBackupSection struct {
 	// by address (the list raw alone carries no content).
 	Autoresponders  []AutoresponderEntry       `json:"autoresponders,omitempty"`
 	RawGetResponses map[string]json.RawMessage `json:"raw_get_responses,omitempty"`
+	// Filters (PR 2B-3): normalized entries with collected rules.
+	Filters []EmailFilterEntry `json:"filters,omitempty"`
+	// Routing (PR 2B-3): routing entries.
+	Routing []EmailRoutingEntry `json:"routing,omitempty"`
 }
 
 // EmailBackup is the pre-write state of every section the plan touches.
@@ -332,6 +441,8 @@ type EmailBackup struct {
 	ForwardersByDomain     map[string]EmailBackupSection `json:"forwarders_by_domain,omitempty"`
 	DefaultAddresses       *EmailBackupSection           `json:"default_addresses,omitempty"`
 	AutorespondersByDomain map[string]EmailBackupSection `json:"autoresponders_by_domain,omitempty"`
+	FiltersByAccount       map[string]EmailBackupSection `json:"filters_by_account,omitempty"`
+	Routing                *EmailBackupSection           `json:"routing,omitempty"`
 }
 
 // backupDefaultFor returns the backed-up default address for a domain.
@@ -347,6 +458,26 @@ func (b EmailBackup) backupDefaultFor(domain string) (string, bool) {
 	return "", false
 }
 
+// backupRoutingFor returns the backed-up routing value for a domain.
+func (b EmailBackup) backupRoutingFor(domain string) (string, bool) {
+	if b.Routing == nil {
+		return "", false
+	}
+	for _, r := range b.Routing.Routing {
+		if strings.EqualFold(strings.TrimSpace(r.Domain), strings.TrimSpace(domain)) {
+			return r.Routing, true
+		}
+	}
+	return "", false
+}
+
+// FilterMatchesContent is the exported content-equality check the
+// rollback pre-check uses: the live entry must still carry exactly the
+// content the tool applied.
+func FilterMatchesContent(c *EmailFilterContent, e EmailFilterEntry) bool {
+	return filterContentEquivalent(c, e)
+}
+
 // --- rollback ---------------------------------------------------------------
 
 // Rollback op kinds (verb-free names: this file is covered by the
@@ -356,6 +487,8 @@ const (
 	EmailRollbackForwarderRemove     = "forwarder_remove"
 	EmailRollbackDefaultRestore      = "default_restore"
 	EmailRollbackAutoresponderRemove = "autoresponder_remove"
+	EmailRollbackFilterRemove        = "filter_remove"
+	EmailRollbackRoutingRestore      = "routing_restore"
 )
 
 // EmailRollbackOp is one inverse op, computed ONLY for ops the report
@@ -379,6 +512,11 @@ type EmailRollbackOp struct {
 	// autoresponder whose live content diverged from it (a human
 	// customized it since).
 	Autoresponder *EmailAutoresponderContent `json:"autoresponder,omitempty"`
+	// Filter (filter_remove): the content the tool applied (2B-3).
+	Filter *EmailFilterContent `json:"filter,omitempty"`
+	// Account carries the per-mailbox account scope for filter ops
+	// ("" = account-level).
+	Account string `json:"account,omitempty"`
 }
 
 // ComputeEmailRollback derives the inverse ops from a report+backup pair:
@@ -419,14 +557,33 @@ func ComputeEmailRollback(report EmailApplyReport, backup EmailBackup) ([]EmailR
 			if r.Autoresponder == nil {
 				return nil, fmt.Errorf("applied autoresponder create for %s carries no content payload — cannot compute a guarded rollback (fail-closed)", r.Key)
 			}
-			// The guard proved the address was EMPTY before the write, so
-			// the inverse of the tool's own create is a delete — the only
-			// deletes the tool ever emits.
 			out = append(out, EmailRollbackOp{
 				Kind:          EmailRollbackAutoresponderRemove,
 				Domain:        r.Domain,
 				Address:       r.Key,
 				Autoresponder: r.Autoresponder,
+			})
+		case r.Section == EmailSectionFilters && r.Action == EmailActionCreate:
+			if r.Filter == nil {
+				return nil, fmt.Errorf("applied filter create for %s carries no content payload — cannot compute a guarded rollback (fail-closed)", r.Key)
+			}
+			account, filtername := splitFilterKey(r.Key)
+			out = append(out, EmailRollbackOp{
+				Kind:    EmailRollbackFilterRemove,
+				Address: filtername,
+				Filter:  r.Filter,
+				Account: account,
+			})
+		case r.Section == EmailSectionRouting && r.Action == EmailActionSet:
+			backupVal, ok := backup.backupRoutingFor(r.Domain)
+			if !ok {
+				return nil, fmt.Errorf("backup carries no routing for domain %s — cannot compute its rollback (fail-closed)", r.Domain)
+			}
+			out = append(out, EmailRollbackOp{
+				Kind:            EmailRollbackRoutingRestore,
+				Domain:          r.Domain,
+				Value:           backupVal,
+				ExpectedCurrent: r.Value,
 			})
 		default:
 			return nil, fmt.Errorf("applied op %s/%s has unexpected shape (section %s, action %s) — refusing to invert it",
@@ -470,6 +627,28 @@ func ComputeEmailRollbackDegraded(backup EmailBackup) (ops []EmailRollbackOp, ma
 	for _, d := range arDomains {
 		manualNotes = append(manualNotes, fmt.Sprintf(
 			"autoresponders for %s: rollback is MANUAL without the report — compare the live list against the backup and remove only autoresponders you know the tool created", d))
+	}
+	filterAccounts := make([]string, 0, len(backup.FiltersByAccount))
+	for a := range backup.FiltersByAccount {
+		filterAccounts = append(filterAccounts, a)
+	}
+	sort.Strings(filterAccounts)
+	for _, a := range filterAccounts {
+		scope := a
+		if scope == "" {
+			scope = "(account-level)"
+		}
+		manualNotes = append(manualNotes, fmt.Sprintf(
+			"filters for %s: rollback is MANUAL without the report — compare the live list against the backup and remove only filters you know the tool created", scope))
+	}
+	if backup.Routing != nil {
+		for _, r := range backup.Routing.Routing {
+			ops = append(ops, EmailRollbackOp{
+				Kind:   EmailRollbackRoutingRestore,
+				Domain: strings.ToLower(strings.TrimSpace(r.Domain)),
+				Value:  r.Routing,
+			})
+		}
 	}
 	sort.Slice(ops, func(i, j int) bool { return ops[i].Domain < ops[j].Domain })
 	return ops, manualNotes
