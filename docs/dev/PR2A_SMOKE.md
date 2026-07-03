@@ -29,18 +29,25 @@ byte-verified in the 2A-pre capture round (11 steps on .78):
 
 Full details in `PR2A_PRE_CAPTURES.md`.
 
-## What would a full smoke require
+## Cron write-path smoke — NOT achievable with this account
 
-A source account WITH cron jobs (giorginisposi on .193 has cron jobs per
-the real Fase 0.2 inventory). Reading .193 would provide the source cron
-data; the plan would produce create ops with path adaptation; the apply
-would install them on .78 via `crontab -`; verify + rollback would clean
-up. This is achievable in a dedicated session with explicit permission to
-read .193 once.
+**Update 2026-07-03 (6D session)**: a fresh `crontab -l` read of
+giorginisposi@.193 (authorized single read) returned **0 cron jobs**.
+This confirms FASE0_2_FIRST_APPLY.md line 19: "crontab EMPTY (the
+'empty command' line Orbit showed was a parsing artifact)". The earlier
+statement in this doc ("giorginisposi on .193 has cron jobs per the real
+Fase 0.2 inventory") was WRONG — corrected here.
+
+The cron write-path smoke (plan with path adaptation → apply → verify →
+rollback LIVE) requires a source account WITH cron jobs. Neither
+giorginisposi@.193 nor any other account in this campaign has cron
+data to migrate. The writer is unit-tested, go-reviewed, and the
+individual primitives are byte-verified (PR2A_PRE_CAPTURES.md). The
+end-to-end write-path remains untested — declared as an honest residual.
 
 ## Conclusion
 
 The 2A code is unit-tested, go-reviewed (adversarial), Docker-verified,
 and the write primitive is individually byte-proven. The zero-op pipeline
-path is validated. The full write-path smoke requires source cron data
-from .193.
+path is validated. The end-to-end cron write-path smoke is NOT achievable
+with giorginisposi (0 cron jobs on source) — honest residual.

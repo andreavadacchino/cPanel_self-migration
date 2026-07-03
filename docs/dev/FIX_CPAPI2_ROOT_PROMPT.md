@@ -1,4 +1,13 @@
-# Fix cpapi2 jailshell su .78 — prompt per sessione con root SSH
+# ✅ RISOLTO — Fix cpapi2 su .78
+
+**Risolto 2026-07-03** nella sessione root SSH parallela. La causa
+radice era CageFS (non jailshell). Vedi `CPAPI2_DIAGNOSIS_78.md` per
+la diagnosi completa, il fix (`cagefsctl --disable giorginisposi`) e
+la verifica. Il contenuto sotto è il prompt originale, ora obsoleto.
+
+---
+
+# (OBSOLETO) Fix cpapi2 jailshell su .78 — prompt per sessione con root SSH
 
 Copia-incolla da qui in giù in una sessione con accesso root SSH diretto
 a 38.224.109.78.
