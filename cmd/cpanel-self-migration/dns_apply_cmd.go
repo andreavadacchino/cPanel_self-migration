@@ -22,19 +22,21 @@ import (
 // and writes DNS records onto the DESTINATION account via
 // DNS::mass_edit_zone with serial guard (optimistic locking).
 //
-// v1 implements `add` only. `replace` ops get status skipped_replace_v1.
-// `manual` and `skip` ops are non-writable (skipped/manual).
+// v2 implements `add` and `replace` (atomic remove+add in one
+// mass_edit_zone call). `manual` and `skip` ops are non-writable.
 //
-// House contract (docs/dev/PR6D_DNS_APPLY_DESIGN.md):
+// House contract (docs/dev/PR6D_DNS_APPLY_DESIGN.md, PR_DNSV2_REPLACE_DESIGN.md):
 //   - without --yes-apply-writes: fully offline preview, ZERO connections;
 //   - backup-or-nothing before the first write, bidirectionally paired
 //     with the report;
 //   - serial guard: stale serial → all ops for that zone get
 //     refused_precondition;
+//   - replace preconditions: already_present, drift, growth drift, missing
+//     rrset, empty DestinationValues → refused_precondition;
 //   - unconditional per-op verify-after (re-fetch zone, match by
-//     type+name+data);
-//   - --rollback <backup>: report-driven inverse ops, removes ONLY the
-//     tool's own applied adds by line index.
+//     type+name+data; for replace: old values must also be absent);
+//   - --rollback <backup>: report-driven inverse ops — removes applied
+//     adds by line index, restores applied replaces from backup values.
 //
 // Exit codes: 0 ok; 1 input/runtime/write failure (report still written
 // when the run got that far); 2 flags; 3 gated refusal (one or more
@@ -386,6 +388,13 @@ func runDNSApplyWrites(plan accountinventory.DNSPlan, planPath, cfgFlag, backupF
 				for _, w := range writes {
 					if w.action != "" {
 						activeWrites = append(activeWrites, w)
+					}
+				}
+
+				for _, w := range activeWrites {
+					if len(w.op.Records) == 0 {
+						zr.Ops[w.idx].Status = accountinventory.DNSOpFailed
+						zr.Ops[w.idx].StatusReason = "op has no records — malformed or hand-edited plan"
 					}
 				}
 
