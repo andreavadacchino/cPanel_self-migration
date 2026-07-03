@@ -51,9 +51,11 @@ func main() {
 				os.Exit(runInventoryEmailPlanCmd(os.Args[3:]))
 			case "checklist":
 				os.Exit(runInventoryChecklistCmd(os.Args[3:]))
+			case "cron-plan":
+				os.Exit(runInventoryCronPlanCmd(os.Args[3:]))
 			}
 		}
-		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory <diff|policy|dns-plan|email-plan|checklist> … (each has its own --help)")
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration inventory <diff|policy|dns-plan|email-plan|cron-plan|checklist> … (each has its own --help)")
 		os.Exit(2)
 	}
 	// The `dns` namespace never falls through to the migration flow: before
@@ -61,16 +63,33 @@ func main() {
 	// resolvable config, started a full migration dry-run — an unknown dns
 	// subcommand is an error instead.
 	if len(os.Args) >= 2 && os.Args[1] == "dns" {
-		if len(os.Args) >= 3 && os.Args[2] == "verify" {
-			os.Exit(runDNSVerifyCmd(os.Args[3:]))
+		if len(os.Args) >= 3 {
+			switch os.Args[2] {
+			case "verify":
+				os.Exit(runDNSVerifyCmd(os.Args[3:]))
+			case "apply":
+				os.Exit(runDNSApplyCmd(os.Args[3:]))
+			}
 		}
-		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration dns verify --plan dns_import_plan.json …")
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration dns <verify|apply> --plan dns_import_plan.json …")
 		os.Exit(2)
 	}
 	// The `email` namespace (PR 2B-1) mirrors `dns`: apply is the email
 	// config writer (destination only), verify the read-only
 	// re-certification; an unknown subcommand is an error, never a
 	// fall-through to the migration flow.
+	if len(os.Args) >= 2 && os.Args[1] == "cron" {
+		if len(os.Args) >= 3 {
+			switch os.Args[2] {
+			case "apply":
+				os.Exit(runCronApplyCmd(os.Args[3:]))
+			case "verify":
+				os.Exit(runCronVerifyCmd(os.Args[3:]))
+			}
+		}
+		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration cron <apply|verify> … (each has its own --help)")
+		os.Exit(2)
+	}
 	if len(os.Args) >= 2 && os.Args[1] == "email" {
 		if len(os.Args) >= 3 {
 			switch os.Args[2] {
@@ -85,23 +104,23 @@ func main() {
 	}
 
 	var (
-		apply       = flag.Bool("apply", false, "create missing domains + migrate the selected data (default: dry-run)")
-		dryRun      = flag.Bool("dry-run", false, "explicit dry-run: analyze + compare SRC/DEST, no changes")
-		mailFlag    = flag.Bool("mail", false, "migrate mail (mailboxes) only; default (no --mail/--file/--db) does ALL")
-		fileFlag    = flag.Bool("file", false, "migrate website files (docroots) only; default does ALL")
-		dbFlag      = flag.Bool("db", false, "migrate databases (MySQL) only; default does ALL")
-		onlyDomain  = flag.String("domain", "", "narrow to a single domain (docroot + mail); composes with --mail/--file; never databases")
-		onlyMailbox = flag.String("mailbox", "", "narrow to a single mailbox local@domain (implies mail only)")
-		full        = flag.Bool("full", false, "with --apply, force re-sync of every mailbox even if consistent")
-		forceSync   = flag.Bool("force-sync", false, "alias of --full")
-		applyMirror = flag.Bool("apply-mirror", false, "like --apply, but MIRROR each mailbox: rename the destination mailbox aside (<user>-bak) and re-copy ALL messages from the source, so mail that exists only on the dest is removed from the live mailbox. Files/databases behave as under --apply.")
-		verifyCsum  = flag.Bool("verify-checksums", false, "stricter fast-skip: when count+UIDVALIDITY match, also compare the exact message-ID set before skipping a mailbox")
-		deepVerify  = flag.Bool("deep-verify", false, "with --apply, verify by CONTENT hash (sha256 per web file; slower, reads every byte on both sides) instead of metadata only — catches same-size corruption")
-		cfgPath     = flag.String("config", "", "path to host.yaml (default: configs/host.yaml next to the binary or CWD)")
-		logLevel    = flag.String("log-level", "info", "log verbosity: info | debug (debug traces SSH sessions, transfers, and network errors to stderr)")
-		showVersion = flag.Bool("version", false, "print the version and exit")
-		runID       = flag.String("run-id", "", "optional run identifier for structured output (default: auto-generated)")
-		outputDir   = flag.String("output-dir", "", "output directory for artifacts (default: current working directory)")
+		apply            = flag.Bool("apply", false, "create missing domains + migrate the selected data (default: dry-run)")
+		dryRun           = flag.Bool("dry-run", false, "explicit dry-run: analyze + compare SRC/DEST, no changes")
+		mailFlag         = flag.Bool("mail", false, "migrate mail (mailboxes) only; default (no --mail/--file/--db) does ALL")
+		fileFlag         = flag.Bool("file", false, "migrate website files (docroots) only; default does ALL")
+		dbFlag           = flag.Bool("db", false, "migrate databases (MySQL) only; default does ALL")
+		onlyDomain       = flag.String("domain", "", "narrow to a single domain (docroot + mail); composes with --mail/--file; never databases")
+		onlyMailbox      = flag.String("mailbox", "", "narrow to a single mailbox local@domain (implies mail only)")
+		full             = flag.Bool("full", false, "with --apply, force re-sync of every mailbox even if consistent")
+		forceSync        = flag.Bool("force-sync", false, "alias of --full")
+		applyMirror      = flag.Bool("apply-mirror", false, "like --apply, but MIRROR each mailbox: rename the destination mailbox aside (<user>-bak) and re-copy ALL messages from the source, so mail that exists only on the dest is removed from the live mailbox. Files/databases behave as under --apply.")
+		verifyCsum       = flag.Bool("verify-checksums", false, "stricter fast-skip: when count+UIDVALIDITY match, also compare the exact message-ID set before skipping a mailbox")
+		deepVerify       = flag.Bool("deep-verify", false, "with --apply, verify by CONTENT hash (sha256 per web file; slower, reads every byte on both sides) instead of metadata only — catches same-size corruption")
+		cfgPath          = flag.String("config", "", "path to host.yaml (default: configs/host.yaml next to the binary or CWD)")
+		logLevel         = flag.String("log-level", "info", "log verbosity: info | debug (debug traces SSH sessions, transfers, and network errors to stderr)")
+		showVersion      = flag.Bool("version", false, "print the version and exit")
+		runID            = flag.String("run-id", "", "optional run identifier for structured output (default: auto-generated)")
+		outputDir        = flag.String("output-dir", "", "output directory for artifacts (default: current working directory)")
 		jsonEvents       = flag.Bool("json-events", false, "write JSONL events to <output-dir>/events.jsonl")
 		reportJSON       = flag.Bool("report-json", false, "write JSON report to <output-dir>/report.json")
 		accountInventory = flag.Bool("account-inventory", false, "collect a read-only account inventory and exit (no migration)")

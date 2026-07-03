@@ -31,7 +31,8 @@ var dnsWriteForbidden = []string{
 // command file is created, it must be added here in the same PR.
 // Amending this list is a conscious, reviewed act.
 var dnsWriteAllowlist = map[string]bool{
-	"internal/cpanel/dns_apply.go": true,
+	"internal/cpanel/dns_apply.go":               true,
+	"cmd/cpanel-self-migration/dns_apply_cmd.go": true,
 }
 
 func TestNoDNSWriteFunctions(t *testing.T) {
