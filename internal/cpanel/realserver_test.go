@@ -125,3 +125,79 @@ func TestEmailRealServerDiskUsedBytes(t *testing.T) {
 		t.Errorf("disk used = %d, want 15545469799", got)
 	}
 }
+
+// Email list_auto_responders on a live server (2B-2-pre capture, .78 build
+// 11.136) returns ONLY {email, subject} per entry — and email is the FULL
+// address, with NO domain/interval/is_html/start/stop fields. The synthetic
+// 3A fixture had email=<local> plus every detail field inline, which hid
+// two real facts: the inventoried interval was always 0, and the collector's
+// email+"@"+domain concatenation would have produced "addr@domain@" on real
+// data. Details come only from get_auto_responder (2B-2-pre facts 2-3).
+func TestEmailRealServerListAutoresponders(t *testing.T) {
+	data := fixture(t, "email_autoresponders_realserver.json")
+	entries, err := parseUAPI[[]AutoresponderEntry]("Email", "list_auto_responders", data)
+	if err != nil {
+		t.Fatalf("real-server list_auto_responders failed to parse: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].Email != "test-2b2pre@giorginisposi.it" {
+		t.Errorf("email = %q (real servers return the FULL address)", entries[0].Email)
+	}
+	if entries[0].Subject != "Assenza — test 2B-2 àèì" {
+		t.Errorf("subject = %q", entries[0].Subject)
+	}
+	if entries[0].Domain != "" {
+		t.Errorf("domain = %q, want empty (absent on real servers)", entries[0].Domain)
+	}
+}
+
+// Email get_auto_responder (2B-2-pre fact 3): body verbatim with the
+// ensure-trailing-newline normalization applied by cPanel, from stripped of
+// any <address> part, interval/is_html bare numbers, start/stop JSON null
+// when unset (flexInt64 decodes null → 0).
+func TestEmailRealServerGetAutoresponder(t *testing.T) {
+	data := fixture(t, "email_get_autoresponder_realserver.json")
+	det, err := parseUAPI[AutoresponderDetail]("Email", "get_auto_responder", data)
+	if err != nil {
+		t.Fatalf("real-server get_auto_responder failed to parse: %v", err)
+	}
+	wantBody := "Riga 1 con accenti àèìòù.\nRiga 2 con \"virgolette\" e 'apici' e $VAR e |pipe|.\n\nRiga 4 dopo una riga vuota — fine test 2B-2.\n"
+	if det.Body != wantBody {
+		t.Errorf("body = %q, want %q", det.Body, wantBody)
+	}
+	if det.From != "Test 2B2" {
+		t.Errorf("from = %q (cPanel stores it stripped of the <address> part)", det.From)
+	}
+	if det.Subject != "Assenza — test 2B-2 àèì" {
+		t.Errorf("subject = %q", det.Subject)
+	}
+	if int64(det.Interval) != 8 || int64(det.IsHTML) != 0 {
+		t.Errorf("interval/is_html = %d/%d, want 8/0", int64(det.Interval), int64(det.IsHTML))
+	}
+	if int64(det.Start) != 0 || int64(det.Stop) != 0 {
+		t.Errorf("start/stop = %d/%d, want 0/0 (JSON null)", int64(det.Start), int64(det.Stop))
+	}
+	if det.Charset != "utf-8" {
+		t.Errorf("charset = %q", det.Charset)
+	}
+}
+
+// get_auto_responder on an address WITHOUT an autoresponder returns
+// status:1 with data:{charset:"utf-8"} — NOT an error (2B-2-pre fact 4).
+// Existence is provable only via list_auto_responders; the parser must
+// yield a zero-valued detail, not fail.
+func TestEmailRealServerGetAutoresponderAbsent(t *testing.T) {
+	absent := []byte(`{"apiversion":3,"module":"Email","func":"get_auto_responder","result":{"status":1,"messages":null,"metadata":{},"data":{"charset":"utf-8"},"errors":null,"warnings":null}}`)
+	det, err := parseUAPI[AutoresponderDetail]("Email", "get_auto_responder", absent)
+	if err != nil {
+		t.Fatalf("absent-shape get_auto_responder failed to parse: %v", err)
+	}
+	if det.Subject != "" || det.Body != "" || det.From != "" {
+		t.Errorf("absent shape should be zero-valued, got %+v", det)
+	}
+	if det.Charset != "utf-8" {
+		t.Errorf("charset = %q", det.Charset)
+	}
+}

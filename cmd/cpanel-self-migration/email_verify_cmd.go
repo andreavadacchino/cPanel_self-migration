@@ -84,6 +84,7 @@ func runEmailVerifyCmd(args []string) int {
 
 	// Domains verify must re-list: every 2B-1-section op + informational.
 	domainSet := map[string]bool{}
+	arDomainSet := map[string]bool{}
 	needDefaults := false
 	for _, op := range plan.Ops {
 		switch op.Section {
@@ -91,6 +92,8 @@ func runEmailVerifyCmd(args []string) int {
 			domainSet[op.Domain] = true
 		case accountinventory.EmailSectionDefaultAddress:
 			needDefaults = true
+		case accountinventory.EmailSectionAutoresponders:
+			arDomainSet[op.Domain] = true
 		}
 	}
 	for _, info := range plan.Informational {
@@ -99,6 +102,8 @@ func runEmailVerifyCmd(args []string) int {
 			domainSet[info.Domain] = true
 		case accountinventory.EmailSectionDefaultAddress:
 			needDefaults = true
+		case accountinventory.EmailSectionAutoresponders:
+			arDomainSet[info.Domain] = true
 		}
 	}
 	domains := make([]string, 0, len(domainSet))
@@ -106,14 +111,21 @@ func runEmailVerifyCmd(args []string) int {
 		domains = append(domains, d)
 	}
 	sort.Strings(domains)
+	arDomains := make([]string, 0, len(arDomainSet))
+	for d := range arDomainSet {
+		arDomains = append(arDomains, d)
+	}
+	sort.Strings(arDomains)
 
 	// Fetch the live state — only when there is something to re-list. A
 	// manual-only plan needs no config and opens no SSH.
 	live := accountinventory.EmailLiveState{
-		ForwardersByDomain:  map[string][]accountinventory.ForwarderEntry{},
-		ForwarderListErrors: map[string]string{},
+		ForwardersByDomain:      map[string][]accountinventory.ForwarderEntry{},
+		ForwarderListErrors:     map[string]string{},
+		AutorespondersByDomain:  map[string][]accountinventory.AutoresponderEntry{},
+		AutoresponderListErrors: map[string]string{},
 	}
-	if len(domains) > 0 || needDefaults {
+	if len(domains) > 0 || needDefaults || len(arDomains) > 0 {
 		ctx := context.Background()
 		client, err := dialEmailDest(ctx, *cfgFlag)
 		if err != nil {
@@ -137,6 +149,14 @@ func runEmailVerifyCmd(args []string) int {
 				live.DefaultsListed = true
 				live.Defaults = normalizeDefaults(entries)
 			}
+		}
+		for _, d := range arDomains {
+			entries, _, _, err := fetchAutorespondersWithRaw(ctx, client, d)
+			if err != nil {
+				live.AutoresponderListErrors[d] = err.Error()
+				continue
+			}
+			live.AutorespondersByDomain[d] = entries
 		}
 	}
 

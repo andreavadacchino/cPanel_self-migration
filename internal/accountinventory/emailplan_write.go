@@ -118,6 +118,15 @@ func emailOpsByAction(ops []EmailPlanOp, action string) []EmailPlanOp {
 func emailOpDesired(op EmailPlanOp) string {
 	switch op.Action {
 	case EmailActionCreate:
+		if op.Section == EmailSectionAutoresponders && op.Autoresponder != nil {
+			a := op.Autoresponder
+			html := "plain"
+			if a.IsHTML != 0 {
+				html = "html"
+			}
+			return fmt.Sprintf("autoresponder %s@%s — subject %q, %s, every %dh, %d body byte(s)",
+				op.Email, op.Domain, a.Subject, html, a.Interval, len(a.Body))
+		}
 		return fmt.Sprintf("forward %s@%s → %s", op.Email, op.Domain, op.Forward)
 	case EmailActionSet:
 		return fmt.Sprintf("default address → %s", op.Value)

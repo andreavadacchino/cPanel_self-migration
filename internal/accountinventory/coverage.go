@@ -64,8 +64,8 @@ var coverageRegistry = []CoverageArea{
 
 	{Area: "api_tokens", State: CoverageNotCollected,
 		Note: "API token NAMES are listable user-level; secrets are never retrievable — historical-dossier material"},
-	{Area: "autoresponder_bodies", State: CoverageNotCollected,
-		Note: "autoresponder message BODIES (round-trippable, Fase 2B prerequisite) — today autoresponders are inventoried without bodies"},
+	// autoresponder_bodies: collected since PR 2B-2 (get_auto_responder per
+	// listed address) — folded into the covered "autoresponders" section.
 	{Area: "boxtrapper", State: CoverageNotCollected,
 		Note: "BoxTrapper enable state and configuration"},
 	{Area: "contact_info", State: CoverageNotCollected,

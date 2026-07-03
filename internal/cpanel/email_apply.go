@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/logx"
@@ -90,6 +91,93 @@ func SetDefaultAddress(ctx context.Context, c Runner, domain, value string) erro
 	}
 	logx.Debug("SetDefaultAddress(%s -> %s): ok", domain, v)
 	return nil
+}
+
+// AutoresponderWrite is the content payload of AddAutoresponder — exactly
+// the round-trippable field set of the byte-verified add_auto_responder
+// call (2B-2-pre fact 1).
+type AutoresponderWrite struct {
+	From     string
+	Subject  string
+	Body     string
+	IsHTML   int
+	Interval int
+	Start    int64
+	Stop     int64
+	Charset  string
+}
+
+// AddAutoresponder creates an autoresponder:
+// Email::add_auto_responder email=<LOCAL part> domain= from= subject=
+// body= is_html= interval= [charset=] [start= stop=] (2B-2-pre fact 1).
+// start/stop are omitted when zero — the byte-verified call stores null
+// for absent values, and passing 0 was never probed. ⚠️ The call UPSERTS
+// (fact 7): callers must have proven the address empty via a fresh
+// re-list first — the apply guard refuses otherwise (never-overwrite).
+func AddAutoresponder(ctx context.Context, c Runner, domain, email string, w AutoresponderWrite) error {
+	args := map[string]string{
+		"domain":   domain,
+		"email":    email,
+		"from":     w.From,
+		"subject":  w.Subject,
+		"body":     w.Body,
+		"is_html":  strconv.Itoa(w.IsHTML),
+		"interval": strconv.Itoa(w.Interval),
+		"charset":  w.Charset,
+	}
+	if w.Start != 0 {
+		args["start"] = strconv.FormatInt(w.Start, 10)
+	}
+	if w.Stop != 0 {
+		args["stop"] = strconv.FormatInt(w.Stop, 10)
+	}
+	_, err := RunUAPI[json.RawMessage](ctx, c, "Email", "add_auto_responder", args)
+	if err != nil {
+		return err
+	}
+	logx.Debug("AddAutoresponder(%s@%s): ok (%d body bytes)", email, domain, len(w.Body))
+	return nil
+}
+
+// DeleteAutoresponder removes one autoresponder:
+// Email::delete_auto_responder email=<local@domain> (2B-2-pre fact 8).
+// This is the ROLLBACK primitive for the tool's own applied autoresponder
+// creates — safe precisely because the apply guard proved the address was
+// empty before the write.
+func DeleteAutoresponder(ctx context.Context, c Runner, email string) error {
+	_, err := RunUAPI[json.RawMessage](ctx, c, "Email", "delete_auto_responder", map[string]string{
+		"email": email,
+	})
+	if err != nil {
+		return err
+	}
+	logx.Debug("DeleteAutoresponder(%s): ok", email)
+	return nil
+}
+
+// ListAutorespondersWithRaw is ListAutoresponders plus the verbatim
+// response bytes, for the pre-write backup (2B design: raw + normalized).
+func ListAutorespondersWithRaw(ctx context.Context, c Runner, domain string) ([]AutoresponderEntry, []byte, error) {
+	data, raw, err := RunUAPIRaw[[]AutoresponderEntry](ctx, c, "Email", "list_auto_responders",
+		map[string]string{"domain": domain})
+	if err != nil {
+		return nil, nil, err
+	}
+	sort.SliceStable(data, func(i, j int) bool { return data[i].Email < data[j].Email })
+	logx.Debug("ListAutorespondersWithRaw(%s): %d autoresponder(s)", domain, len(data))
+	return data, raw, nil
+}
+
+// GetAutoresponderWithRaw is GetAutoresponder plus the verbatim response
+// bytes, for the same backup purpose.
+func GetAutoresponderWithRaw(ctx context.Context, c Runner, email string) (AutoresponderDetail, []byte, error) {
+	data, raw, err := RunUAPIRaw[AutoresponderDetail](ctx, c, "Email", "get_auto_responder",
+		map[string]string{"email": email})
+	if err != nil {
+		return AutoresponderDetail{}, nil, err
+	}
+	logx.Debug("GetAutoresponderWithRaw(%s): %d body byte(s)", email, len(data.Body))
+	return data, raw, nil
 }
 
 // ListForwardersWithRaw is the fresh re-list primitive of the email apply

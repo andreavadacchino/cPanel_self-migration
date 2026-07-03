@@ -120,17 +120,20 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 	}
 
 	for _, d := range domains {
+		// Forwarders and autoresponders are INDEPENDENT collections: a
+		// failure of one listing must not silently lose the other
+		// (go-review 2B-2 finding 4).
 		fwds, err := cpanel.ListForwarders(ctx, r, d.Name)
 		if err != nil {
 			inv.Warnings = append(inv.Warnings, fmt.Sprintf("forwarders for %s unavailable: %v", d.Name, err))
-			continue
-		}
-		for _, f := range fwds {
-			inv.Forwarders = append(inv.Forwarders, ForwarderEntry{
-				Source:      f.Dest,
-				Destination: f.Forward,
-				Domain:      d.Name,
-			})
+		} else {
+			for _, f := range fwds {
+				inv.Forwarders = append(inv.Forwarders, ForwarderEntry{
+					Source:      f.Dest,
+					Destination: f.Forward,
+					Domain:      d.Name,
+				})
+			}
 		}
 
 		ars, err := cpanel.ListAutoresponders(ctx, r, d.Name)
@@ -139,12 +142,41 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 			continue
 		}
 		for _, a := range ars {
-			inv.Autoresponders = append(inv.Autoresponders, AutoresponderEntry{
-				Email:    a.Email + "@" + a.Domain,
-				Domain:   a.Domain,
+			// Real servers return the FULL address in `email` and no domain
+			// field (2B-2-pre fact 2); tolerate a local-part shape by
+			// completing it with the QUERIED domain.
+			addr := a.Email
+			if !strings.Contains(addr, "@") {
+				addr = addr + "@" + d.Name
+			}
+			entry := AutoresponderEntry{
+				Email:    addr,
+				Domain:   d.Name,
 				Subject:  a.Subject,
 				Interval: int(a.Interval),
-			})
+			}
+			// The body and every other content field exist ONLY in
+			// get_auto_responder (2B-2-pre fact 3). A per-address failure
+			// keeps the list-level entry with BodyCollected=false — honest
+			// degradation, never a dropped section.
+			det, err := cpanel.GetAutoresponder(ctx, r, addr)
+			if err != nil {
+				inv.Warnings = append(inv.Warnings, fmt.Sprintf("autoresponder body for %s unavailable: %v", addr, err))
+			} else {
+				entry.From = det.From
+				entry.Body = det.Body
+				entry.IsHTML = int(det.IsHTML)
+				entry.Interval = int(det.Interval)
+				entry.Start = int64(det.Start)
+				entry.Stop = int64(det.Stop)
+				entry.Charset = det.Charset
+				// The get subject is authoritative VERBATIM (even empty):
+				// equivalence must compare the live value, not the stale
+				// list one (go-review 2B-2 finding 3).
+				entry.Subject = det.Subject
+				entry.BodyCollected = true
+			}
+			inv.Autoresponders = append(inv.Autoresponders, entry)
 		}
 	}
 

@@ -138,6 +138,18 @@ The TOCTOU window between re-list and write is accepted and documented
 duplicate created by racing a concurrent identical add — is bounded by the
 verify-after and surfaced in the report.
 
+AMENDMENT (2B-2, go-review findings): for DESTRUCTIVE writers — an
+autoresponder create (`add_auto_responder` upserts) and a default-address
+set (overwrite) — the batch re-list at run start is NOT sufficient: later
+ops in the sequential write loop would race against a stale snapshot, and
+the verify-after can only see the post-write state. Those writers
+therefore perform a SECOND, targeted re-check immediately before their own
+write (one list call, plus one body read for the op's own address) and
+honor already_present/refused exactly like the batch guard. The residual
+window is the single-request one, accepted as above. Forwarders
+deliberately keep only the batch guard: `add_forwarder` is additive and
+deduped, so the worst race outcome is a no-op.
+
 ## Backup and rollback
 
 - Before the first write of a run: `email_backup_<account>_<ts>.json` with

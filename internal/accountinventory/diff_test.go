@@ -520,3 +520,55 @@ func TestDiffNoNilSlices(t *testing.T) {
 		}
 	}
 }
+
+// PR 2B-2: the autoresponder content fields (body, from, is_html,
+// start/stop, body_collected) must surface as CHANGED findings — before
+// the body collector a silently different body was invisible to the diff.
+func TestDiffAutoresponderBodyChanged(t *testing.T) {
+	src := baseInventory()
+	dest := baseInventory()
+	src.Autoresponders[0].Body = "Sono in ferie.\n"
+	src.Autoresponders[0].BodyCollected = true
+	dest.Autoresponders[0].Body = "I am on vacation.\n"
+	dest.Autoresponders[0].BodyCollected = true
+
+	sec := sectionOf(t, DiffInventories(src, dest), "autoresponders")
+	if len(sec.Changed) != 1 || sec.Changed[0].Field != "body" {
+		t.Fatalf("changed = %+v, want exactly one body change", sec.Changed)
+	}
+	if sec.Changed[0].Source != "Sono in ferie.\n" || sec.Changed[0].Destination != "I am on vacation.\n" {
+		t.Errorf("changed values = %+v", sec.Changed[0])
+	}
+}
+
+func TestDiffAutoresponderBodyCollectedAsymmetry(t *testing.T) {
+	// One side collected the body, the other did not (pre-2B-2 artifact):
+	// the asymmetry must be visible, not silently equal.
+	src := baseInventory()
+	dest := baseInventory()
+	src.Autoresponders[0].Body = "Testo.\n"
+	src.Autoresponders[0].BodyCollected = true
+
+	sec := sectionOf(t, DiffInventories(src, dest), "autoresponders")
+	if len(sec.Changed) == 0 {
+		t.Fatal("expected at least one changed field for the body_collected asymmetry")
+	}
+}
+
+// go-review 2B-2 finding 5 (LOW): the diff must apply the same
+// trailing-newline body normalization as the plan for COLLECTED bodies —
+// a difference the plan treats as skip-equivalent must not surface as a
+// changed finding in inventory diff.
+func TestDiffAutoresponderBodyTrailingNewlineNotChanged(t *testing.T) {
+	src := baseInventory()
+	dest := baseInventory()
+	src.Autoresponders[0].Body = "Testo.\n"
+	src.Autoresponders[0].BodyCollected = true
+	dest.Autoresponders[0].Body = "Testo.\n\n\n"
+	dest.Autoresponders[0].BodyCollected = true
+
+	sec := sectionOf(t, DiffInventories(src, dest), "autoresponders")
+	if len(sec.Changed) != 0 {
+		t.Fatalf("changed = %+v, want none (trailing-newline-only difference)", sec.Changed)
+	}
+}

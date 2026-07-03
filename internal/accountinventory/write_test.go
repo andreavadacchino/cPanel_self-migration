@@ -322,3 +322,46 @@ func TestWriteReportWithDest(t *testing.T) {
 		t.Error("report missing dest user")
 	}
 }
+
+// PR 2B-2: the autoresponder report table carries the collected content
+// (from, html flag, body preview) and declares honestly when the body was
+// NOT collected.
+func TestWriteReportAutoresponderBodies(t *testing.T) {
+	dir := t.TempDir()
+	result := CollectResult{
+		Source: NormalizedInventory{
+			Account:    AccountInfo{User: "u", Host: "h", CollectedAt: "t", Side: "source"},
+			Domains:    []DomainEntry{},
+			Mailboxes:  []MailboxEntry{},
+			Databases:  []DatabaseEntry{},
+			Forwarders: []ForwarderEntry{},
+			Autoresponders: []AutoresponderEntry{
+				{Email: "info@d.com", Domain: "d.com", Subject: "OOO", Interval: 8,
+					From: "Info Desk", Body: "Sono in ferie.\nRientro lunedì.\n", IsHTML: 1,
+					Charset: "utf-8", BodyCollected: true},
+				{Email: "old@d.com", Domain: "d.com", Subject: "Legacy", Interval: 0},
+			},
+			Warnings: []string{},
+		},
+	}
+	path := filepath.Join(dir, "report.md")
+	if err := WriteReport(path, result); err != nil {
+		t.Fatalf("WriteReport: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"Autoresponders (2)", "Info Desk", "Sono in ferie.",
+		"not collected", // the old@d.com row must declare the missing body
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("report missing %q", want)
+		}
+	}
+	if strings.Contains(s, "Sono in ferie.\nRientro") {
+		t.Error("body newline leaked raw into a markdown table cell (mdCell must collapse it)")
+	}
+}

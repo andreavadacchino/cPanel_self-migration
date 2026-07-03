@@ -24,6 +24,7 @@ const emailStubScript = `#!/bin/bash
 shift # drop --output=json
 mod="$1"; fn="$2"; shift 2
 domain=""; email=""; fwdemail=""; fwdopt=""; address=""; forwarder=""; failmsgs=""
+from=""; subject=""; body=""; is_html=""; interval=""; start=""; stop=""; charset=""
 for kv in "$@"; do
   case "$kv" in
     domain=*) domain="${kv#domain=}";;
@@ -33,11 +34,19 @@ for kv in "$@"; do
     address=*) address="${kv#address=}";;
     forwarder=*) forwarder="${kv#forwarder=}";;
     failmsgs=*) failmsgs="${kv#failmsgs=}";;
+    from=*) from="${kv#from=}";;
+    subject=*) subject="${kv#subject=}";;
+    body=*) body="${kv#body=}";;
+    is_html=*) is_html="${kv#is_html=}";;
+    interval=*) interval="${kv#interval=}";;
+    start=*) start="${kv#start=}";;
+    stop=*) stop="${kv#stop=}";;
+    charset=*) charset="${kv#charset=}";;
   esac
 done
 S="$CPSM_EMAIL_STATE"
-FW="$S/forwarders.txt"; DF="$S/defaults.txt"
-touch "$FW" "$DF"
+FW="$S/forwarders.txt"; DF="$S/defaults.txt"; AR="$S/autoresponders.txt"
+touch "$FW" "$DF" "$AR"
 case "$mod $fn" in
   "Email list_forwarders")
     out=""; first=1
@@ -53,6 +62,13 @@ case "$mod $fn" in
     a="$email@$domain"
     if ! grep -qF "$a|$fwdemail" "$FW"; then
       echo "$a|$fwdemail" >> "$FW"
+    fi
+    # race simulation hook: creating the race-default-trigger forwarder
+    # concurrently rewrites the domain default (a human racing the tool).
+    if [ "$email" = "race-default-trigger" ]; then
+      grep -v "^$domain|" "$DF" > "$DF.tmp" || true
+      mv "$DF.tmp" "$DF"
+      echo "$domain|important@human.com" >> "$DF"
     fi
     echo "{\"result\":{\"status\":1,\"data\":{\"forward\":\"$fwdemail\",\"domain\":\"$domain\",\"email\":\"$a\"}}}"
     ;;
@@ -80,6 +96,48 @@ case "$mod $fn" in
     mv "$DF.tmp" "$DF"
     echo "$domain|$v" >> "$DF"
     echo "{\"result\":{\"status\":1,\"data\":[{\"dest\":\"$v\",\"domain\":\"$domain\"}]}}"
+    ;;
+  "Email list_auto_responders")
+    out=""; first=1
+    while IFS='|' read -r a subj; do
+      [ -z "$a" ] && continue
+      case "$a" in *"@$domain") ;; *) continue;; esac
+      if [ $first = 1 ]; then first=0; else out="$out,"; fi
+      out="$out{\"email\":\"$a\",\"subject\":\"$subj\"}"
+    done < "$AR"
+    echo "{\"result\":{\"status\":1,\"data\":[$out]}}"
+    ;;
+  "Email add_auto_responder")
+    a="$email@$domain"
+    # race simulation hook: creating aaa-trigger also creates a FOREIGN
+    # autoresponder on zzz-victim (a human racing the tool mid-run).
+    if [ "$email" = "aaa-trigger" ]; then
+      v="zzz-victim@$domain"
+      printf '%s' "{\"body\":\"Foreign content.\\n\",\"charset\":\"utf-8\",\"from\":\"Human\",\"interval\":1,\"is_html\":0,\"start\":null,\"stop\":null,\"subject\":\"Foreign\"}" > "$S/ar_$v.json"
+      grep -v "^$v|" "$AR" > "$AR.tmp" || true
+      mv "$AR.tmp" "$AR"
+      echo "$v|Foreign" >> "$AR"
+    fi
+    body_json=$(printf '%s' "$body" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
+    [ -z "$body_json" ] && body_json='\n'
+    printf '%s' "{\"body\":\"$body_json\",\"charset\":\"${charset:-utf-8}\",\"from\":\"$from\",\"interval\":${interval:-0},\"is_html\":${is_html:-0},\"start\":${start:-null},\"stop\":${stop:-null},\"subject\":\"$subject\"}" > "$S/ar_$a.json"
+    grep -v "^$a|" "$AR" > "$AR.tmp" || true
+    mv "$AR.tmp" "$AR"
+    echo "$a|$subject" >> "$AR"
+    echo '{"result":{"status":1,"data":null}}'
+    ;;
+  "Email get_auto_responder")
+    if [ -f "$S/ar_$email.json" ]; then
+      echo "{\"result\":{\"status\":1,\"data\":$(cat "$S/ar_$email.json")}}"
+    else
+      echo '{"result":{"status":1,"data":{"charset":"utf-8"}}}'
+    fi
+    ;;
+  "Email delete_auto_responder")
+    grep -v "^$email|" "$AR" > "$AR.tmp" || true
+    mv "$AR.tmp" "$AR"
+    rm -f "$S/ar_$email.json"
+    echo '{"result":{"status":1,"data":null}}'
     ;;
   *) echo '{"result":{"status":0,"errors":["stub: unknown uapi call"]}}';;
 esac
@@ -495,5 +553,321 @@ func TestEmailApplyCmdRollbackReportLoss(t *testing.T) {
 	}
 	if fw := readEmailStubState(t, stateDir, "forwarders.txt"); !strings.Contains(fw, "info@example.com|someone@gmail.com") {
 		t.Errorf("degraded rollback must NOT delete forwarders: %q", fw)
+	}
+}
+
+// --- autoresponders (PR 2B-2) -------------------------------------------------
+
+// writeEmailPlanInventoryWithAR is writeEmailPlanInventory plus autoresponders.
+func writeEmailPlanInventoryWithAR(t *testing.T, dir, name, side, user string, ars []accountinventory.AutoresponderEntry) string {
+	t.Helper()
+	inv := accountinventory.NewEmptyInventory(user, "192.0.2.1", side)
+	inv.Domains = []accountinventory.DomainEntry{{Name: "example.com", Type: "main"}}
+	inv.Autoresponders = ars
+	inv.DefaultAddresses.Available = true
+	inv.DefaultAddresses.Items = []accountinventory.DefaultAddressEntry{{Domain: "example.com", DefaultAddress: user}}
+	inv.EmailRouting.Available = true
+	inv.EmailFilters.Available = true
+	b, err := json.MarshalIndent(inv, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func testAutoresponderEntry() accountinventory.AutoresponderEntry {
+	return accountinventory.AutoresponderEntry{
+		Email: "info@example.com", Domain: "example.com",
+		Subject: "Out of office", From: "Info Desk",
+		Body: "Sono in ferie.\nRientro lunedì.\n", IsHTML: 0, Interval: 8,
+		Charset: "utf-8", BodyCollected: true,
+	}
+}
+
+// buildEmailAutoresponderPlan builds a plan whose only actionable op is one
+// autoresponder create.
+func buildEmailAutoresponderPlan(t *testing.T, dir string) string {
+	t.Helper()
+	src := writeEmailPlanInventoryWithAR(t, dir, "src_ar.json", "source", "acct",
+		[]accountinventory.AutoresponderEntry{testAutoresponderEntry()})
+	dest := writeEmailPlanInventoryWithAR(t, dir, "dest_ar.json", "destination", "acct", nil)
+	planPath := filepath.Join(dir, "email_apply_plan_ar.json")
+	if code := runInventoryEmailPlanCmd([]string{
+		"--source", src, "--destination", dest,
+		"--output-json", planPath, "--output-md", filepath.Join(dir, "email_apply_plan_ar.md"),
+	}); code != 0 {
+		t.Fatalf("email-plan: code = %d, want 0", code)
+	}
+	return planPath
+}
+
+func TestEmailApplyCmdAutoresponderEndToEnd(t *testing.T) {
+	cfgPath, stateDir := setupEmailServer(t)
+	setEmailStubState(t, stateDir, nil, []string{"example.com|acct"})
+	dir := t.TempDir()
+	planPath := buildEmailAutoresponderPlan(t, dir)
+	reportPath := filepath.Join(dir, "email_apply_report.json")
+
+	// 1. Apply: the create is written, verified-after, backed up first.
+	code := runEmailApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", reportPath, "--output-md", filepath.Join(dir, "email_apply_report.md"),
+		"--backup", filepath.Join(dir, "email_backup.json"),
+	})
+	if code != 0 {
+		t.Fatalf("apply: code = %d, want 0", code)
+	}
+	rep := readEmailApplyReport(t, reportPath)
+	if rep.Summary.Applied != 1 {
+		t.Fatalf("summary = %+v, want 1 applied", rep.Summary)
+	}
+	if rep.BackupFile == "" {
+		t.Fatal("a real write must have produced a backup")
+	}
+	state := readEmailStubState(t, stateDir, "autoresponders.txt")
+	if !strings.Contains(state, "info@example.com|Out of office") {
+		t.Fatalf("stub state = %q, autoresponder not written", state)
+	}
+	// The backup archives the pre-write autoresponder section.
+	bb, err := os.ReadFile(rep.BackupFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backup accountinventory.EmailBackup
+	if err := json.Unmarshal(bb, &backup); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := backup.AutorespondersByDomain["example.com"]; !ok {
+		t.Errorf("backup lacks the autoresponders section: %+v", backup.AutorespondersByDomain)
+	}
+
+	// 2. Re-run: converges to already_present, no second backup.
+	report2 := filepath.Join(dir, "email_apply_report2.json")
+	if code := runEmailApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", report2, "--output-md", filepath.Join(dir, "email_apply_report2.md"),
+	}); code != 0 {
+		t.Fatalf("re-apply: code = %d, want 0", code)
+	}
+	rep2 := readEmailApplyReport(t, report2)
+	if rep2.Summary.AlreadyPresent != 1 || rep2.Summary.Applied != 0 {
+		t.Fatalf("re-apply summary = %+v, want 1 already_present", rep2.Summary)
+	}
+	if rep2.BackupFile != "" {
+		t.Errorf("no write decided, no backup expected (note %q)", rep2.BackupNote)
+	}
+
+	// 3. email verify: clean, the create verifies applied.
+	verifyJSON := filepath.Join(dir, "email_verify.json")
+	if code := runEmailVerifyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--fail-on-drift",
+		"--output-json", verifyJSON, "--output-md", filepath.Join(dir, "email_verify.md"),
+	}); code != 0 {
+		t.Fatalf("verify: code = %d, want 0 (clean)", code)
+	}
+
+	// 4. Rollback dry-run: exactly one inverse (the own applied create).
+	if code := runEmailApplyCmd([]string{"--rollback", rep.BackupFile}); code != 0 {
+		t.Fatalf("rollback dry-run: code = %d, want 0", code)
+	}
+
+	// 4b. Apply dry-run renders the autoresponder create with its own
+	// shape (offline, no config needed).
+	if code := runEmailApplyCmd([]string{"--plan", planPath}); code != 0 {
+		t.Fatalf("apply dry-run: code = %d, want 0", code)
+	}
+
+	// 5. Live rollback: the autoresponder is deleted and verified gone.
+	rbReport := filepath.Join(dir, "email_rollback_report.json")
+	if code := runEmailApplyCmd([]string{
+		"--rollback", rep.BackupFile, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", rbReport, "--output-md", filepath.Join(dir, "email_rollback_report.md"),
+	}); code != 0 {
+		t.Fatalf("rollback: code = %d, want 0", code)
+	}
+	rb := readEmailApplyReport(t, rbReport)
+	if rb.Summary.Applied != 1 {
+		t.Fatalf("rollback summary = %+v, want 1 applied", rb.Summary)
+	}
+	state = readEmailStubState(t, stateDir, "autoresponders.txt")
+	if strings.Contains(state, "info@example.com") {
+		t.Fatalf("stub state = %q, autoresponder still live after rollback", state)
+	}
+}
+
+func TestEmailApplyCmdAutoresponderRefusesForeignContent(t *testing.T) {
+	cfgPath, stateDir := setupEmailServer(t)
+	setEmailStubState(t, stateDir, nil, []string{"example.com|acct"})
+	dir := t.TempDir()
+	planPath := buildEmailAutoresponderPlan(t, dir)
+
+	// Between plan and apply somebody creates a DIFFERENT autoresponder on
+	// the same address: the guard must refuse — an add would destroy it.
+	if err := os.WriteFile(filepath.Join(stateDir, "autoresponders.txt"),
+		[]byte("info@example.com|Somebody's subject\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "ar_info@example.com.json"),
+		[]byte(`{"body":"Qualcun altro.\n","charset":"utf-8","from":"X","interval":1,"is_html":0,"start":null,"stop":null,"subject":"Somebody's subject"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	reportPath := filepath.Join(dir, "email_apply_report.json")
+	code := runEmailApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", reportPath, "--output-md", filepath.Join(dir, "email_apply_report.md"),
+	})
+	if code != exitDriftGate {
+		t.Fatalf("apply onto foreign content: code = %d, want %d (refused)", code, exitDriftGate)
+	}
+	rep := readEmailApplyReport(t, reportPath)
+	if rep.Summary.Refused != 1 || rep.Summary.Applied != 0 {
+		t.Fatalf("summary = %+v, want 1 refused, 0 applied", rep.Summary)
+	}
+	// The foreign autoresponder must be UNTOUCHED.
+	state := readEmailStubState(t, stateDir, "autoresponders.txt")
+	if !strings.Contains(state, "Somebody's subject") {
+		t.Fatalf("stub state = %q — the foreign autoresponder was destroyed", state)
+	}
+}
+
+func TestEmailApplyCmdAutoresponderRollbackRefusesDiverged(t *testing.T) {
+	cfgPath, stateDir := setupEmailServer(t)
+	setEmailStubState(t, stateDir, nil, []string{"example.com|acct"})
+	dir := t.TempDir()
+	planPath := buildEmailAutoresponderPlan(t, dir)
+	reportPath := filepath.Join(dir, "email_apply_report.json")
+	backupPath := filepath.Join(dir, "email_backup.json")
+
+	if code := runEmailApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", reportPath, "--output-md", filepath.Join(dir, "email_apply_report.md"),
+		"--backup", backupPath,
+	}); code != 0 {
+		t.Fatalf("apply: code = %d, want 0", code)
+	}
+
+	// A human customizes the applied autoresponder: rollback must refuse
+	// to delete it (diverged from the post-apply state).
+	if err := os.WriteFile(filepath.Join(stateDir, "ar_info@example.com.json"),
+		[]byte(`{"body":"Modificato a mano.\n","charset":"utf-8","from":"Info Desk","interval":8,"is_html":0,"start":null,"stop":null,"subject":"Out of office"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rbReport := filepath.Join(dir, "email_rollback_report.json")
+	code := runEmailApplyCmd([]string{
+		"--rollback", backupPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", rbReport, "--output-md", filepath.Join(dir, "email_rollback_report.md"),
+	})
+	if code != exitDriftGate {
+		t.Fatalf("rollback of customized autoresponder: code = %d, want %d (refused)", code, exitDriftGate)
+	}
+	state := readEmailStubState(t, stateDir, "autoresponders.txt")
+	if !strings.Contains(state, "info@example.com") {
+		t.Fatal("the customized autoresponder was deleted — never-delete violated")
+	}
+}
+
+func TestEmailApplyCmdAutoresponderMidRunRaceIsRefused(t *testing.T) {
+	// go-review 2B-2 round 1, finding 1 (HIGH): the batch live snapshot at
+	// run start can be stale by the time an op reaches the sequential
+	// write loop, and add_auto_responder UPSERTS — the guard-to-write
+	// window must be collapsed by a fresh per-address re-check right
+	// before the write. The stub simulates the race: writing the
+	// aaa-trigger autoresponder also creates a FOREIGN one on zzz-victim.
+	cfgPath, stateDir := setupEmailServer(t)
+	setEmailStubState(t, stateDir, nil, []string{"example.com|acct"})
+	dir := t.TempDir()
+
+	trigger := testAutoresponderEntry()
+	trigger.Email = "aaa-trigger@example.com"
+	victim := testAutoresponderEntry()
+	victim.Email = "zzz-victim@example.com"
+	src := writeEmailPlanInventoryWithAR(t, dir, "src_race.json", "source", "acct",
+		[]accountinventory.AutoresponderEntry{trigger, victim})
+	dest := writeEmailPlanInventoryWithAR(t, dir, "dest_race.json", "destination", "acct", nil)
+	planPath := filepath.Join(dir, "email_apply_plan_race.json")
+	if code := runInventoryEmailPlanCmd([]string{
+		"--source", src, "--destination", dest,
+		"--output-json", planPath, "--output-md", filepath.Join(dir, "email_apply_plan_race.md"),
+	}); code != 0 {
+		t.Fatalf("email-plan: code = %d, want 0", code)
+	}
+
+	reportPath := filepath.Join(dir, "email_apply_report.json")
+	code := runEmailApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", reportPath, "--output-md", filepath.Join(dir, "email_apply_report.md"),
+	})
+	if code != exitDriftGate {
+		t.Fatalf("apply with mid-run race: code = %d, want %d (refused)", code, exitDriftGate)
+	}
+	rep := readEmailApplyReport(t, reportPath)
+	if rep.Summary.Applied != 1 || rep.Summary.Refused != 1 {
+		t.Fatalf("summary = %+v, want 1 applied (trigger) + 1 refused (victim)", rep.Summary)
+	}
+	// The foreign autoresponder must be UNTOUCHED — an upsert would have
+	// silently destroyed it and reported a clean applied.
+	b, err := os.ReadFile(filepath.Join(stateDir, "ar_zzz-victim@example.com.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "Foreign content.") {
+		t.Fatalf("foreign autoresponder content destroyed: %s", b)
+	}
+}
+
+func TestEmailApplyCmdDefaultSetMidRunRaceIsRefused(t *testing.T) {
+	// go-review 2B-2 round 2, finding 1 (HIGH): set_default_address
+	// OVERWRITES the catch-all, so it needs the same fresh pre-write
+	// re-check as the autoresponder create — the run-start batch snapshot
+	// is stale by the time the default op reaches the write loop. The
+	// stub simulates the race: writing the race-default-trigger forwarder
+	// concurrently sets the domain default to a human's value.
+	cfgPath, stateDir := setupEmailServer(t)
+	setEmailStubState(t, stateDir, nil, []string{"example.com|acct"})
+	dir := t.TempDir()
+
+	src := writeEmailPlanInventory(t, dir, "src_dr.json", "source", "acct",
+		[]accountinventory.ForwarderEntry{
+			{Source: "race-default-trigger@example.com", Destination: "x@y.com", Domain: "example.com"},
+		},
+		[]accountinventory.DefaultAddressEntry{
+			{Domain: "example.com", DefaultAddress: "catchall@src.com"},
+		})
+	dest := writeEmailPlanInventory(t, dir, "dest_dr.json", "destination", "acct", nil,
+		[]accountinventory.DefaultAddressEntry{
+			{Domain: "example.com", DefaultAddress: "acct"},
+		})
+	planPath := filepath.Join(dir, "email_apply_plan_dr.json")
+	if code := runInventoryEmailPlanCmd([]string{
+		"--source", src, "--destination", dest,
+		"--output-json", planPath, "--output-md", filepath.Join(dir, "email_apply_plan_dr.md"),
+	}); code != 0 {
+		t.Fatalf("email-plan: code = %d, want 0", code)
+	}
+
+	reportPath := filepath.Join(dir, "email_apply_report.json")
+	code := runEmailApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", reportPath, "--output-md", filepath.Join(dir, "email_apply_report.md"),
+	})
+	if code != exitDriftGate {
+		t.Fatalf("apply with mid-run default race: code = %d, want %d (refused)", code, exitDriftGate)
+	}
+	rep := readEmailApplyReport(t, reportPath)
+	if rep.Summary.Applied != 1 || rep.Summary.Refused != 1 {
+		t.Fatalf("summary = %+v, want 1 applied (forwarder) + 1 refused (default)", rep.Summary)
+	}
+	// The human's default must be UNTOUCHED — an unconditional set would
+	// have silently overwritten it (and rollback would restore the backup
+	// value, not the human's, making the loss unrecoverable).
+	state := readEmailStubState(t, stateDir, "defaults.txt")
+	if !strings.Contains(state, "important@human.com") {
+		t.Fatalf("stub defaults = %q — the human's default was destroyed", state)
 	}
 }
