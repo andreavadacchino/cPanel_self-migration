@@ -3,9 +3,13 @@
 Date: 2026-07-03. First real-server run of the autoresponder create path of
 `inventory email-plan` / `email apply` / `email verify` — and the FIRST
 LIVE ROLLBACK EXECUTION ever performed against real cPanel. All commands
-ran from the dev Mac with the branch binary (post go-review round 1 fixes)
-and `configs/host.yaml`; every email command is `sshx.DialDest`-only, so
-the loaded .193 was never touched. Artifacts archived in
+ran from the dev Mac with the FINAL branch binary (post go-review rounds
+1 AND 2: per-op pre-write re-check for both destructive writers, targeted
+single-address fetch) and `configs/host.yaml`; every email command is
+`sshx.DialDest`-only, so the loaded .193 was never touched. The full live
+cycle was executed twice — once after round 1, once re-run end-to-end
+with the final binary — with identical outcomes; the archived artifacts
+are from the final run. Artifacts archived in
 `~/Desktop/pADV/cPanel_self-migration-captures/fase0_2-giorginisposi/smoke2b2/`.
 
 ## Test bench
@@ -68,9 +72,17 @@ live, NO autoresponder. Nothing to clean up.
 - The mid-run race refusal on real cPanel (structurally impossible to
   stage single-operator; E2E-locked by the stub race hook in
   `TestEmailApplyCmdAutoresponderMidRunRaceIsRefused`).
+- The default-address mid-run race refusal (go-review round 2 HIGH fix) on
+  real cPanel — same structural impossibility; E2E-locked by
+  `TestEmailApplyCmdDefaultSetMidRunRaceIsRefused`.
 - 2B-1 carry-overs unchanged: `set_default_address fwdopt=fail/blackhole`
   (byte-verify before the first account that needs it);
   `refused_precondition` on real data.
+- Follow-up noted by the round-3 review (pre-existing 2B-1, out of 2B-2
+  scope): the `--accept-report-loss` DEGRADED rollback emits
+  `default_restore` without `ExpectedCurrent`, so its divergence check is
+  skipped — a value a human set post-apply would be overwritten with the
+  backup value on that explicitly opted-in path.
 
 ## Artifacts
 
