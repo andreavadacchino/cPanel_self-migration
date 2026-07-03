@@ -386,7 +386,7 @@ func srcAutoresponder(addr, domain string) AutoresponderEntry {
 	return AutoresponderEntry{
 		Email: addr, Domain: domain,
 		Subject: "Out of office", From: "Info Desk",
-		Body: "Sono in ferie.\nRientro lunedì.\n",
+		Body:   "Sono in ferie.\nRientro lunedì.\n",
 		IsHTML: 0, Interval: 8, Start: 0, Stop: 0, Charset: "utf-8",
 		BodyCollected: true,
 	}
