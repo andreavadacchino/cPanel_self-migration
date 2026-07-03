@@ -4,8 +4,8 @@ Snapshot for starting a fresh development session. Last updated after
 **UI-3** (apply/run monitor from events.jsonl, monitor-only).
 
 **PR numbering note:** the 6x series is the DNS track (6C = `dns verify`,
-merged; 6D = `dns apply`, not started — the only writer); the 7x series
-is the migration checklist / final verification track.
+6D = `dns apply` — both merged); the 7x series is the migration checklist
+/ final verification track.
 
 ## What this tool is
 
@@ -64,7 +64,8 @@ own `main`; Sourcery reviews each PR; merge with `gh pr merge N --merge`.
 | 2B-3 | **email filter rules collector + writer + routing plan** (closes the 2B email track): filter rules in clear (option A, user gate decision) — `EmailFilterEntry` enriched with `Rules`/`Actions` typed fields + `RulesCollected` honesty marker (pattern: autoresponder `BodyCollected`); collector calls `get_filter` per listed filter with graceful degradation; `email_filter_rules` exits `not_collected` in coverage.go; `FilterRule`/`FilterAction` typed structs. `planFilters` replaces the manual stub: single-rule create/skip/manual based on rule+action equality; multi-rule → MANUAL (`match_type` AND/OR not round-trippable — 2B-3-pre fact 10); different dest content → MANUAL (upsert, fact 5). `StoreFilter`/`DeleteFilter` writers via `RunUAPI` (byte-verified param names). `planRouting` now produces `set` ops; `SetMXCheck` writer via `RunAPI2` ready but smoke-blocked (cpapi2 broken on .78 — fact 11). Apply/verify/rollback extended for filters + routing. `delete_filter` added to all 3 forbidden-verb scans. 2B-3-pre in `PR2B_3_PRE_CAPTURES.md` (29 probes across 6 rounds). Gate: go-reviewer adversarial R1 (1 HIGH + 3 MEDIUM → fixed) → R2 APPROVE; Docker LINUX_ALL_GREEN ×2; Sourcery rate-limited → gate: go-reviewer + Docker | #50 |
 | 2A | **cron collector in clear + offline plan + writer + safety** (+ bonifica 2B-3): cron commands in clear (option A) — `CommandClear`/`CommandCollected` on CronJobEntry, `ValueClear`/`ValueCollected` on CronEnvEntry; display invariant (redacted only in diff/policy/checklist). `cronplan.go` offline plan builder: create/skip/manual per job with `/home/<srcuser>/` → `/home/<destuser>/` path adaptation; disabled → MANUAL; different schedule → MANUAL; env lines with same pattern. `InstallCrontab` writer via SSH `crontab -` (pipe stdin, env var for content, no injection); `ReadCrontabRaw` single SSH call. Safety: `cronplan_safety_test.go` (offline guard), `cron_safety_test.go` (allowlist + unconditional `crontab -r` ban), checklist writeCalls extended. Bonifica: PR2B_3_SMOKE.md (posture), CPAPI2_DIAGNOSIS_78.md (cpapi2 broken, HTTP workaround found), HANDOFF rewritten. 2A-pre in `PR2A_PRE_CAPTURES.md` (11 probes on .78: round-trip byte-identical, append/remove/UTF-8 OK). Gate: go-reviewer R1 (1C + 3H + 5M → fixed) → R2 APPROVE; Docker LINUX_ALL_GREEN ×2 | #51 |
 | 6D | **DNS apply writer — the ONLY DNS writer** (closes the DNS track): `MassEditZoneAdd`/`MassEditZoneRemove` via `RunUAPI` with indexed param format (`add-0=<JSON>`, `remove-0=<int>` — 6D-pre fact 1); `ExtractSOASerial` (base64 decode from parse_zone SOA); `IsStaleSerialError` detection (exact string from 6D-pre fact 3); `FetchDNSZoneRaw` for backup. First DNS allowlist in `dns_safety_test.go` + `TestDNSWriteAllowlistFilesExist` guard + `mass_edit_zone` in checklist writeCalls. cpapi2 fixed via CageFS disable (root session: cause was CageFS isolation, not jailshell; `cagefsctl --disable giorginisposi`). 6D-pre in `PR6D_PRE_CAPTURES.md` (add/remove round-trip, stale-serial error, non-propagation, peer standalone). Gate: go-reviewer R1 (0 HIGH, 2 MEDIUM → fixed); Docker LINUX_ALL_GREEN | #52 |
-| smoke-total | **ALL writer primitives LIVE-PROVEN** + cutover runbook: DNS (add→verify→non-propagation→remove on .78), routing SetMXCheck via RunAPI2 (baseline was `auto`, perturbed to `remote`, restored to `local` via Go primitive), cron InstallCrontab (install→verify→rollback on .78), filter StoreFilter+DeleteFilter (create→verify→delete on .78). CUTOVER_RUNBOOK.md: per-account repeatable sequence with pre-conditions, rollback for every step, placeholder for 3 open user decisions (date, sync role, account order). Command file gap documented honestly: `dns apply`, `cron apply`, and filter/routing sections of `email apply` CLI do not exist yet — primitives are proven, CLI wiring is remaining work | #53 |
+| smoke-total | **ALL writer primitives LIVE-PROVEN** + cutover runbook: DNS (add→verify→non-propagation→remove on .78), routing SetMXCheck via RunAPI2, cron InstallCrontab, filter StoreFilter+DeleteFilter. CUTOVER_RUNBOOK.md: per-account repeatable sequence with pre-conditions, rollback for every step | #53 |
+| cli-wiring | **CLI wiring for all writer primitives**: `dns apply` (forward + rollback + verify-after), `cron apply` (+ cron verify + inventory cron-plan), email filter/routing sections of `email apply`. All 7 writers binary-proven. Pipeline CLI complete | #54 |
 
 ## The full pipeline (all read-only / offline)
 
@@ -211,48 +212,22 @@ real binary. Accounts must be registered in Orbit to be reachable;
 `turtlebeachandora.com`/`fidopetstore.it` exist on the server but are NOT
 in Orbit — `doctorbike.it` and `italplant.com` are and were used.
 
-## Suggested next steps (not started)
+## Suggested next steps
 
-- **PR 7C follow-up (optional)**: per-item Data for the web copy/verify
-  and db/mail verify events — needs `applyWebFiles`/`verifyWebFiles`
-  signature changes (8 test call sites) and `verify.go` (outside the 7C
-  perimeter). The per-item lines already exist in
-  `logs/migration_report.log`; the checklist upgrade does NOT depend on
-  this.
-- **PR 6D — `dns apply`**: the only writer. High risk — full backup +
-  rollback protocol from the project CLAUDE.md, sacrificial-zone smoke
-  first, and a live session for Orbit approvals. Contract in
-  `PR6A_DNS_IMPORT_DESIGN.md`; write API facts in
-  `PR6B_PRE_CAPTURES.md` (mass_edit_zone is line_index-addressed!).
-  6C's post-apply certification (`dns verify --fail-on-drift`) and the
-  safety tests (lexical + structural literal-names guard in
-  `dns_safety_test.go`) are in place; 6D must consciously amend the
-  forbidden list to introduce its writer.
-- **Follow-ups from the 6C go-review**: (a) **DONE** — `inventory` with a
-  missing or unknown subcommand now exits 2 with a usage line instead of
-  falling through to the migration flow (dispatch guard mirroring the
-  `dns` namespace; E2E-locked by `dispatch_test.go`, which re-execs the
-  real `main()` via TestMain + env guard); (b) LOW: `classify()` checks
-  `utf8.ValidString` only on source TXT values, not destination ones —
-  a non-UTF-8 dest TXT can only fail-safe toward drift/manual, never
-  toward a silent pass, so cosmetic only.
+- **Campaign Mode v0**: gated orchestrator that sequences inventory →
+  diff → policy → plan → apply → verify per-account with approval gates.
+  Prerequisite: the three user decisions (sync variant, date/window,
+  account order).
+- **SpamAssassin collector/writer** (if fleet survey shows custom
+  `user_prefs` beyond default template on any account — see
+  `FLEET_COVERAGE_SURVEY.md`).
 - **LOW follow-ups from the #34/#35 go-reviews** (non-blocking):
-  (a) diff keys use space/slash separators (`Domain+" "+Source`,
-  `account+"/"+FilterName`) — NUL-framed keys would be collision-proof;
-  (b) the CMS-rewrite exemption applies only to Removed redirects — a
-  CMS rewrite whose destination changed still surfaces as review
-  (asymmetric, errs toward scrutiny); (c) email filter `-CHANGED`
-  findings gate via review but get no dedicated action; (d) a
-  protocol-relative (`//`) CMS rewrite would classify as genuine
-  (over-cautious direction).
-- **Policy rule refinement / configurable rules** — only if real usage
-  shows the v0 rule table is too aggressive; the smoke test did not show
-  false positives (the 24 blockers were legitimate for two *different*
-  accounts).
-- **DBUserEntry `shortuser` vs `short_user`** — the type binds
-  `json:"shortuser"` but real cPanel uses `short_user`; harmless today
-  because the inventory collector never reads `ShortUser` (only
-  `ListDatabases`), but fix if `ListDBUsers` ever feeds the inventory.
+  (a) diff keys use space/slash separators — NUL-framed keys would be
+  collision-proof; (b) CMS-rewrite exemption applies only to Removed
+  redirects; (c) email filter `-CHANGED` findings gate via review but
+  get no dedicated action.
+- **DBUserEntry `shortuser` vs `short_user`** — harmless today, fix if
+  `ListDBUsers` ever feeds the inventory.
 
 ## Operational context (from project CLAUDE.md)
 
