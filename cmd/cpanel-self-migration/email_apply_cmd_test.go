@@ -821,7 +821,6 @@ func TestEmailApplyCmdAutoresponderMidRunRaceIsRefused(t *testing.T) {
 	}
 }
 
-
 func TestEmailApplyCmdDefaultSetMidRunRaceIsRefused(t *testing.T) {
 	// go-review 2B-2 round 2, finding 1 (HIGH): set_default_address
 	// OVERWRITES the catch-all, so it needs the same fresh pre-write
