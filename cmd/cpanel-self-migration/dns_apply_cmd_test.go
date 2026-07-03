@@ -45,15 +45,16 @@ case "$mod $fn" in
       echo '{"result":{"status":0,"errors":["zone not found"]}}'
       exit 0
     fi
-    # Read current serial from state
-    cur_serial=$(python3 -c "
-import json,sys,base64
-with open('$ZFILE') as f: data=json.load(f)
-for r in data['result']['data']:
-  if r.get('record_type')=='SOA' and len(r.get('data_b64',[]))>=3:
-    print(base64.b64decode(r['data_b64'][2]).decode().strip())
+    # Read current serial from state (env var to avoid quoting issues)
+    export _STUB_ZFILE="$ZFILE"
+    cur_serial=$(python3 -c '
+import json,base64,os
+with open(os.environ["_STUB_ZFILE"]) as f: data=json.load(f)
+for r in data["result"]["data"]:
+  if r.get("record_type")=="SOA" and len(r.get("data_b64",[]))>=3:
+    print(base64.b64decode(r["data_b64"][2]).decode().strip())
     break
-" 2>/dev/null)
+' 2>/dev/null)
     if [ -n "$serial" ] && [ -n "$cur_serial" ] && [ "$serial" != "$cur_serial" ]; then
       echo "{\"result\":{\"status\":0,\"errors\":[\"The serial number $serial does not match the DNS zone serial $cur_serial\"]}}"
       exit 0
@@ -67,51 +68,53 @@ for r in data['result']['data']:
         remove-*=*) removes="$removes ${kv#remove-*=}";;
       esac
     done
-    # Process via python3 (manipulate JSON state)
+    # Process via python3 (manipulate JSON state).
+    # Args are passed via env var to avoid triple-quote breakage from
+    # embedded " characters in JSON values (bash 5.2 Linux).
     new_serial=$((cur_serial + 1))
-    python3 -c "
+    _STUB_ARGS=""
+    for _a in "$@"; do _STUB_ARGS="$_STUB_ARGS $_a"; done
+    export _STUB_ARGS _STUB_ZFILE="$ZFILE" _STUB_NEW_SERIAL="$new_serial"
+    python3 -c '
 import json, sys, base64, os
-zfile = '$ZFILE'
+zfile = os.environ["_STUB_ZFILE"]
 with open(zfile) as f:
     state = json.load(f)
-records = state['result']['data']
-# Process removes first (by line_index)
+records = state["result"]["data"]
 remove_lines = set()
-for kv in '''$@'''.split():
-    if kv.startswith('remove-') and '=' in kv:
-        idx = kv.split('=',1)[1]
+for kv in os.environ["_STUB_ARGS"].split():
+    if kv.startswith("remove-") and "=" in kv:
+        idx = kv.split("=",1)[1]
         try: remove_lines.add(int(idx))
         except: pass
 if remove_lines:
-    records = [r for r in records if r.get('line_index') not in remove_lines]
-# Process adds
-max_line = max((r.get('line_index',0) for r in records), default=0)
-for kv in '''$@'''.split():
-    if kv.startswith('add-') and '=' in kv:
-        rec_json = kv.split('=',1)[1]
+    records = [r for r in records if r.get("line_index") not in remove_lines]
+max_line = max((r.get("line_index",0) for r in records), default=0)
+for kv in os.environ["_STUB_ARGS"].split():
+    if kv.startswith("add-") and "=" in kv:
+        rec_json = kv.split("=",1)[1]
         try:
             rec = json.loads(rec_json)
             max_line += 1
-            data_b64 = [base64.b64encode(d.encode()).decode() for d in rec.get('data',[])]
+            data_b64 = [base64.b64encode(d.encode()).decode() for d in rec.get("data",[])]
             records.append({
-                'type': 'record',
-                'record_type': rec['record_type'],
-                'dname_b64': base64.b64encode(rec['dname'].encode()).decode(),
-                'data_b64': data_b64,
-                'ttl': rec.get('ttl', 300),
-                'line_index': max_line,
+                "type": "record",
+                "record_type": rec["record_type"],
+                "dname_b64": base64.b64encode(rec["dname"].encode()).decode(),
+                "data_b64": data_b64,
+                "ttl": rec.get("ttl", 300),
+                "line_index": max_line,
             })
         except Exception as e:
-            print(f'stub add parse error: {e}', file=sys.stderr)
-# Update SOA serial
-new_ser = $new_serial
+            print(f"stub add parse error: {e}", file=sys.stderr)
+new_ser = int(os.environ["_STUB_NEW_SERIAL"])
 for r in records:
-    if r.get('record_type') == 'SOA' and len(r.get('data_b64',[])) >= 3:
-        r['data_b64'][2] = base64.b64encode(str(new_ser).encode()).decode()
-state['result']['data'] = records
-with open(zfile, 'w') as f:
+    if r.get("record_type") == "SOA" and len(r.get("data_b64",[])) >= 3:
+        r["data_b64"][2] = base64.b64encode(str(new_ser).encode()).decode()
+state["result"]["data"] = records
+with open(zfile, "w") as f:
     json.dump(state, f)
-" 2>/dev/null
+' 2>/dev/null
     echo "{\"result\":{\"status\":1,\"data\":{\"new_serial\":\"$new_serial\"}}}"
     ;;
   *) echo '{"result":{"status":0,"errors":["stub: unknown uapi call"]}}';;
@@ -381,6 +384,9 @@ func TestDNSApplyCmdApplyAndVerify(t *testing.T) {
 		"--backup", backupPath, "--output-json", outJSON,
 	})
 	if code != 0 {
+		if b, err := os.ReadFile(outJSON); err == nil {
+			t.Logf("report:\n%s", string(b))
+		}
 		t.Fatalf("apply: code = %d, want 0", code)
 	}
 
