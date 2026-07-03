@@ -124,10 +124,39 @@ contains "SMOKE-TOTAL-TEST", action fail). Verified present via
 `ListEmailFilters`. `DeleteFilter` removed it. Verified gone. Both
 primitives are **LIVE-PROVEN**.
 
-### Note on command files
+### Note on command files (SUPERSEDED)
 
-All smoke used throwaway harnesses calling Go primitives directly. The
-CLI subcommands for `cron apply`, `dns apply`, and the filter/routing
-sections of `email apply` are NOT yet implemented as command files — the
-primitives and evaluation logic exist in the cpanel and accountinventory
-layers. The command file wiring is remaining work for the CLI surface.
+The harness-level smoke above is superseded by the binary-level smoke
+below. All CLI subcommands now exist and have been exercised end-to-end.
+
+## Binary-level smoke (2026-07-03, CLI wiring PR)
+
+All 4 writer scenarios exercised through the compiled binary against
+the real .78 account. Peer standalone verified before any write.
+
+### Routing — binary-proven
+
+| Step | Command | Result |
+|------|---------|--------|
+| Plan (auto→local) | `email apply --plan ... (dry-run)` | 1 set routing op |
+| Apply | `email apply --plan ... --yes-apply-writes` | 1 applied |
+| Verify CLEAN | `email verify --plan ... --fail-on-drift` | CLEAN — 1 applied |
+| Rollback | `email apply --rollback ... --yes-apply-writes` | 1 applied (auto restored) |
+
+### Filter — binary-proven
+
+| Step | Command | Result |
+|------|---------|--------|
+| Apply (StoreFilter) | `email apply --plan filter_test_plan.json --yes-apply-writes` | 1 applied |
+| Verify CLEAN | `email verify --plan ... --fail-on-drift` | CLEAN — 1 applied |
+| Rollback (DeleteFilter) | `email apply --rollback ... --yes-apply-writes` | 1 applied (filter removed) |
+| Verify pre-smoke | `email verify --plan ...` | NOT CLEAN — 1 pending (0 filters) |
+
+### Cron — binary-proven
+
+| Step | Command | Result |
+|------|---------|--------|
+| Apply (synthetic job) | `cron apply --plan cron_test_plan.json --yes-apply-writes` | 1 applied |
+| Verify CLEAN | `cron verify --plan ... --fail-on-drift` | CLEAN — 1 applied |
+| Rollback LIVE | `cron apply --rollback ... --yes-apply-writes` | 1 applied (crontab restored) |
+| Verify pre-smoke | `cron verify --plan ...` | NOT CLEAN — 1 pending (crontab empty) |
