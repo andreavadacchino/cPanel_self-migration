@@ -18,6 +18,7 @@ import (
 type CronEnvVar struct {
 	Name          string
 	ValueRedacted string
+	ValueRaw      string
 	LineNumber    int
 }
 
@@ -26,6 +27,11 @@ type CronEnvVar struct {
 // structure is visible in CommandRedacted would be an offline brute-force
 // oracle for the masked secret. Drift comparison across runs still works —
 // the same redaction yields the same hash.
+//
+// CommandRaw (2A): the un-redacted command, carried alongside the
+// redacted form for the cron apply writer (the writer installs the RAW
+// command via `crontab -`; redacted commands are not installable).
+// RawLine (2A): the full original crontab line (schedule + command).
 type CronJob struct {
 	Type            string // "schedule" | "macro"
 	Minute          string
@@ -35,9 +41,11 @@ type CronJob struct {
 	DayOfWeek       string
 	Macro           string // "@daily", "@reboot", …
 	CommandRedacted string
+	CommandRaw      string
 	CommandSHA256   string // "sha256:<hex of the redacted command>"
 	RawLineSHA256   string // "sha256:<hex of the redacted line>"
-	Enabled         bool   // false for commented-out jobs
+	RawLine         string
+	Enabled         bool // false for commented-out jobs
 	LineNumber      int
 	Warnings        []string
 }
@@ -161,13 +169,12 @@ func ParseCrontab(raw string) CrontabResult {
 		}
 
 		if strings.HasPrefix(trimmed, "#") {
-			// A commented-out line that still parses as a job is a
-			// DISABLED job, not prose.
 			body := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
 			if job, ok := tryParseJob(body); ok {
 				job.Enabled = false
 				job.LineNumber = lineNo
 				job.RawLineSHA256 = sha256Tag(RedactCronCommand(line))
+				job.RawLine = line
 				res.Jobs = append(res.Jobs, job)
 				res.DisabledJobsCount++
 			} else {
@@ -177,14 +184,15 @@ func ParseCrontab(raw string) CrontabResult {
 		}
 
 		if m := cronEnvLine.FindStringSubmatch(trimmed); m != nil {
-			name, value := m[1], m[2]
+			name, rawValue := m[1], m[2]
+			redactedValue := rawValue
 			if isSensitiveCronName(name) {
-				value = redactedCronPlaceholder
+				redactedValue = redactedCronPlaceholder
 			} else {
-				value = RedactCronCommand(value)
+				redactedValue = RedactCronCommand(rawValue)
 			}
 			res.Environment = append(res.Environment, CronEnvVar{
-				Name: name, ValueRedacted: value, LineNumber: lineNo,
+				Name: name, ValueRedacted: redactedValue, ValueRaw: rawValue, LineNumber: lineNo,
 			})
 			continue
 		}
@@ -193,6 +201,7 @@ func ParseCrontab(raw string) CrontabResult {
 			job.Enabled = true
 			job.LineNumber = lineNo
 			job.RawLineSHA256 = sha256Tag(RedactCronCommand(line))
+			job.RawLine = trimmed
 			res.Jobs = append(res.Jobs, job)
 			continue
 		}
@@ -221,6 +230,7 @@ func tryParseJob(line string) (CronJob, bool) {
 			Type:            "macro",
 			Macro:           macro,
 			CommandRedacted: redacted,
+			CommandRaw:      command,
 			CommandSHA256:   sha256Tag(redacted),
 			Warnings:        []string{},
 		}, true
@@ -249,6 +259,7 @@ func tryParseJob(line string) (CronJob, bool) {
 		Month:           fields[3],
 		DayOfWeek:       fields[4],
 		CommandRedacted: redacted,
+		CommandRaw:      command,
 		CommandSHA256:   sha256Tag(redacted),
 		Warnings:        []string{},
 	}, true

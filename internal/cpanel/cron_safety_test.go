@@ -8,23 +8,42 @@ import (
 	"testing"
 )
 
-// TestNoCronWritePatterns asserts the source never edits, removes, installs
-// or pipes into a crontab: the ONLY allowed invocation is `crontab -l`.
-// It walks the whole module so future packages are covered too.
-func TestNoCronWritePatterns(t *testing.T) {
-	forbidden := []string{
-		"crontab -e",
-		"crontab -r",
-		"crontab -i",
-		"crontab <",
-		"| crontab",
-		"> crontab",
-		"crontab /",
-		"crontab $",
-	}
+// cronWritePatternsForbidden are crontab write patterns. `crontab -r`
+// is UNCONDITIONALLY forbidden (no allowlist). The pipe patterns
+// (`| crontab`, `crontab <`) are allowed ONLY in the writer file
+// (cron_apply.go) — the per-file allowlist was added consciously in 2A.
+var cronWritePatternsForbidden = []string{
+	"crontab -e",
+	"crontab -i",
+	"crontab <",
+	"| crontab",
+	"> crontab",
+	"crontab /",
+	"crontab $",
+}
 
-	root := "../.." // module root from internal/cpanel
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+var cronWritePatternsNoAllowlist = []string{
+	"crontab -r",
+}
+
+// cronWritePatternsAllowlist: ONLY files that may contain crontab write
+// patterns. Amending this list is a conscious, reviewed act. Each entry
+// must correspond to an existing file (a dangling entry would silently
+// open a hole if someone later creates a file with that name).
+var cronWritePatternsAllowlist = map[string]bool{
+	"internal/cpanel/cron_apply.go": true,
+}
+
+// TestNoCronWritePatterns asserts crontab write patterns are absent from
+// all source except the allowlisted writer files. `crontab -r` is
+// forbidden EVERYWHERE (no allowlist — the tool never removes a crontab).
+func TestNoCronWritePatterns(t *testing.T) {
+	root := "../.."
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -37,14 +56,31 @@ func TestNoCronWritePatterns(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(rootAbs, abs)
+		if err != nil {
+			return err
+		}
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
 		src := string(b)
-		for _, pattern := range forbidden {
+		for _, pattern := range cronWritePatternsNoAllowlist {
 			if strings.Contains(src, pattern) {
-				t.Errorf("%s contains forbidden cron write pattern %q", path, pattern)
+				t.Errorf("%s contains unconditionally forbidden cron pattern %q", filepath.ToSlash(rel), pattern)
+			}
+		}
+		if cronWritePatternsAllowlist[filepath.ToSlash(rel)] {
+			return nil
+		}
+		for _, pattern := range cronWritePatternsForbidden {
+			if strings.Contains(src, pattern) {
+				t.Errorf("%s contains forbidden cron write pattern %q (allowlist: cron_apply.go only)",
+					filepath.ToSlash(rel), pattern)
 			}
 		}
 		return nil
