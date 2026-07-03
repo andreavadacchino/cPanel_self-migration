@@ -74,10 +74,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration dns <verify|apply> --plan dns_import_plan.json …")
 		os.Exit(2)
 	}
-	// The `email` namespace (PR 2B-1) mirrors `dns`: apply is the email
-	// config writer (destination only), verify the read-only
-	// re-certification; an unknown subcommand is an error, never a
-	// fall-through to the migration flow.
+	// The `cron` namespace mirrors `dns` and `email`: apply is the cron
+	// writer (destination only), verify the read-only re-certification.
 	if len(os.Args) >= 2 && os.Args[1] == "cron" {
 		if len(os.Args) >= 3 {
 			switch os.Args[2] {
@@ -90,6 +88,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration cron <apply|verify> … (each has its own --help)")
 		os.Exit(2)
 	}
+	// The `email` namespace (PR 2B-1) mirrors `dns`: apply is the email
+	// config writer (destination only), verify the read-only
+	// re-certification; an unknown subcommand is an error, never a
+	// fall-through to the migration flow.
 	if len(os.Args) >= 2 && os.Args[1] == "email" {
 		if len(os.Args) >= 3 {
 			switch os.Args[2] {

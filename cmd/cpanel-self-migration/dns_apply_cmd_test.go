@@ -526,3 +526,39 @@ func TestDNSApplyCmdRollback(t *testing.T) {
 		t.Error("A record 5.6.7.8 still present after rollback")
 	}
 }
+
+// --- serial extraction failure path ------------------------------------------
+
+func TestDNSApplyCmdNoSOAExitsError(t *testing.T) {
+	cfgPath, stateDir := setupDNSApplyServer(t)
+	dir := t.TempDir()
+
+	noSOAZone := filepath.Join(stateDir, "nosoa.com.json")
+	if err := os.WriteFile(noSOAZone, []byte(`{"result":{"status":1,"data":[{"type":"record","record_type":"A","dname_b64":"`+
+		base64.StdEncoding.EncodeToString([]byte("nosoa.com."))+
+		`","data_b64":["`+base64.StdEncoding.EncodeToString([]byte("1.2.3.4"))+
+		`"],"ttl":300,"line_index":1}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "nosoa.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:  accountinventory.ActionAdd,
+					Type:    "TXT",
+					Name:    "test.nosoa.com.",
+					Records: []accountinventory.PlanRecord{{Name: "test.nosoa.com.", Type: "TXT", TTL: 300, Data: []string{"test"}}},
+				},
+			},
+		},
+	})
+
+	code := runDNSApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", filepath.Join(dir, "r.json"),
+	})
+	if code != 1 {
+		t.Fatalf("no-SOA zone: exit code = %d, want 1 (serial extraction error)", code)
+	}
+}

@@ -651,8 +651,8 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 		zt := targetsByZone[zone]
 		zr := accountinventory.DNSApplyZoneResult{Zone: zone}
 
-		// Fetch the current zone to find line indexes.
-		records, _, fetchErr := cpanel.FetchDNSZoneRaw(ctx, client, zone)
+		// Single fetch: records for line-index matching + raw for serial.
+		records, raw, fetchErr := cpanel.FetchDNSZoneRaw(ctx, client, zone)
 		if fetchErr != nil {
 			for _, t := range zt {
 				zr.Ops = append(zr.Ops, accountinventory.DNSApplyOpResult{
@@ -664,14 +664,7 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 			report.Zones = append(report.Zones, zr)
 			continue
 		}
-		serial, serialErr := cpanel.ExtractSOASerial(func() []byte {
-			// Re-fetch raw for the serial.
-			_, raw, err := cpanel.FetchDNSZoneRaw(ctx, client, zone)
-			if err != nil {
-				return nil
-			}
-			return raw
-		}())
+		serial, serialErr := cpanel.ExtractSOASerial(raw)
 		if serialErr != nil {
 			for _, t := range zt {
 				zr.Ops = append(zr.Ops, accountinventory.DNSApplyOpResult{

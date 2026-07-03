@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -29,7 +30,9 @@ import (
 // House contract:
 //   - without --yes-apply-writes: fully offline preview, ZERO connections;
 //   - backup-or-nothing before the first write;
-//   - PlanTimeDestCrontab guard: refuse when the crontab changed since plan;
+//   - PlanTimeDestCrontab guard: refuse when the crontab changed since plan
+//     (currently inert — the plan builder does not yet populate the field;
+//     activated when the plan carries a non-empty hash);
 //   - verify-after: re-read and check installed lines present;
 //   - --rollback <backup>: InstallCrontab with the backup content, verify.
 //
@@ -473,5 +476,5 @@ func loadCronBackupFile(path string) (accountinventory.CronApplyBackup, error) {
 // crontabSHA256 returns the hex SHA256 of a crontab string.
 func crontabSHA256(content string) string {
 	h := sha256.Sum256([]byte(content))
-	return fmt.Sprintf("%x", h)
+	return hex.EncodeToString(h[:])
 }
