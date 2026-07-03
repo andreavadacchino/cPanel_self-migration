@@ -2,9 +2,14 @@
 
 ## Sintesi
 
-`cpapi2` e UAPI modulo `Cron` sono entrambi non funzionanti su .78
-(Keliweb VPS dest, cPanel). **Non risolvibile a livello utente.** Serve un
-ticket Keliweb o un intervento root.
+`cpapi2` non funziona dalla jailshell dell'utente `giorginisposi` su .78.
+
+**Update 2026-07-03**: il binario `/usr/local/cpanel/cpanel` è stato
+ripristinato dall'auto-update notturno (v11.110.0.133, 28 MB, 04:22 UTC).
+Tuttavia la **jailshell** dell'utente non lo vede: `apitool` (3.1 MB, da
+maggio) tenta `exec()` su `/usr/local/cpanel/cpanel` che è fuori dal
+filesystem virtualizzato della jailshell. Serve root per aggiornare la
+jailshell skeleton o cambiare la shell dell'utente.
 
 ## Fatti
 
