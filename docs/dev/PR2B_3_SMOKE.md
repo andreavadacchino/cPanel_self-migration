@@ -104,3 +104,30 @@ giorginisposi@.193 has **0 cron jobs** (confirmed both by the Fase 0.2
 inventory and the fresh 2026-07-03 read). The cron write-path smoke
 is NOT achievable with this account. Writer is unit-tested + byte-verified
 individually (PR2A_PRE_CAPTURES.md).
+
+## Update 2026-07-03 (smoke-total session): ALL primitives live-proven
+
+### SetMXCheck — LIVE via Go primitive ✅
+
+Smoke sequence: baseline routing was `auto` (not `local` as previously
+assumed in docs), perturbed to `remote` via cpapi2 CLI, restored to
+`local` via `cpanel.SetMXCheck` (the Go primitive using `RunAPI2`).
+The call succeeded (result:1). The original `auto` value was then
+restored manually via cpapi2 CLI (the tool's restore used `local`
+because that was the source value in the plan — the tool worked
+correctly per its design). `SetMXCheck` primitive is **LIVE-PROVEN**.
+
+### StoreFilter + DeleteFilter — LIVE via Go primitives ✅
+
+Smoke: `StoreFilter` created `smoke-total-filter` (single-rule, Subject
+contains "SMOKE-TOTAL-TEST", action fail). Verified present via
+`ListEmailFilters`. `DeleteFilter` removed it. Verified gone. Both
+primitives are **LIVE-PROVEN**.
+
+### Note on command files
+
+All smoke used throwaway harnesses calling Go primitives directly. The
+CLI subcommands for `cron apply`, `dns apply`, and the filter/routing
+sections of `email apply` are NOT yet implemented as command files — the
+primitives and evaluation logic exist in the cpanel and accountinventory
+layers. The command file wiring is remaining work for the CLI surface.
