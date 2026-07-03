@@ -40,11 +40,29 @@ type ForwarderEntry struct {
 	Domain      string `json:"domain"`
 }
 
+// AutoresponderEntry is one autoresponder with its full content (PR 2B-2).
+// Email is always the full local@domain address; Domain is the QUERIED
+// domain (real list_auto_responders rows carry no domain field). The
+// content fields (From, Body, IsHTML, Interval, Start, Stop, Charset) come
+// from get_auto_responder and are only trustworthy when BodyCollected is
+// true: a false value means the entry carries list-level facts only
+// (pre-2B-2 artifact, or the per-address get failed — see Warnings) and no
+// equality over the content can be proven.
 type AutoresponderEntry struct {
 	Email    string `json:"email"`
 	Domain   string `json:"domain"`
 	Subject  string `json:"subject"`
 	Interval int    `json:"interval"`
+	From     string `json:"from,omitempty"`
+	Body     string `json:"body,omitempty"`
+	IsHTML   int    `json:"is_html,omitempty"`
+	Start    int64  `json:"start,omitempty"`
+	Stop     int64  `json:"stop,omitempty"`
+	Charset  string `json:"charset,omitempty"`
+	// BodyCollected reports that get_auto_responder succeeded for this
+	// address (2B-2 body collector). It is the honesty marker the email
+	// plan gates on before proving autoresponder equality.
+	BodyCollected bool `json:"body_collected,omitempty"`
 }
 
 type FTPEntry struct {

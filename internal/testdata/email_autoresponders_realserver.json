@@ -1,0 +1,1 @@
+{"apiversion":3,"module":"Email","func":"list_auto_responders","result":{"warnings":null,"data":[{"email":"test-2b2pre@giorginisposi.it","subject":"Assenza — test 2B-2 àèì"}],"errors":null,"metadata":{"transformed":1},"status":1,"messages":null}}

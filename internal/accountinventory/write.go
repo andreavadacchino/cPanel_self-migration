@@ -188,10 +188,20 @@ func writeInventorySection(sb *strings.Builder, inv NormalizedInventory, title s
 
 	fmt.Fprintf(sb, "## Autoresponders (%d)\n\n", len(inv.Autoresponders))
 	if len(inv.Autoresponders) > 0 {
-		sb.WriteString("| Email | Domain | Subject | Interval (h) |\n")
-		sb.WriteString("|-------|--------|---------|---------------|\n")
+		sb.WriteString("| Email | Domain | Subject | Interval (h) | From | HTML | Body |\n")
+		sb.WriteString("|-------|--------|---------|---------------|------|------|------|\n")
 		for _, a := range inv.Autoresponders {
-			fmt.Fprintf(sb, "| %s | %s | %s | %d |\n", a.Email, a.Domain, a.Subject, a.Interval)
+			body := "(not collected)"
+			html := ""
+			if a.BodyCollected {
+				body = mdCell(a.Body, 120)
+				html = "no"
+				if a.IsHTML != 0 {
+					html = "yes"
+				}
+			}
+			fmt.Fprintf(sb, "| %s | %s | %s | %d | %s | %s | %s |\n",
+				a.Email, a.Domain, mdCell(a.Subject, 80), a.Interval, mdCell(a.From, 40), html, body)
 		}
 		sb.WriteString("\n")
 	}

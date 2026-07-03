@@ -301,6 +301,18 @@ func autoresponderItems(in []AutoresponderEntry) []keyedItem {
 			fields: map[string]string{
 				"subject":  e.Subject,
 				"interval": strconv.Itoa(e.Interval),
+				// PR 2B-2 content fields: a different body/from/is_html/
+				// start/stop is a real behavioral difference. The
+				// body_collected marker itself is compared so a
+				// collected-vs-not asymmetry (pre-2B-2 artifact on one
+				// side) is visible instead of silently equal.
+				"from":           e.From,
+				"body":           e.Body,
+				"is_html":        strconv.Itoa(e.IsHTML),
+				"start":          strconv.FormatInt(e.Start, 10),
+				"stop":           strconv.FormatInt(e.Stop, 10),
+				"charset":        e.Charset,
+				"body_collected": strconv.FormatBool(e.BodyCollected),
 			},
 		})
 	}

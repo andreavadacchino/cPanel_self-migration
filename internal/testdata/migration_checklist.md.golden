@@ -59,7 +59,6 @@
 | quota_package | root_only | package assignment, quotas and bandwidth limits are WHM territory |
 | server_level_config | root_only | PHP handlers, web server, firewall and system crons are not visible with account-level access |
 | api_tokens | not_collected | API token NAMES are listable user-level; secrets are never retrievable — historical-dossier material |
-| autoresponder_bodies | not_collected | autoresponder message BODIES (round-trippable, Fase 2B prerequisite) — today autoresponders are inventoried without bodies |
 | boxtrapper | not_collected | BoxTrapper enable state and configuration |
 | contact_info | not_collected | account contact addresses and notification preferences |
 | directory_privacy | not_collected | password-protected directories (~/.htpasswds) — the protection passwords are at stake on transfer |
