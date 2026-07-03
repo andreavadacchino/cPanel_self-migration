@@ -73,7 +73,7 @@ for r in data["result"]["data"]:
     # embedded " characters in JSON values (bash 5.2 Linux).
     new_serial=$((cur_serial + 1))
     _STUB_ARGS=""
-    for _a in "$@"; do _STUB_ARGS="$_STUB_ARGS $_a"; done
+    for _a in "$@"; do _STUB_ARGS="${_STUB_ARGS}"$'\t'"${_a}"; done
     export _STUB_ARGS _STUB_ZFILE="$ZFILE" _STUB_NEW_SERIAL="$new_serial"
     python3 -c '
 import json, sys, base64, os
@@ -82,7 +82,7 @@ with open(zfile) as f:
     state = json.load(f)
 records = state["result"]["data"]
 remove_lines = set()
-for kv in os.environ["_STUB_ARGS"].split():
+for kv in os.environ["_STUB_ARGS"].split("\t"):
     if kv.startswith("remove-") and "=" in kv:
         idx = kv.split("=",1)[1]
         try: remove_lines.add(int(idx))
@@ -90,7 +90,7 @@ for kv in os.environ["_STUB_ARGS"].split():
 if remove_lines:
     records = [r for r in records if r.get("line_index") not in remove_lines]
 max_line = max((r.get("line_index",0) for r in records), default=0)
-for kv in os.environ["_STUB_ARGS"].split():
+for kv in os.environ["_STUB_ARGS"].split("\t"):
     if kv.startswith("add-") and "=" in kv:
         rec_json = kv.split("=",1)[1]
         try:
@@ -364,14 +364,6 @@ func TestDNSApplyCmdApplyAndVerify(t *testing.T) {
 					Name:   "example.com.",
 					Reason: "identical",
 				},
-				{
-					Action: accountinventory.ActionReplace,
-					Type:   "MX",
-					Name:   "example.com.",
-					Records: []accountinventory.PlanRecord{
-						{Name: "example.com.", Type: "MX", TTL: 300, Data: []string{"10", "mail.example.com."}},
-					},
-				},
 			},
 		},
 	})
@@ -392,28 +384,22 @@ func TestDNSApplyCmdApplyAndVerify(t *testing.T) {
 
 	rep := readDNSApplyReport(t, outJSON)
 
-	// Check summary: 1 applied (add A), 1 skipped (skip + replace_v1 counted together).
 	if rep.Summary.Applied != 1 {
 		t.Errorf("summary.Applied = %d, want 1", rep.Summary.Applied)
 	}
 	if rep.Summary.Failed != 0 {
 		t.Errorf("summary.Failed = %d, want 0", rep.Summary.Failed)
 	}
-	if rep.Summary.Refused != 0 {
-		t.Errorf("summary.Refused = %d, want 0", rep.Summary.Refused)
-	}
-	// skipped = ActionSkip + skipped_replace_v1
-	if rep.Summary.Skipped != 2 {
-		t.Errorf("summary.Skipped = %d, want 2", rep.Summary.Skipped)
+	if rep.Summary.Skipped != 1 {
+		t.Errorf("summary.Skipped = %d, want 1", rep.Summary.Skipped)
 	}
 
-	// Check per-op statuses.
 	if len(rep.Zones) != 1 {
 		t.Fatalf("zones = %d, want 1", len(rep.Zones))
 	}
 	zr := rep.Zones[0]
-	if len(zr.Ops) != 3 {
-		t.Fatalf("ops = %d, want 3", len(zr.Ops))
+	if len(zr.Ops) != 2 {
+		t.Fatalf("ops = %d, want 2", len(zr.Ops))
 	}
 	for _, op := range zr.Ops {
 		switch {
@@ -424,10 +410,6 @@ func TestDNSApplyCmdApplyAndVerify(t *testing.T) {
 		case op.Type == "A":
 			if op.Status != accountinventory.DNSOpSkipped {
 				t.Errorf("A apex skip: status = %q, want skipped", op.Status)
-			}
-		case op.Type == "MX":
-			if op.Status != accountinventory.DNSOpSkippedReplaceV1 {
-				t.Errorf("MX replace: status = %q, want skipped_replace_v1", op.Status)
 			}
 		}
 	}
@@ -530,6 +512,440 @@ func TestDNSApplyCmdRollback(t *testing.T) {
 	}
 	if strings.Contains(string(zoneState), base64.StdEncoding.EncodeToString([]byte("5.6.7.8"))) {
 		t.Error("A record 5.6.7.8 still present after rollback")
+	}
+}
+
+// --- replace v2 -------------------------------------------------------------
+
+func TestDNSApplyCmdReplaceApply(t *testing.T) {
+	cfgPath, stateDir := setupDNSApplyServer(t)
+	dir := t.TempDir()
+
+	// Zone with an A record pointing to the OLD address.
+	writeDNSZoneState(t, stateDir, "example.com", []accountinventory.DNSRecordEntry{
+		{Type: "A", Name: "example.com.", TTL: 300, Address: "10.0.0.1"},
+	}, 2024010100)
+
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "example.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:            accountinventory.ActionReplace,
+					Type:              "A",
+					Name:              "example.com.",
+					DestinationValues: []string{"10.0.0.1"},
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "A", TTL: 300, Data: []string{"10.0.0.2"}},
+					},
+				},
+			},
+		},
+	})
+
+	outJSON := filepath.Join(dir, "dns_apply_report.json")
+	backupPath := filepath.Join(dir, "dns_backup_test.json")
+
+	code := runDNSApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--backup", backupPath, "--output-json", outJSON,
+	})
+	if code != 0 {
+		if b, err := os.ReadFile(outJSON); err == nil {
+			t.Logf("report:\n%s", string(b))
+		}
+		t.Fatalf("replace apply: code = %d, want 0", code)
+	}
+
+	rep := readDNSApplyReport(t, outJSON)
+	if rep.Summary.Applied != 1 {
+		t.Errorf("summary.Applied = %d, want 1", rep.Summary.Applied)
+	}
+	if rep.Summary.Failed != 0 {
+		t.Errorf("summary.Failed = %d, want 0", rep.Summary.Failed)
+	}
+
+	// Verify the zone state: old value gone, new value present.
+	zoneState, err := os.ReadFile(filepath.Join(stateDir, "example.com.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newB64 := base64.StdEncoding.EncodeToString([]byte("10.0.0.2"))
+	oldB64 := base64.StdEncoding.EncodeToString([]byte("10.0.0.1"))
+	if !strings.Contains(string(zoneState), newB64) {
+		t.Error("new address 10.0.0.2 not found in zone state after replace")
+	}
+	if strings.Contains(string(zoneState), oldB64) {
+		t.Error("old address 10.0.0.1 still present in zone state after replace")
+	}
+}
+
+func TestDNSApplyCmdReplaceAlreadyPresent(t *testing.T) {
+	cfgPath, stateDir := setupDNSApplyServer(t)
+	dir := t.TempDir()
+
+	// Zone already has the desired value — no write needed.
+	writeDNSZoneState(t, stateDir, "example.com", []accountinventory.DNSRecordEntry{
+		{Type: "A", Name: "example.com.", TTL: 300, Address: "10.0.0.2"},
+	}, 2024010100)
+
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "example.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:            accountinventory.ActionReplace,
+					Type:              "A",
+					Name:              "example.com.",
+					DestinationValues: []string{"10.0.0.1"},
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "A", TTL: 300, Data: []string{"10.0.0.2"}},
+					},
+				},
+			},
+		},
+	})
+
+	outJSON := filepath.Join(dir, "dns_apply_report.json")
+	code := runDNSApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", outJSON,
+	})
+	if code != 0 {
+		t.Fatalf("already_present: code = %d, want 0", code)
+	}
+
+	rep := readDNSApplyReport(t, outJSON)
+	if rep.Summary.Skipped != 1 {
+		t.Errorf("summary.Skipped = %d, want 1 (already_present)", rep.Summary.Skipped)
+	}
+	if rep.Summary.Applied != 0 {
+		t.Errorf("summary.Applied = %d, want 0", rep.Summary.Applied)
+	}
+}
+
+func TestDNSApplyCmdReplaceDriftRefused(t *testing.T) {
+	cfgPath, stateDir := setupDNSApplyServer(t)
+	dir := t.TempDir()
+
+	// Zone has a THIRD value (neither plan-time dest nor desired).
+	writeDNSZoneState(t, stateDir, "example.com", []accountinventory.DNSRecordEntry{
+		{Type: "A", Name: "example.com.", TTL: 300, Address: "99.99.99.99"},
+	}, 2024010100)
+
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "example.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:            accountinventory.ActionReplace,
+					Type:              "A",
+					Name:              "example.com.",
+					DestinationValues: []string{"10.0.0.1"},
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "A", TTL: 300, Data: []string{"10.0.0.2"}},
+					},
+				},
+			},
+		},
+	})
+
+	outJSON := filepath.Join(dir, "dns_apply_report.json")
+	code := runDNSApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", outJSON,
+	})
+	if code != exitDriftGate {
+		t.Fatalf("drift refused: code = %d, want %d", code, exitDriftGate)
+	}
+
+	rep := readDNSApplyReport(t, outJSON)
+	if rep.Summary.Refused != 1 {
+		t.Errorf("summary.Refused = %d, want 1", rep.Summary.Refused)
+	}
+}
+
+func TestDNSApplyCmdReplaceMixedWithAdd(t *testing.T) {
+	cfgPath, stateDir := setupDNSApplyServer(t)
+	dir := t.TempDir()
+
+	// Zone has an A record to replace + is missing a TXT to add.
+	writeDNSZoneState(t, stateDir, "example.com", []accountinventory.DNSRecordEntry{
+		{Type: "A", Name: "example.com.", TTL: 300, Address: "10.0.0.1"},
+	}, 2024010100)
+
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "example.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:            accountinventory.ActionReplace,
+					Type:              "A",
+					Name:              "example.com.",
+					DestinationValues: []string{"10.0.0.1"},
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "A", TTL: 300, Data: []string{"10.0.0.2"}},
+					},
+				},
+				{
+					Action: accountinventory.ActionAdd,
+					Type:   "TXT",
+					Name:   "example.com.",
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "TXT", TTL: 300, Data: []string{"v=spf1 +a ~all"}},
+					},
+				},
+			},
+		},
+	})
+
+	outJSON := filepath.Join(dir, "dns_apply_report.json")
+	code := runDNSApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", outJSON,
+	})
+	if code != 0 {
+		if b, err := os.ReadFile(outJSON); err == nil {
+			t.Logf("report:\n%s", string(b))
+		}
+		t.Fatalf("mixed replace+add: code = %d, want 0", code)
+	}
+
+	rep := readDNSApplyReport(t, outJSON)
+	if rep.Summary.Applied != 2 {
+		t.Errorf("summary.Applied = %d, want 2 (1 replace + 1 add)", rep.Summary.Applied)
+	}
+
+	zoneState, err := os.ReadFile(filepath.Join(stateDir, "example.com.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zs := string(zoneState)
+	if !strings.Contains(zs, base64.StdEncoding.EncodeToString([]byte("10.0.0.2"))) {
+		t.Error("replaced A record 10.0.0.2 not found")
+	}
+	if !strings.Contains(zs, base64.StdEncoding.EncodeToString([]byte("v=spf1 +a ~all"))) {
+		t.Error("added TXT record not found")
+	}
+}
+
+func TestDNSApplyCmdReplaceRollback(t *testing.T) {
+	cfgPath, stateDir := setupDNSApplyServer(t)
+	dir := t.TempDir()
+
+	// Zone with old A value.
+	writeDNSZoneState(t, stateDir, "example.com", []accountinventory.DNSRecordEntry{
+		{Type: "A", Name: "example.com.", TTL: 300, Address: "10.0.0.1"},
+	}, 2024010100)
+
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "example.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:            accountinventory.ActionReplace,
+					Type:              "A",
+					Name:              "example.com.",
+					DestinationValues: []string{"10.0.0.1"},
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "A", TTL: 300, Data: []string{"10.0.0.2"}},
+					},
+				},
+			},
+		},
+	})
+
+	outJSON := filepath.Join(dir, "dns_apply_report.json")
+	backupPath := filepath.Join(dir, "dns_backup_test.json")
+
+	// Apply.
+	code := runDNSApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--backup", backupPath, "--output-json", outJSON,
+	})
+	if code != 0 {
+		t.Fatalf("apply: code = %d, want 0", code)
+	}
+
+	// Verify new value is live.
+	zs, _ := os.ReadFile(filepath.Join(stateDir, "example.com.json"))
+	if !strings.Contains(string(zs), base64.StdEncoding.EncodeToString([]byte("10.0.0.2"))) {
+		t.Fatal("new A 10.0.0.2 not found after apply")
+	}
+
+	// Rollback.
+	rbJSON := filepath.Join(dir, "dns_rollback_report.json")
+	code = runDNSApplyCmd([]string{
+		"--rollback", backupPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", rbJSON,
+	})
+	if code != 0 {
+		if b, err := os.ReadFile(rbJSON); err == nil {
+			t.Logf("rollback report:\n%s", string(b))
+		}
+		t.Fatalf("rollback: code = %d, want 0", code)
+	}
+
+	rb := readDNSApplyReport(t, rbJSON)
+	if rb.Summary.Applied != 1 {
+		t.Errorf("rollback summary.Applied = %d, want 1", rb.Summary.Applied)
+	}
+
+	// Verify old value is restored.
+	zs, _ = os.ReadFile(filepath.Join(stateDir, "example.com.json"))
+	zsStr := string(zs)
+	if !strings.Contains(zsStr, base64.StdEncoding.EncodeToString([]byte("10.0.0.1"))) {
+		t.Error("old A 10.0.0.1 not found after rollback")
+	}
+	if strings.Contains(zsStr, base64.StdEncoding.EncodeToString([]byte("10.0.0.2"))) {
+		t.Error("new A 10.0.0.2 still present after rollback")
+	}
+}
+
+func TestDNSApplyCmdReplaceGrowthDriftRefused(t *testing.T) {
+	cfgPath, stateDir := setupDNSApplyServer(t)
+	dir := t.TempDir()
+
+	// Zone has TWO A records but the plan only expected ONE (growth drift).
+	writeDNSZoneState(t, stateDir, "example.com", []accountinventory.DNSRecordEntry{
+		{Type: "A", Name: "example.com.", TTL: 300, Address: "10.0.0.1"},
+		{Type: "A", Name: "example.com.", TTL: 300, Address: "10.0.0.9"},
+	}, 2024010100)
+
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "example.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:            accountinventory.ActionReplace,
+					Type:              "A",
+					Name:              "example.com.",
+					DestinationValues: []string{"10.0.0.1"},
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "A", TTL: 300, Data: []string{"10.0.0.2"}},
+					},
+				},
+			},
+		},
+	})
+
+	outJSON := filepath.Join(dir, "dns_apply_report.json")
+	code := runDNSApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--output-json", outJSON,
+	})
+	if code != exitDriftGate {
+		t.Fatalf("growth drift: code = %d, want %d", code, exitDriftGate)
+	}
+
+	rep := readDNSApplyReport(t, outJSON)
+	if rep.Summary.Refused != 1 {
+		t.Errorf("summary.Refused = %d, want 1", rep.Summary.Refused)
+	}
+}
+
+func TestDNSApplyCmdRollbackRefusesEmptyOldRecords(t *testing.T) {
+	cfgPath, stateDir := setupDNSApplyServer(t)
+	dir := t.TempDir()
+
+	// Apply a replace first.
+	writeDNSZoneState(t, stateDir, "example.com", []accountinventory.DNSRecordEntry{
+		{Type: "A", Name: "example.com.", TTL: 300, Address: "10.0.0.1"},
+	}, 2024010100)
+
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "example.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:            accountinventory.ActionReplace,
+					Type:              "A",
+					Name:              "example.com.",
+					DestinationValues: []string{"10.0.0.1"},
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "A", TTL: 300, Data: []string{"10.0.0.2"}},
+					},
+				},
+			},
+		},
+	})
+
+	outJSON := filepath.Join(dir, "dns_apply_report.json")
+	backupPath := filepath.Join(dir, "dns_backup_test.json")
+	code := runDNSApplyCmd([]string{
+		"--plan", planPath, "--config", cfgPath, "--yes-apply-writes",
+		"--backup", backupPath, "--output-json", outJSON,
+	})
+	if code != 0 {
+		t.Fatalf("apply: code = %d, want 0", code)
+	}
+
+	// Corrupt the backup: remove the A record from the zone records.
+	backupRaw, _ := os.ReadFile(backupPath)
+	var backup accountinventory.DNSApplyBackup
+	if err := json.Unmarshal(backupRaw, &backup); err != nil {
+		t.Fatal(err)
+	}
+	for i := range backup.Zones {
+		backup.Zones[i].Records = nil // empty records
+	}
+	corruptedBackup, _ := json.Marshal(backup)
+	corruptedPath := filepath.Join(dir, "dns_backup_corrupted.json")
+	if err := os.WriteFile(corruptedPath, corruptedBackup, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rollback with corrupted backup should refuse (not silently delete).
+	rbJSON := filepath.Join(dir, "dns_rollback_report.json")
+	code = runDNSApplyCmd([]string{
+		"--rollback", corruptedPath, "--report", outJSON,
+		"--config", cfgPath, "--yes-apply-writes",
+		"--output-json", rbJSON,
+	})
+	if code != exitDriftGate {
+		t.Fatalf("rollback with empty oldRecords: code = %d, want %d (refused)", code, exitDriftGate)
+	}
+
+	rb := readDNSApplyReport(t, rbJSON)
+	if rb.Summary.Refused != 1 {
+		t.Errorf("rollback summary.Refused = %d, want 1", rb.Summary.Refused)
+	}
+
+	// Verify the zone was NOT modified (record still 10.0.0.2).
+	zs, _ := os.ReadFile(filepath.Join(stateDir, "example.com.json"))
+	if !strings.Contains(string(zs), base64.StdEncoding.EncodeToString([]byte("10.0.0.2"))) {
+		t.Error("record should still be 10.0.0.2 after refused rollback")
+	}
+}
+
+func TestDNSApplyCmdDryRunShowsReplace(t *testing.T) {
+	dir := t.TempDir()
+	planPath := writeDNSTestPlan(t, dir, []accountinventory.PlanZone{
+		{
+			Zone: "example.com",
+			Ops: []accountinventory.PlanOp{
+				{
+					Action:            accountinventory.ActionReplace,
+					Type:              "A",
+					Name:              "example.com.",
+					DestinationValues: []string{"10.0.0.1"},
+					Records: []accountinventory.PlanRecord{
+						{Name: "example.com.", Type: "A", TTL: 300, Data: []string{"10.0.0.2"}},
+					},
+				},
+			},
+		},
+	})
+
+	cwd, _ := os.Getwd()
+	empty := t.TempDir()
+	_ = os.Chdir(empty)
+	defer func() { _ = os.Chdir(cwd) }()
+
+	// Dry-run should exit 0 and write nothing.
+	code := runDNSApplyCmd([]string{"--plan", planPath})
+	if code != 0 {
+		t.Fatalf("dry-run with replace: code = %d, want 0", code)
 	}
 }
 

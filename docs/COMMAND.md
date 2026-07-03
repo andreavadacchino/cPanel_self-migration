@@ -109,6 +109,11 @@ make build
 | `policy_report.json` / `.md`| `inventory policy`        |
 | `dns_import_plan.json` / `.md` | `inventory dns-plan`   |
 | `dns_verify_report.json` / `.md` | `dns verify`         |
+| `dns_apply_report.json` / `.md` | `dns apply`           |
+| `dns_backup_*.json`          | `dns apply` (pre-write) |
+| `cron_apply_plan.json` / `.md` | `inventory cron-plan` |
+| `cron_apply_report.json` / `.md` | `cron apply`         |
+| `cron_backup_*.json`         | `cron apply` (pre-write) |
 | `migration_checklist.json` / `.md` | `inventory checklist` |
 
 ## Subcommand: `inventory diff`
@@ -259,6 +264,104 @@ Exit codes: `0` verify ran and reports were written (even with drift),
 `1` invalid input / config / SSH dial / write failure, `2` flag usage
 error, `3` gated refusal (stale plan, or `--fail-on-drift` with a
 verdict that is not clean).
+
+## Subcommand: `dns apply`
+
+Applies a `dns_import_plan.json` to the DESTINATION account via
+`DNS::mass_edit_zone` with serial guard (optimistic locking). Default is
+fully offline dry-run (no connections, no writes). Design:
+`docs/dev/PR6D_DNS_APPLY_DESIGN.md`, `docs/dev/PR_DNSV2_REPLACE_DESIGN.md`.
+
+```bash
+cpanel-self-migration dns apply \
+  --plan ./dns_import_plan.json \
+  [--config ./host.yaml] \
+  [--yes-apply-writes] \
+  [--backup ./dns_backup.json] \
+  [--output-json ./dns_apply_report.json] \
+  [--output-md ./dns_apply_report.md]
+
+# Rollback:
+cpanel-self-migration dns apply \
+  --rollback ./dns_backup_YYYYMMDD-HHMMSS.json \
+  [--report ./dns_apply_report.json | --accept-report-loss] \
+  [--yes-apply-writes] \
+  [--config ./host.yaml] \
+  [--output-json ./dns_rollback_report.json]
+```
+
+Operations: `add` (missing rrsets) and `replace` (rrsets with different
+values — implemented as atomic remove+add in a single `mass_edit_zone`
+call). `skip` and `manual` ops are never written.
+
+Replace preconditions (per-op): if the live zone already has the desired
+values → `skipped` (already_present). If the live zone still has the
+plan-time destination values → proceed. If a third value is observed →
+`refused_precondition` (drift).
+
+Safety contract: backup-or-nothing before the first write; per-op
+verify-after (re-fetch zone, match by type+name+data); reports written
+before exit.
+
+Rollback: report-driven inverse — `add` ops are removed by line index;
+`replace` ops are restored to their pre-apply values (from the backup).
+Degraded rollback (`--accept-report-loss`): ALL ops become MANUAL.
+
+Exit codes: `0` ok, `1` failure (report still written), `2` flags,
+`3` gated refusal (stale serial, drift).
+
+## Subcommand: `cron apply`
+
+Applies a `cron_apply_plan.json` to the DESTINATION account via SSH
+`crontab -` (pipe stdin). Default is fully offline dry-run.
+
+```bash
+cpanel-self-migration cron apply \
+  --plan ./cron_apply_plan.json \
+  [--config ./host.yaml] \
+  [--yes-apply-writes] \
+  [--backup ./cron_backup.json] \
+  [--output-json ./cron_apply_report.json] \
+  [--output-md ./cron_apply_report.md]
+
+# Rollback:
+cpanel-self-migration cron apply \
+  --rollback ./cron_backup_YYYYMMDD-HHMMSS.json \
+  [--yes-apply-writes] \
+  [--config ./host.yaml]
+```
+
+Exit codes: `0` ok, `1` failure, `2` flags.
+
+## Subcommand: `cron verify`
+
+Read-only verification of the DESTINATION crontab against a
+`cron_apply_plan.json`.
+
+```bash
+cpanel-self-migration cron verify \
+  --plan ./cron_apply_plan.json \
+  [--config ./host.yaml] \
+  [--fail-on-drift]
+```
+
+Exit codes: `0` verify ran, `1` failure, `2` flags, `3` `--fail-on-drift`
+with drift detected.
+
+## Subcommand: `inventory cron-plan`
+
+Fully offline builder of the cron apply plan. Compares source and
+destination crontabs and produces per-job create/skip/manual decisions.
+
+```bash
+cpanel-self-migration inventory cron-plan \
+  --source ./inventory_source.json \
+  --destination ./inventory_destination.json \
+  [--output-json ./cron_apply_plan.json] \
+  [--output-md ./cron_apply_plan.md]
+```
+
+Exit codes: `0` plan generated, `1` failure, `2` flags.
 
 ## Subcommand: `inventory checklist`
 

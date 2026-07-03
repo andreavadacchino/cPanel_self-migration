@@ -1,56 +1,42 @@
-# Prompt di avvio — prossima sessione (dopo PR cli-wiring-binary-smoke)
+# Handoff — post sessione 2026-07-04
 
-Copia-incolla da qui in giù.
+## Stato
 
----
+PR #56 MERGED (`feat/dns-v2-replace-edit`).
+Go-reviewer R1 → all fixed → R2 APPROVE.
+Binary smoke su .78: 6/6 steps PASSED (replace→CLEAN→rollback→pending→cleanup).
 
-Stai lavorando sul tool Go **cpanel-self-migration**, directory
-/Users/andreavadacchino/Desktop/pADV/cPanel_self-migration.
+## Cosa contiene #56
 
-Leggi PRIMA: DEVELOPMENT_STATE.md, CUTOVER_RUNBOOK.md (runbook
-ripetibile con §4.1 aggiornato), HANDOFF qui sotto.
+1. **DNS apply v2 (replace)**: le op `replace` non sono più skippate.
+   Implementate come remove+add atomico in singola `mass_edit_zone` call.
+   13 test totali (8 nuovi). Precondizioni: already_present, drift,
+   growth drift, missing rrset, empty DestinationValues → refused.
+   Verify-after: nuovi presenti E vecchi assenti. Rollback: ripristina
+   dal backup, guard contro backup corrotto.
 
-## Stato al 2026-07-03
+2. **Fleet coverage survey**: 15 aree not_collected censite su
+   giorginisposi. Solo spamassassin è attivamente usato (template default).
 
-**TUTTI i writer sono BINARY-PROVEN** (esercitati end-to-end attraverso
-il binario compilato contro .78, non più solo tramite harness throwaway):
+3. **Doc hygiene**: COMMAND.md, DEVELOPMENT_STATE.md aggiornati.
 
-| Writer | CLI command | Binary smoke |
-|--------|-------------|-------------|
-| DNS | `dns apply` + `dns verify` | apply→CLEAN→rollback→pending + non-propagazione peer |
-| Routing | `email apply` (SetMXCheck) | auto→local→CLEAN→rollback(auto) |
-| Filter | `email apply` (StoreFilter/DeleteFilter) | apply→CLEAN→rollback→0 filtri |
-| Cron | `cron apply` + `cron verify` | apply→CLEAN→rollback→crontab vuoto |
-| Forwarder | `email apply` (AddForwarder) | LIVE + rollback (#47) |
-| Default addr | `email apply` (SetDefaultAddress) | LIVE (#47) |
-| Autoresponder | `email apply` (AddAutoresponder) | LIVE + rollback (#49) |
+## Residui minori (non bloccanti)
 
-### Scoperta Passo 4: per-zone sync ESISTE
-
-Il claim "cPanel non supporta sync per-zona" è stato **SMENTITO**.
-`/usr/local/cpanel/scripts/dnscluster synczone <zone>` propaga UNA
-singola zona a tutti i peer del cluster (script root-level).
-Variante C aggiunta al runbook §4.1 — richiede byte-verify di
-`synczone` prima del primo cutover reale.
-
-### Residui minori (non bloccanti)
 - `fwdopt=fail/blackhole` non byte-verificati
 - `is_html=1`, `start/stop` espliciti mai live
-- `replace` DNS ops (v1: skipped, futuro PR)
-- `synczone` non ancora byte-verificato live (solo help/esistenza)
+- `synczone` non ancora byte-verificato live
+- DKIM-aware plan classification (futuro)
+- SpamAssassin collector/writer (se survey flotta lo richiede)
+- Probe `_v2smoke TXT` accidentalmente aggiunto a .193 via Orbit (innocuo)
 
-## Obiettivo prossima sessione
+## Decisioni utente pendenti
 
-**Primo cutover reale** — GATED su:
+1. **Survey flotta**: scegliere metodo di accesso per estendere a tutti
+   gli account della campagna (read-only via Orbit)
+2. **Campagna**: variante sync (C consigliata), data/finestra, ordine account
 
-| Decisione | Stato |
-|-----------|-------|
-| Data campagna | **APERTA** |
-| Variante ruolo sync DNS (A/B/C) | **APERTA** — dato Variante C disponibile |
-| Ordine account | **APERTA** (suggerimento: giorginisposi primo) |
-| Byte-verify `synczone` | **RICHIESTO** se Variante C scelta |
+## Workflow
 
-## Workflow (invariato)
-
-SOLO fork, mai origin. TDD. go-reviewer + Docker. runner.go off-limits.
+SOLO fork (`gh pr create --repo andreavadacchino/cPanel_self-migration`),
+mai origin. TDD. go-reviewer + Docker. runner.go off-limits.
 Peer NS standalone verificato ATTIVAMENTE prima di write DNS.

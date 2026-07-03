@@ -22,19 +22,21 @@ import (
 // and writes DNS records onto the DESTINATION account via
 // DNS::mass_edit_zone with serial guard (optimistic locking).
 //
-// v1 implements `add` only. `replace` ops get status skipped_replace_v1.
-// `manual` and `skip` ops are non-writable (skipped/manual).
+// v2 implements `add` and `replace` (atomic remove+add in one
+// mass_edit_zone call). `manual` and `skip` ops are non-writable.
 //
-// House contract (docs/dev/PR6D_DNS_APPLY_DESIGN.md):
+// House contract (docs/dev/PR6D_DNS_APPLY_DESIGN.md, PR_DNSV2_REPLACE_DESIGN.md):
 //   - without --yes-apply-writes: fully offline preview, ZERO connections;
 //   - backup-or-nothing before the first write, bidirectionally paired
 //     with the report;
 //   - serial guard: stale serial → all ops for that zone get
 //     refused_precondition;
+//   - replace preconditions: already_present, drift, growth drift, missing
+//     rrset, empty DestinationValues → refused_precondition;
 //   - unconditional per-op verify-after (re-fetch zone, match by
-//     type+name+data);
-//   - --rollback <backup>: report-driven inverse ops, removes ONLY the
-//     tool's own applied adds by line index.
+//     type+name+data; for replace: old values must also be absent);
+//   - --rollback <backup>: report-driven inverse ops — removes applied
+//     adds by line index, restores applied replaces from backup values.
 //
 // Exit codes: 0 ok; 1 input/runtime/write failure (report still written
 // when the run got that far); 2 flags; 3 gated refusal (one or more
@@ -111,7 +113,8 @@ func printDNSApplyDryRun(plan accountinventory.DNSPlan) {
 				fmt.Printf("  [%s] add  %s %s (%d record(s))\n", z.Zone, op.Type, op.Name, len(op.Records))
 				writes++
 			case accountinventory.ActionReplace:
-				fmt.Printf("  [%s] replace  %s %s → skipped_replace_v1\n", z.Zone, op.Type, op.Name)
+				fmt.Printf("  [%s] replace  %s %s (%d record(s))\n", z.Zone, op.Type, op.Name, len(op.Records))
+				writes++
 			case accountinventory.ActionManual:
 				fmt.Printf("  [%s] manual  %s %s — %s\n", z.Zone, op.Type, op.Name, op.Reason)
 			}
@@ -188,13 +191,13 @@ func dialDNSDest(ctx context.Context, cfgFlag string) (*sshx.Client, error) {
 	return client, nil
 }
 
-// writableZones returns the zones that have at least one add op.
+// writableZones returns the zones that have at least one add or replace op.
 func writableZones(plan accountinventory.DNSPlan) []string {
 	seen := map[string]bool{}
 	var zones []string
 	for _, z := range plan.Zones {
 		for _, op := range z.Ops {
-			if op.Action == accountinventory.ActionAdd && !seen[z.Zone] {
+			if (op.Action == accountinventory.ActionAdd || op.Action == accountinventory.ActionReplace) && !seen[z.Zone] {
 				seen[z.Zone] = true
 				zones = append(zones, z.Zone)
 			}
@@ -288,7 +291,7 @@ func runDNSApplyWrites(plan accountinventory.DNSPlan, planPath, cfgFlag, backupF
 		report.BackupFile, report.BackupSHA256 = backupPath, backupSHA
 		fmt.Fprintf(os.Stderr, "wrote %s (pre-write backup)\n", backupPath)
 	} else {
-		report.BackupNote = "no write was decided (every op skipped, manual, replace_v1 or skip) — nothing to back up"
+		report.BackupNote = "no write was decided (every op skipped or manual) — nothing to back up"
 	}
 
 	// Process each zone in the plan.
@@ -296,11 +299,12 @@ func runDNSApplyWrites(plan accountinventory.DNSPlan, planPath, cfgFlag, backupF
 		zr := accountinventory.DNSApplyZoneResult{Zone: pz.Zone}
 
 		// Classify each op.
-		type pendingAdd struct {
-			op  accountinventory.PlanOp
-			idx int
+		type pendingWrite struct {
+			op     accountinventory.PlanOp
+			idx    int
+			action string // "add" or "replace"
 		}
-		var adds []pendingAdd
+		var writes []pendingWrite
 
 		for _, op := range pz.Ops {
 			res := accountinventory.DNSApplyOpResult{PlanOp: op}
@@ -310,11 +314,11 @@ func runDNSApplyWrites(plan accountinventory.DNSPlan, planPath, cfgFlag, backupF
 			case accountinventory.ActionManual:
 				res.Status = accountinventory.DNSOpManual
 			case accountinventory.ActionReplace:
-				res.Status = accountinventory.DNSOpSkippedReplaceV1
-				res.StatusReason = "replace is not implemented in v1 — re-plan after the v2 upgrade"
+				res.Status = accountinventory.DNSOpApplied // placeholder, overwritten below
+				writes = append(writes, pendingWrite{op: op, idx: len(zr.Ops), action: "replace"})
 			case accountinventory.ActionAdd:
 				res.Status = accountinventory.DNSOpApplied // placeholder, overwritten below
-				adds = append(adds, pendingAdd{op: op, idx: len(zr.Ops)})
+				writes = append(writes, pendingWrite{op: op, idx: len(zr.Ops), action: "add"})
 			default:
 				res.Status = accountinventory.DNSOpFailed
 				res.StatusReason = fmt.Sprintf("unknown plan action %q — malformed or hand-edited plan", op.Action)
@@ -322,21 +326,55 @@ func runDNSApplyWrites(plan accountinventory.DNSPlan, planPath, cfgFlag, backupF
 			zr.Ops = append(zr.Ops, res)
 		}
 
-		// If this zone has add ops, batch them and call mass_edit_zone.
-		if len(adds) > 0 {
+		// If this zone has writable ops, process them.
+		if len(writes) > 0 {
 			ls, ok := liveState[pz.Zone]
 			if !ok {
-				// Should not happen: writableZones guarantees the zone was fetched.
-				for _, a := range adds {
-					zr.Ops[a.idx].Status = accountinventory.DNSOpFailed
-					zr.Ops[a.idx].StatusReason = "zone live state not fetched"
+				for _, w := range writes {
+					zr.Ops[w.idx].Status = accountinventory.DNSOpFailed
+					zr.Ops[w.idx].StatusReason = "zone live state not fetched"
 				}
 			} else {
-				// Build the batch.
-				var batch []cpanel.MassEditAddRecord
-				for _, a := range adds {
-					for _, rec := range a.op.Records {
-						batch = append(batch, cpanel.MassEditAddRecord{
+				// Resolve replace preconditions and collect batch params.
+				var removeLines []int
+				var addRecords []cpanel.MassEditAddRecord
+				hasReplace := false
+
+				for i, w := range writes {
+					if w.action != "replace" {
+						// Add ops: just collect records.
+						for _, rec := range w.op.Records {
+							addRecords = append(addRecords, cpanel.MassEditAddRecord{
+								DName:      dnsCanonToRelative(rec.Name, pz.Zone),
+								TTL:        rec.TTL,
+								RecordType: rec.Type,
+								Data:       rec.Data,
+							})
+						}
+						continue
+					}
+					hasReplace = true
+
+					// Replace precondition: check the live zone.
+					status, reason, lines := dnsReplacePrecondition(w.op, ls.records, pz.Zone)
+					if status == accountinventory.DNSOpSkipped {
+						// Already present — no write needed.
+						zr.Ops[w.idx].Status = status
+						zr.Ops[w.idx].StatusReason = reason
+						writes[i].action = "" // mark as resolved
+						continue
+					}
+					if status == accountinventory.DNSOpRefused {
+						zr.Ops[w.idx].Status = status
+						zr.Ops[w.idx].StatusReason = reason
+						writes[i].action = "" // mark as resolved
+						continue
+					}
+
+					// Precondition met: queue remove (old lines) + add (new records).
+					removeLines = append(removeLines, lines...)
+					for _, rec := range w.op.Records {
+						addRecords = append(addRecords, cpanel.MassEditAddRecord{
 							DName:      dnsCanonToRelative(rec.Name, pz.Zone),
 							TTL:        rec.TTL,
 							RecordType: rec.Type,
@@ -345,40 +383,69 @@ func runDNSApplyWrites(plan accountinventory.DNSPlan, planPath, cfgFlag, backupF
 					}
 				}
 
-				result, writeErr := cpanel.MassEditZoneAdd(ctx, client, pz.Zone, ls.serial, batch)
-				if writeErr != nil {
-					status := accountinventory.DNSOpFailed
-					reason := writeErr.Error()
-					if cpanel.IsStaleSerialError(writeErr) {
-						status = accountinventory.DNSOpRefused
-						reason = "stale serial — zone was modified since fetch"
+				// Filter to only the active writes.
+				var activeWrites []pendingWrite
+				for _, w := range writes {
+					if w.action != "" {
+						activeWrites = append(activeWrites, w)
 					}
-					for _, a := range adds {
-						zr.Ops[a.idx].Status = status
-						zr.Ops[a.idx].StatusReason = reason
-					}
-				} else {
-					zr.NewSerial = result.NewSerial
+				}
 
-					// Verify-after: re-fetch the zone and check each
-					// planned record is present (match by type+name+data).
-					freshRecords, _, fetchErr := cpanel.FetchDNSZoneRaw(ctx, client, pz.Zone)
-					if fetchErr != nil {
-						for _, a := range adds {
-							zr.Ops[a.idx].Status = accountinventory.DNSOpFailed
-							zr.Ops[a.idx].StatusReason = "verify-after re-fetch failed: " + fetchErr.Error()
+				for _, w := range activeWrites {
+					if len(w.op.Records) == 0 {
+						zr.Ops[w.idx].Status = accountinventory.DNSOpFailed
+						zr.Ops[w.idx].StatusReason = "op has no records — malformed or hand-edited plan"
+					}
+				}
+
+				if len(activeWrites) > 0 && len(addRecords) > 0 {
+					var result cpanel.MassEditResult
+					var writeErr error
+
+					if hasReplace || len(removeLines) > 0 {
+						result, writeErr = cpanel.MassEditZoneBatch(ctx, client, pz.Zone, ls.serial, removeLines, addRecords)
+					} else {
+						result, writeErr = cpanel.MassEditZoneAdd(ctx, client, pz.Zone, ls.serial, addRecords)
+					}
+
+					if writeErr != nil {
+						status := accountinventory.DNSOpFailed
+						reason := writeErr.Error()
+						if cpanel.IsStaleSerialError(writeErr) {
+							status = accountinventory.DNSOpRefused
+							reason = "stale serial — zone was modified since fetch"
+						}
+						for _, w := range activeWrites {
+							zr.Ops[w.idx].Status = status
+							zr.Ops[w.idx].StatusReason = reason
 						}
 					} else {
-						for _, a := range adds {
-							if dnsVerifyAddOpPresent(a.op, freshRecords, pz.Zone) {
-								zr.Ops[a.idx].Status = accountinventory.DNSOpApplied
-							} else {
-								zr.Ops[a.idx].Status = accountinventory.DNSOpFailed
-								zr.Ops[a.idx].StatusReason = "write reported success but the records are not observable in the fresh zone"
+						zr.NewSerial = result.NewSerial
+
+						freshRecords, _, fetchErr := cpanel.FetchDNSZoneRaw(ctx, client, pz.Zone)
+						if fetchErr != nil {
+							for _, w := range activeWrites {
+								zr.Ops[w.idx].Status = accountinventory.DNSOpFailed
+								zr.Ops[w.idx].StatusReason = "verify-after re-fetch failed: " + fetchErr.Error()
+							}
+						} else {
+							for _, w := range activeWrites {
+								if !dnsVerifyAddOpPresent(w.op, freshRecords, pz.Zone) {
+									zr.Ops[w.idx].Status = accountinventory.DNSOpFailed
+									zr.Ops[w.idx].StatusReason = "write reported success but the records are not observable in the fresh zone"
+									continue
+								}
+								if w.action == "replace" && dnsOldValuesStillPresent(w.op, freshRecords, pz.Zone) {
+									zr.Ops[w.idx].Status = accountinventory.DNSOpFailed
+									zr.Ops[w.idx].StatusReason = "new values present but old values still in zone — remove may have failed"
+									continue
+								}
+								zr.Ops[w.idx].Status = accountinventory.DNSOpApplied
 							}
 						}
 					}
 				}
+
 			}
 		}
 
@@ -401,6 +468,19 @@ func dnsVerifyAddOpPresent(op accountinventory.PlanOp, fresh []cpanel.DNSRecord,
 	return true
 }
 
+// dnsCanonLiveName canonicalizes a DNS name from a parse_zone response
+// (which can be "@", relative, or absolute FQDN) to an absolute FQDN.
+func dnsCanonLiveName(name, zone string) string {
+	n := strings.ToLower(name)
+	if n == "@" || n == "" {
+		return strings.ToLower(zone) + "."
+	}
+	if strings.HasSuffix(n, ".") {
+		return n
+	}
+	return n + "." + strings.ToLower(zone) + "."
+}
+
 // dnsRecordPresent checks if a single planned record exists in the
 // live zone.
 func dnsRecordPresent(rec accountinventory.PlanRecord, fresh []cpanel.DNSRecord, zone string) bool {
@@ -409,12 +489,7 @@ func dnsRecordPresent(rec accountinventory.PlanRecord, fresh []cpanel.DNSRecord,
 		if !strings.EqualFold(f.Type, rec.Type) {
 			continue
 		}
-		fCanon := strings.ToLower(f.Name)
-		// parse_zone names can be relative or absolute; canonicalize both.
-		if !strings.HasSuffix(fCanon, ".") {
-			fCanon = fCanon + "." + strings.ToLower(zone) + "."
-		}
-		if fCanon != canonName {
+		if dnsCanonLiveName(f.Name, zone) != canonName {
 			continue
 		}
 		if dnsDataMatch(rec, f) {
@@ -457,6 +532,125 @@ func dnsDataMatch(planned accountinventory.PlanRecord, live cpanel.DNSRecord) bo
 		// Planned Data is pre-split segments; live TxtData is joined.
 		joined := strings.Join(planned.Data, "")
 		return joined == live.TxtData
+	}
+	return false
+}
+
+// dnsReplacePrecondition checks whether the live zone state allows the
+// replace op to proceed. Returns (status, reason, lineIndexes).
+//   - skipped + "already_present": live already has the desired values
+//   - refused_precondition: live has neither desired nor plan-time dest values
+//   - "" (empty status): precondition met, proceed with remove+add
+func dnsReplacePrecondition(op accountinventory.PlanOp, live []cpanel.DNSRecord, zone string) (string, string, []int) {
+	canonName := strings.ToLower(op.Name)
+
+	// Collect live records matching type+name.
+	var matching []cpanel.DNSRecord
+	for _, f := range live {
+		if !strings.EqualFold(f.Type, op.Type) {
+			continue
+		}
+		if dnsCanonLiveName(f.Name, zone) == canonName {
+			matching = append(matching, f)
+		}
+	}
+
+	if len(matching) == 0 {
+		return accountinventory.DNSOpRefused, "rrset not found on destination — cannot replace what is absent", nil
+	}
+
+	if len(op.DestinationValues) == 0 {
+		return accountinventory.DNSOpRefused, "plan has no destination values for this replace op — re-plan required", nil
+	}
+
+	if len(matching) != len(op.DestinationValues) {
+		return accountinventory.DNSOpRefused,
+			fmt.Sprintf("rrset has %d record(s) but plan expected %d — drift detected (records added or removed since plan-time), re-plan required",
+				len(matching), len(op.DestinationValues)),
+			nil
+	}
+
+	// Check if ALL desired records are already present.
+	allDesiredPresent := true
+	for _, rec := range op.Records {
+		if !dnsRecordPresent(rec, matching, zone) {
+			allDesiredPresent = false
+			break
+		}
+	}
+	if allDesiredPresent {
+		return accountinventory.DNSOpSkipped, "already_present: destination already has the desired values", nil
+	}
+
+	// Check if live values match plan-time DestinationValues — precondition.
+	var lines []int
+	usedLines := map[int]bool{}
+	for _, dv := range op.DestinationValues {
+		found := false
+		for _, f := range matching {
+			if usedLines[f.Line] {
+				continue
+			}
+			if dnsLiveMatchesCanonValue(f, dv) {
+				lines = append(lines, f.Line)
+				usedLines[f.Line] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return accountinventory.DNSOpRefused,
+				fmt.Sprintf("plan-time destination value %q not found in the live zone — drift detected, re-plan required", dv),
+				nil
+		}
+	}
+	return "", "", lines
+}
+
+// dnsLiveMatchesCanonValue checks if a live DNS record matches a
+// canonical plan value (as produced by planValue in dnsplan.go).
+func dnsLiveMatchesCanonValue(live cpanel.DNSRecord, canonValue string) bool {
+	switch live.Type {
+	case "A", "AAAA":
+		return strings.EqualFold(live.Address, canonValue)
+	case "CNAME":
+		lTarget := strings.TrimSuffix(strings.ToLower(live.Target), ".")
+		cTarget := strings.TrimSuffix(strings.ToLower(canonValue), ".")
+		return lTarget == cTarget
+	case "MX":
+		parts := strings.SplitN(canonValue, "\x00", 2)
+		if len(parts) != 2 {
+			return false
+		}
+		if fmt.Sprintf("%d", live.Priority) != parts[0] {
+			return false
+		}
+		lExch := strings.TrimSuffix(strings.ToLower(live.Exchange), ".")
+		cExch := strings.TrimSuffix(strings.ToLower(parts[1]), ".")
+		return lExch == cExch
+	case "TXT":
+		return live.TxtData == canonValue
+	}
+	return false
+}
+
+// dnsOldValuesStillPresent checks whether any plan-time destination
+// values (the pre-replace state) are still observable in the fresh zone.
+// Used by verify-after to detect a failed remove in a replace op.
+func dnsOldValuesStillPresent(op accountinventory.PlanOp, fresh []cpanel.DNSRecord, zone string) bool {
+	canonName := strings.ToLower(op.Name)
+	for _, dv := range op.DestinationValues {
+		for _, f := range fresh {
+			if !strings.EqualFold(f.Type, op.Type) {
+				continue
+			}
+			if dnsCanonLiveName(f.Name, zone) != canonName {
+				continue
+			}
+			if dnsLiveMatchesCanonValue(f, dv) {
+				return true
+			}
+		}
 	}
 	return false
 }
@@ -556,23 +750,40 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 		fmt.Fprintf(os.Stderr, "warning: paired report unavailable (%v) — DEGRADED rollback: ALL ops are MANUAL, no writes\n", reportErr)
 	}
 
-	// Collect zones that have applied adds in the report.
+	// Collect zones that have applied adds or replaces in the report.
 	type rollbackTarget struct {
-		zone    string
-		opType  string
-		opName  string
-		records []accountinventory.PlanRecord
+		zone       string
+		action     string // original action: "add" or "replace"
+		opType     string
+		opName     string
+		records    []accountinventory.PlanRecord // records written by apply (to remove)
+		oldRecords []accountinventory.PlanRecord // pre-apply records (to restore, replace only)
 	}
 	var targets []rollbackTarget
 	if !isDegraded {
 		for _, zr := range applyReport.Zones {
 			for _, op := range zr.Ops {
-				if op.Status == accountinventory.DNSOpApplied && op.Action == accountinventory.ActionAdd {
+				if op.Status != accountinventory.DNSOpApplied {
+					continue
+				}
+				switch op.Action {
+				case accountinventory.ActionAdd:
 					targets = append(targets, rollbackTarget{
 						zone:    zr.Zone,
+						action:  "add",
 						opType:  op.Type,
 						opName:  op.Name,
 						records: op.Records,
+					})
+				case accountinventory.ActionReplace:
+					old := dnsBackupRecordsForOp(backup, zr.Zone, op.Type, op.Name)
+					targets = append(targets, rollbackTarget{
+						zone:       zr.Zone,
+						action:     "replace",
+						opType:     op.Type,
+						opName:     op.Name,
+						records:    op.Records,
+						oldRecords: old,
 					})
 				}
 			}
@@ -585,7 +796,11 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 			fmt.Println("  DEGRADED: all zones are MANUAL (no report available to identify applied ops)")
 		} else {
 			for _, t := range targets {
-				fmt.Printf("  remove  [%s] %s %s (%d record(s))\n", t.zone, t.opType, t.opName, len(t.records))
+				if t.action == "replace" {
+					fmt.Printf("  restore [%s] %s %s (remove %d new, add %d old)\n", t.zone, t.opType, t.opName, len(t.records), len(t.oldRecords))
+				} else {
+					fmt.Printf("  remove  [%s] %s %s (%d record(s))\n", t.zone, t.opType, t.opName, len(t.records))
+				}
 			}
 			if len(targets) == 0 {
 				fmt.Println("  (nothing to roll back: no applied ops in the report)")
@@ -677,11 +892,18 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 			continue
 		}
 
-		// For each target, find the line indexes of matching records.
-		var allLineIndexes []int
+		// For each target, find the line indexes of records to remove and
+		// collect old records to restore (for replace ops).
+		var allRemoveLines []int
+		var allAddRecords []cpanel.MassEditAddRecord
+		needsBatch := false
 		for _, t := range zt {
+			action := accountinventory.ActionAdd
+			if t.action == "replace" {
+				action = accountinventory.ActionReplace
+			}
 			res := accountinventory.DNSApplyOpResult{
-				PlanOp: accountinventory.PlanOp{Action: accountinventory.ActionAdd, Type: t.opType, Name: t.opName, Records: t.records},
+				PlanOp: accountinventory.PlanOp{Action: action, Type: t.opType, Name: t.opName, Records: t.records},
 			}
 			var lines []int
 			for _, planned := range t.records {
@@ -690,22 +912,44 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 					lines = append(lines, line)
 				}
 			}
-			if len(lines) == 0 {
+			if len(lines) == 0 && t.action == "add" {
 				res.Status = accountinventory.DNSOpSkipped
 				res.StatusReason = "records already absent — nothing to remove"
+			} else if len(lines) == 0 && t.action == "replace" {
+				res.Status = accountinventory.DNSOpRefused
+				res.StatusReason = "applied records not found in zone — cannot reverse replace"
+			} else if t.action == "replace" && len(t.oldRecords) == 0 {
+				res.Status = accountinventory.DNSOpRefused
+				res.StatusReason = "backup has no pre-apply records for this rrset — refusing to leave the zone without old or new values"
 			} else {
 				res.Status = accountinventory.DNSOpApplied // placeholder
-				allLineIndexes = append(allLineIndexes, lines...)
+				allRemoveLines = append(allRemoveLines, lines...)
+				if t.action == "replace" {
+					needsBatch = true
+					for _, old := range t.oldRecords {
+						allAddRecords = append(allAddRecords, cpanel.MassEditAddRecord{
+							DName:      dnsCanonToRelative(old.Name, zone),
+							TTL:        old.TTL,
+							RecordType: old.Type,
+							Data:       old.Data,
+						})
+					}
+				}
 			}
 			zr.Ops = append(zr.Ops, res)
 		}
 
-		if len(allLineIndexes) > 0 {
-			_, removeErr := cpanel.MassEditZoneRemove(ctx, client, zone, serial, allLineIndexes)
-			if removeErr != nil {
+		if len(allRemoveLines) > 0 {
+			var writeErr error
+			if needsBatch {
+				_, writeErr = cpanel.MassEditZoneBatch(ctx, client, zone, serial, allRemoveLines, allAddRecords)
+			} else {
+				_, writeErr = cpanel.MassEditZoneRemove(ctx, client, zone, serial, allRemoveLines)
+			}
+			if writeErr != nil {
 				status := accountinventory.DNSOpFailed
-				reason := removeErr.Error()
-				if cpanel.IsStaleSerialError(removeErr) {
+				reason := writeErr.Error()
+				if cpanel.IsStaleSerialError(writeErr) {
 					status = accountinventory.DNSOpRefused
 					reason = "stale serial — zone was modified since fetch"
 				}
@@ -716,7 +960,6 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 					}
 				}
 			} else {
-				// Verify-after: re-fetch and check records are gone.
 				freshRecords, _, verifyErr := cpanel.FetchDNSZoneRaw(ctx, client, zone)
 				if verifyErr != nil {
 					for i := range zr.Ops {
@@ -730,6 +973,7 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 						if zr.Ops[i].Status != accountinventory.DNSOpApplied {
 							continue
 						}
+						// New records (written by apply) must be gone.
 						stillPresent := false
 						for _, rec := range t.records {
 							if dnsRecordPresent(rec, freshRecords, zone) {
@@ -740,8 +984,22 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 						if stillPresent {
 							zr.Ops[i].Status = accountinventory.DNSOpFailed
 							zr.Ops[i].StatusReason = "remove reported success but records are still present"
+							continue
 						}
-						// else: stays applied (records are gone).
+						// For replace: old records must be restored.
+						if t.action == "replace" && len(t.oldRecords) > 0 {
+							allRestored := true
+							for _, old := range t.oldRecords {
+								if !dnsRecordPresent(old, freshRecords, zone) {
+									allRestored = false
+									break
+								}
+							}
+							if !allRestored {
+								zr.Ops[i].Status = accountinventory.DNSOpFailed
+								zr.Ops[i].StatusReason = "old records not observable after restore"
+							}
+						}
 					}
 				}
 			}
@@ -755,6 +1013,51 @@ func runDNSRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFlag
 	return finishDNSReport(report, outJSON, outMD)
 }
 
+// dnsBackupRecordsForOp extracts the pre-apply records for a specific
+// type+name from the backup zone. Used by replace rollback to know what
+// values to restore.
+func dnsBackupRecordsForOp(backup accountinventory.DNSApplyBackup, zone, opType, opName string) []accountinventory.PlanRecord {
+	canonName := strings.ToLower(opName)
+	for _, bz := range backup.Zones {
+		if bz.Zone != zone {
+			continue
+		}
+		var out []accountinventory.PlanRecord
+		for _, r := range bz.Records {
+			if !strings.EqualFold(r.Type, opType) {
+				continue
+			}
+			if dnsCanonLiveName(r.Name, zone) != canonName {
+				continue
+			}
+			out = append(out, backupEntryToPlanRecord(r, zone))
+		}
+		return out
+	}
+	return nil
+}
+
+// backupEntryToPlanRecord converts a backup record to PlanRecord for
+// use in mass_edit_zone restore.
+func backupEntryToPlanRecord(entry accountinventory.DNSRecordEntry, zone string) accountinventory.PlanRecord {
+	rec := accountinventory.PlanRecord{
+		Name: dnsCanonLiveName(entry.Name, zone),
+		Type: entry.Type,
+		TTL:  entry.TTL,
+	}
+	switch entry.Type {
+	case "A", "AAAA":
+		rec.Data = []string{entry.Address}
+	case "CNAME":
+		rec.Data = []string{dnsCanonLiveName(entry.Target, zone)}
+	case "MX":
+		rec.Data = []string{fmt.Sprintf("%d", entry.Priority), dnsCanonLiveName(entry.Exchange, zone)}
+	case "TXT":
+		rec.Data = []string{entry.TxtData}
+	}
+	return rec
+}
+
 // findRecordLine finds the line index of a planned record in the live
 // zone. Returns -1 if not found.
 func findRecordLine(planned accountinventory.PlanRecord, live []cpanel.DNSRecord, zone string) int {
@@ -763,11 +1066,7 @@ func findRecordLine(planned accountinventory.PlanRecord, live []cpanel.DNSRecord
 		if !strings.EqualFold(f.Type, planned.Type) {
 			continue
 		}
-		fCanon := strings.ToLower(f.Name)
-		if !strings.HasSuffix(fCanon, ".") {
-			fCanon = fCanon + "." + strings.ToLower(zone) + "."
-		}
-		if fCanon != canonName {
+		if dnsCanonLiveName(f.Name, zone) != canonName {
 			continue
 		}
 		if dnsDataMatch(planned, f) {

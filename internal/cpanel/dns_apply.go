@@ -126,6 +126,35 @@ func ExtractSOASerial(raw []byte) (string, error) {
 	return "", fmt.Errorf("no SOA record found in zone response")
 }
 
+// MassEditZoneBatch combines remove and add operations in a SINGLE
+// mass_edit_zone call (v2 replace design: removes processed first,
+// then adds, in one zone-file write). When removeLines is empty it is
+// equivalent to MassEditZoneAdd; when addRecords is empty it is
+// equivalent to MassEditZoneRemove.
+func MassEditZoneBatch(ctx context.Context, c Runner, zone, serial string, removeLines []int, addRecords []MassEditAddRecord) (MassEditResult, error) {
+	args := map[string]string{
+		"zone":   zone,
+		"serial": serial,
+	}
+	for i, idx := range removeLines {
+		args[fmt.Sprintf("remove-%d", i)] = strconv.Itoa(idx)
+	}
+	for i, r := range addRecords {
+		b, err := json.Marshal(r)
+		if err != nil {
+			return MassEditResult{}, fmt.Errorf("marshal add record %d: %w", i, err)
+		}
+		args[fmt.Sprintf("add-%d", i)] = string(b)
+	}
+	data, err := RunUAPI[MassEditResult](ctx, c, "DNS", "mass_edit_zone", args)
+	if err != nil {
+		return MassEditResult{}, err
+	}
+	logx.Debug("MassEditZoneBatch(%s, serial=%s): %d remove(s) + %d add(s), new_serial=%s",
+		zone, serial, len(removeLines), len(addRecords), data.NewSerial)
+	return data, nil
+}
+
 // IsStaleSerialError reports whether a mass_edit_zone error is the
 // stale-serial refusal (6D-pre fact 3).
 func IsStaleSerialError(err error) bool {
