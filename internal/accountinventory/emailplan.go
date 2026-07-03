@@ -484,12 +484,16 @@ func normalizeAutoresponderBody(b string) string {
 	return strings.TrimRight(b, "\n") + "\n"
 }
 
-// autoresponderCharset defaults an empty charset to the cPanel default.
+// autoresponderCharset defaults an empty charset to the cPanel default
+// and lowercases it: a "UTF-8" vs "utf-8" casing artifact across calls
+// must never break equivalence (go-review 2B-2 finding 2 — worst case it
+// would spuriously refuse the rollback of the tool's own create).
 func autoresponderCharset(c string) string {
-	if strings.TrimSpace(c) == "" {
+	c = strings.ToLower(strings.TrimSpace(c))
+	if c == "" {
 		return "utf-8"
 	}
-	return strings.TrimSpace(c)
+	return c
 }
 
 // autorespondersEquivalent reports whether two COLLECTED autoresponders

@@ -229,9 +229,8 @@ func fetchAutorespondersWithRaw(ctx context.Context, client cpanel.Runner, domai
 			entry.Start = int64(det.Start)
 			entry.Stop = int64(det.Stop)
 			entry.Charset = det.Charset
-			if det.Subject != "" {
-				entry.Subject = det.Subject
-			}
+			// Verbatim get subject, even empty (go-review 2B-2 finding 3).
+			entry.Subject = det.Subject
 			entry.BodyCollected = true
 			gets[addr] = json.RawMessage(raw)
 		}
@@ -392,9 +391,33 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 		case op.Section == accountinventory.EmailSectionDefaultAddress && op.Action == accountinventory.EmailActionSet:
 			writeErr = cpanel.SetDefaultAddress(ctx, client, op.Domain, op.Value)
 		case op.Section == accountinventory.EmailSectionAutoresponders && op.Action == accountinventory.EmailActionCreate:
-			// EvaluateEmailOp already refused a payload-less op; the guard
-			// proved the address empty, so the upsert cannot destroy
-			// anything inside the accepted TOCTOU window.
+			// add_auto_responder UPSERTS (2B-2-pre fact 7), so the batch
+			// snapshot from the run start is NOT enough: by the time this
+			// op reaches the front of the sequential write loop the
+			// address may have gained somebody's autoresponder, and the
+			// verify-after can only see the post-write state. Collapse
+			// the guard-to-write window with a fresh per-address re-check
+			// IMMEDIATELY before the write (go-review 2B-2 finding 1).
+			freshEntries, _, _, ferr := fetchAutorespondersWithRaw(ctx, client, op.Domain)
+			if ferr != nil {
+				results[w.idx].Status = accountinventory.EmailOpRefused
+				results[w.idx].StatusReason = "pre-write autoresponder re-check failed: " + ferr.Error()
+				continue
+			}
+			miniLive := accountinventory.EmailLiveState{
+				AutorespondersByDomain:  map[string][]accountinventory.AutoresponderEntry{op.Domain: freshEntries},
+				AutoresponderListErrors: map[string]string{},
+			}
+			decision, reason := accountinventory.EvaluateEmailOp(op, miniLive, plan.DestinationUser)
+			switch decision {
+			case accountinventory.EmailDecisionAlready:
+				results[w.idx].Status = accountinventory.EmailOpAlready
+				continue
+			case accountinventory.EmailDecisionRefused:
+				results[w.idx].Status = accountinventory.EmailOpRefused
+				results[w.idx].StatusReason = reason
+				continue
+			}
 			a := op.Autoresponder
 			writeErr = cpanel.AddAutoresponder(ctx, client, op.Domain, op.Email, cpanel.AutoresponderWrite{
 				From: a.From, Subject: a.Subject, Body: a.Body,

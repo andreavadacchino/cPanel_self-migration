@@ -148,3 +148,50 @@ func TestCollectAutoresponderGetFailureDegradesHonestly(t *testing.T) {
 		t.Errorf("expected an 'autoresponder body' warning, got %v", result.Source.Warnings)
 	}
 }
+
+// go-review 2B-2 finding 4 (LOW): a forwarders listing failure for one
+// domain must NOT silently lose that domain's autoresponder coverage —
+// the two collections are independent.
+func TestCollectAutorespondersSurviveForwarderFailure(t *testing.T) {
+	runner := minimalAutoresponderRunner(t,
+		loadFixture(t, "email_autoresponders_realserver.json"),
+		loadFixture(t, "email_get_autoresponder_realserver.json"))
+	delete(runner.responses, "Email list_forwarders") // forwarders now fail
+
+	result, err := Collect(context.Background(), runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(result.Source.Autoresponders) == 0 {
+		t.Fatal("autoresponders lost because the forwarders listing failed — the collections must be independent")
+	}
+	warned := false
+	for _, w := range result.Source.Warnings {
+		if contains(w, "forwarders") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Errorf("expected a forwarders warning, got %v", result.Source.Warnings)
+	}
+}
+
+// go-review 2B-2 finding 3 (LOW): once get_auto_responder succeeds, its
+// subject is authoritative VERBATIM — even when empty. Keeping the stale
+// list subject would make equivalence compare against a value that is not
+// the live one.
+func TestCollectAutoresponderGetSubjectIsVerbatim(t *testing.T) {
+	get := []byte(`{"result":{"status":1,"data":{"is_html":0,"from":"F","start":null,"stop":null,"subject":"","charset":"utf-8","interval":8,"body":"b\n"}}}`)
+	runner := minimalAutoresponderRunner(t,
+		loadFixture(t, "email_autoresponders_realserver.json"), get)
+
+	result, err := Collect(context.Background(), runner, nil, HostInfo{User: "u", Host: "h"}, HostInfo{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	for _, a := range result.Source.Autoresponders {
+		if a.BodyCollected && a.Subject != "" {
+			t.Errorf("subject = %q, want the verbatim (empty) get subject, not the stale list one", a.Subject)
+		}
+	}
+}

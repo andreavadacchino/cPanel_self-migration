@@ -120,17 +120,20 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 	}
 
 	for _, d := range domains {
+		// Forwarders and autoresponders are INDEPENDENT collections: a
+		// failure of one listing must not silently lose the other
+		// (go-review 2B-2 finding 4).
 		fwds, err := cpanel.ListForwarders(ctx, r, d.Name)
 		if err != nil {
 			inv.Warnings = append(inv.Warnings, fmt.Sprintf("forwarders for %s unavailable: %v", d.Name, err))
-			continue
-		}
-		for _, f := range fwds {
-			inv.Forwarders = append(inv.Forwarders, ForwarderEntry{
-				Source:      f.Dest,
-				Destination: f.Forward,
-				Domain:      d.Name,
-			})
+		} else {
+			for _, f := range fwds {
+				inv.Forwarders = append(inv.Forwarders, ForwarderEntry{
+					Source:      f.Dest,
+					Destination: f.Forward,
+					Domain:      d.Name,
+				})
+			}
 		}
 
 		ars, err := cpanel.ListAutoresponders(ctx, r, d.Name)
@@ -167,9 +170,10 @@ func collectSide(ctx context.Context, r cpanel.Runner, info HostInfo, side strin
 				entry.Start = int64(det.Start)
 				entry.Stop = int64(det.Stop)
 				entry.Charset = det.Charset
-				if det.Subject != "" {
-					entry.Subject = det.Subject
-				}
+				// The get subject is authoritative VERBATIM (even empty):
+				// equivalence must compare the live value, not the stale
+				// list one (go-review 2B-2 finding 3).
+				entry.Subject = det.Subject
 				entry.BodyCollected = true
 			}
 			inv.Autoresponders = append(inv.Autoresponders, entry)

@@ -296,6 +296,13 @@ func forwarderItems(in []ForwarderEntry) []keyedItem {
 func autoresponderItems(in []AutoresponderEntry) []keyedItem {
 	out := make([]keyedItem, 0, len(in))
 	for _, e := range in {
+		// Collected bodies compare under the same trailing-newline storage
+		// normalization the plan uses (2B-2-pre fact 5): a difference the
+		// plan treats as skip-equivalent must not surface as changed here.
+		body := e.Body
+		if e.BodyCollected {
+			body = normalizeAutoresponderBody(body)
+		}
 		out = append(out, keyedItem{
 			key: e.Domain + " | " + e.Email,
 			fields: map[string]string{
@@ -307,11 +314,11 @@ func autoresponderItems(in []AutoresponderEntry) []keyedItem {
 				// collected-vs-not asymmetry (pre-2B-2 artifact on one
 				// side) is visible instead of silently equal.
 				"from":           e.From,
-				"body":           e.Body,
+				"body":           body,
 				"is_html":        strconv.Itoa(e.IsHTML),
 				"start":          strconv.FormatInt(e.Start, 10),
 				"stop":           strconv.FormatInt(e.Stop, 10),
-				"charset":        e.Charset,
+				"charset":        autoresponderCharset(e.Charset),
 				"body_collected": strconv.FormatBool(e.BodyCollected),
 			},
 		})

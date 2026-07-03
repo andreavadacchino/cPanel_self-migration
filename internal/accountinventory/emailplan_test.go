@@ -636,3 +636,24 @@ func TestEmailPlanPolicyContext(t *testing.T) {
 		t.Errorf("policy must never gate: action = %q", op.Action)
 	}
 }
+
+// go-review 2B-2 finding 2 (MEDIUM): charset equality must be
+// case-insensitive — a "UTF-8" vs "utf-8" casing artifact across calls
+// must never break equivalence (worst case it would spuriously refuse the
+// rollback of the tool's own create).
+func TestEmailPlanAutoresponderCharsetCaseInsensitive(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	a := srcAutoresponder("info@example.com", "example.com")
+	a.Charset = "UTF-8"
+	src.Autoresponders = []AutoresponderEntry{a}
+	dest := epInventory("destination", "acct", "example.com")
+	d := srcAutoresponder("info@example.com", "example.com")
+	d.Charset = "utf-8"
+	dest.Autoresponders = []AutoresponderEntry{d}
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "autoresponders", "info@example.com")
+	if op.Action != EmailActionSkip {
+		t.Fatalf("action = %q (reason %q), want skip (charset differs only by case)", op.Action, op.Reason)
+	}
+}

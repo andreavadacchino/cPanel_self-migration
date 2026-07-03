@@ -554,3 +554,21 @@ func TestDiffAutoresponderBodyCollectedAsymmetry(t *testing.T) {
 		t.Fatal("expected at least one changed field for the body_collected asymmetry")
 	}
 }
+
+// go-review 2B-2 finding 5 (LOW): the diff must apply the same
+// trailing-newline body normalization as the plan for COLLECTED bodies —
+// a difference the plan treats as skip-equivalent must not surface as a
+// changed finding in inventory diff.
+func TestDiffAutoresponderBodyTrailingNewlineNotChanged(t *testing.T) {
+	src := baseInventory()
+	dest := baseInventory()
+	src.Autoresponders[0].Body = "Testo.\n"
+	src.Autoresponders[0].BodyCollected = true
+	dest.Autoresponders[0].Body = "Testo.\n\n\n"
+	dest.Autoresponders[0].BodyCollected = true
+
+	sec := sectionOf(t, DiffInventories(src, dest), "autoresponders")
+	if len(sec.Changed) != 0 {
+		t.Fatalf("changed = %+v, want none (trailing-newline-only difference)", sec.Changed)
+	}
+}
