@@ -765,7 +765,6 @@ func TestEmailApplyCmdAutoresponderRollbackRefusesDiverged(t *testing.T) {
 	}
 }
 
-
 func TestEmailApplyCmdAutoresponderMidRunRaceIsRefused(t *testing.T) {
 	// go-review 2B-2 round 1, finding 1 (HIGH): the batch live snapshot at
 	// run start can be stale by the time an op reaches the sequential
