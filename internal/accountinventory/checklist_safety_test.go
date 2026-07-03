@@ -25,6 +25,8 @@ func TestChecklistSourcesAreOfflineByConstruction(t *testing.T) {
 		"store_filter", "delete_filter", "setmxcheck",
 		// cron writer (PR 2A): the checklist stays offline.
 		"InstallCrontab", "crontab -",
+		// DNS writer (PR 6D): the checklist stays offline.
+		"mass_edit_zone",
 	}
 	files, err := filepath.Glob("checklist*.go")
 	if err != nil {

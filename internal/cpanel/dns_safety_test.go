@@ -13,11 +13,10 @@ import (
 	"testing"
 )
 
-// dnsWriteForbidden are the DNS write primitives no read-only source may
-// mention: UAPI mass_edit_zone / swap_ip_in_zones, the API2 ZoneEdit
-// record writers, and raw zone-file paths. PR 6D (dns apply — the only
-// writer) will have to consciously amend this list with an explicit
-// allowlist for its own files; that is the point of the test.
+// dnsWriteForbidden are the DNS write primitives no source may mention
+// outside the allowlisted writer files: UAPI mass_edit_zone /
+// swap_ip_in_zones, the API2 ZoneEdit record writers, and raw zone-file
+// paths. PR 6D consciously adds the first per-file allowlist.
 var dnsWriteForbidden = []string{
 	"mass_edit_zone",
 	"swap_ip_in_zones",
@@ -27,9 +26,15 @@ var dnsWriteForbidden = []string{
 	"remove_zone_record",
 }
 
-func TestNoDNSWriteFunctions(t *testing.T) {
-	forbidden := dnsWriteForbidden
+// dnsWriteAllowlist names the ONLY files that may reference the DNS
+// write verbs — the writer primitives file. When the `dns apply`
+// command file is created, it must be added here in the same PR.
+// Amending this list is a conscious, reviewed act.
+var dnsWriteAllowlist = map[string]bool{
+	"internal/cpanel/dns_apply.go": true,
+}
 
+func TestNoDNSWriteFunctions(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
@@ -39,14 +44,17 @@ func TestNoDNSWriteFunctions(t *testing.T) {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
 		}
+		if dnsWriteAllowlist["internal/cpanel/"+f] {
+			continue
+		}
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
 		src := string(b)
-		for _, pattern := range forbidden {
+		for _, pattern := range dnsWriteForbidden {
 			if strings.Contains(src, pattern) {
-				t.Errorf("%s contains forbidden DNS write pattern %q", f, pattern)
+				t.Errorf("%s contains forbidden DNS write pattern %q (allowlist: dns_apply.go only)", f, pattern)
 			}
 		}
 	}
@@ -70,7 +78,11 @@ func TestNoDNSWriteFunctions(t *testing.T) {
 // module/function arguments — the concatenation itself becomes a failure.
 func TestNoDNSWritePatternsModuleWide(t *testing.T) {
 	root := "../.." // module root from internal/cpanel
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -83,6 +95,17 @@ func TestNoDNSWritePatternsModuleWide(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(rootAbs, abs)
+		if err != nil {
+			return err
+		}
+		if dnsWriteAllowlist[filepath.ToSlash(rel)] {
+			return nil
+		}
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
@@ -90,7 +113,7 @@ func TestNoDNSWritePatternsModuleWide(t *testing.T) {
 		fset := token.NewFileSet()
 		f := fset.AddFile(path, fset.Base(), len(b))
 		var s goscanner.Scanner
-		s.Init(f, b, nil, 0) // mode 0: comments are not returned
+		s.Init(f, b, nil, 0)
 		for {
 			pos, tok, lit := s.Scan()
 			if tok == token.EOF {
@@ -101,7 +124,7 @@ func TestNoDNSWritePatternsModuleWide(t *testing.T) {
 			}
 			for _, pattern := range dnsWriteForbidden {
 				if strings.Contains(lit, pattern) {
-					t.Errorf("%s: %s token %q contains forbidden DNS write pattern %q",
+					t.Errorf("%s: %s token %q contains forbidden DNS write pattern %q (allowlist: dns_apply.go only)",
 						fset.Position(pos), tok, lit, pattern)
 				}
 			}
@@ -169,6 +192,18 @@ func TestDNSAPICallsUseLiteralNames(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("walk: %v", err)
+	}
+}
+
+// TestDNSWriteAllowlistFilesExist pins the allowlist against silent rot:
+// an allowlisted path that no longer exists means the writer moved and
+// the scan is guarding the wrong file (mirror of email test).
+func TestDNSWriteAllowlistFilesExist(t *testing.T) {
+	for rel := range dnsWriteAllowlist {
+		p := filepath.Join("../..", filepath.FromSlash(rel))
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("allowlisted file %s does not exist: %v", rel, err)
+		}
 	}
 }
 

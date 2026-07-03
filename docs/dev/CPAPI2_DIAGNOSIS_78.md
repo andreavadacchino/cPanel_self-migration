@@ -1,6 +1,62 @@
 # Diagnosi cpapi2 su .78 — 2026-07-03
 
-## Sintesi
+## ✅ RISOLTO — 2026-07-03 (sessione root SSH)
+
+`cpapi2` ora **funziona** per `giorginisposi` (read + write `setmxcheck` +
+rollback verificati). Il debito **setmxcheck è CHIUSO**.
+
+### Causa radice REALE (NON era la jailshell)
+
+La shell di `giorginisposi` è `/bin/bash`, **non jailshell**. Il vero
+isolamento è **CageFS** (Mode "Enable All"). Il binario
+`/usr/local/cpanel/cpanel` **esiste** (ripristinato 03/07 04:02) ma
+**CageFS non lo espone** nel filesystem virtualizzato dell'utente.
+Diagnosi a strati (via `strace`):
+
+1. `/usr/local/cpanel/cpanel` assente nello skeleton → `No such file`
+   (la config `conf.d/cpanel.cfg` espone `bin/`, `*.pm`, `Cpanel/` ma
+   NON il binario principale)
+2. Esposto il binario → `EPERM` + "Locale needs to be compiled": i `.cdb`
+   sono in `/var/cpanel/locale/`, non esposto in CageFS
+3. Esposti i locale → `EPERM`: `/usr/local/cpanel/cpanel.lisc` (licenza)
+   assente → il binario renderizza `licenseerror_cpanel.tmpl` ed esce 1
+4. Esposta la licenza → **ancora EPERM**: mancano `cpsanitycheck.so`,
+   `/var/cpanel/users/giorginisposi`, e **85 accessi file falliti** totali
+
+**Conclusione:** il binario `cpanel` **non è progettato per girare da un
+utente cageato** — scelta di design CloudLinux (le API utente passano da
+`cpsrvd`). Esporre file uno per uno è un rabbit hole non manutenibile (si
+rompe a ogni update cPanel).
+
+### Fix applicato
+
+`cagefsctl --disable giorginisposi` — l'utente esce da CageFS e vede il
+filesystem reale. `cpapi2` funziona in modo robusto e **persistente**.
+- Riduce l'isolamento CageFS del **solo** `giorginisposi` (accettabile su
+  sacrificale), **reversibile** con `cagefsctl --enable giorginisposi`.
+- Le esposizioni CageFS custom usate in diagnosi sono state **rimosse**
+  (config CageFS standard ripristinata).
+
+### Verifica (tutto PASS)
+- `cpapi2 Email listmxs` → JSON valido
+- `cpapi2 Email setmxcheck mxcheck=local` → `result:1`, verificato `local`;
+  rollback a `auto` verificato
+- `uapi Email list_mxs` → OK
+- Peer NS cluster (`-dnsrole` autoritativo): `standalone` per entrambi
+  (136.144.242.119, 185.17.106.73)
+
+### Implicazioni per il tool
+- **setmxcheck NON è più BLOCCATO**: `RunAPI2` via SSH `cpapi2` funziona
+  su .78 per l'account migrato (CageFS disabilitato).
+- ⚠️ **Generalizzazione**: il fix vale per QUESTO utente. Su un server di
+  destinazione con CageFS attivo, ogni account migrato che deve usare
+  `cpapi2` da SSH richiederebbe lo stesso `--disable`, OPPURE il fallback
+  **HTTP JSON API (2083)** che è **CageFS-agnostico** (vedi sotto). Per il
+  tool, l'HTTP JSON resta la strada più robusta e portabile.
+
+---
+
+## Sintesi (diagnosi storica — 2026-07-03 mattina, superata)
 
 `cpapi2` non funziona dalla jailshell dell'utente `giorginisposi` su .78.
 

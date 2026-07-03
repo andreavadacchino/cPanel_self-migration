@@ -69,6 +69,38 @@ The 2B-3 filter and routing code is proven at the unit level and by
 individual primitive byte-verification. The end-to-end smoke gap is
 honest and bounded: the only un-exercised path is the integration through
 the apply pipeline, which follows the same pattern as the live-smoked
-autoresponder pipeline. A full end-to-end smoke should be run when:
-(a) a source account with filters is available, or (b) the cpapi2 issue
-is resolved for the routing write.
+autoresponder pipeline.
+
+## Update 2026-07-03 (6D session): routing + filter debts
+
+### SetMXCheck routing — cpapi2 FIXED, debt status
+
+**cpapi2 fixed**: the root cause was CageFS isolation (not jailshell).
+Fix: `cagefsctl --disable giorginisposi` — cpapi2 now works. The root
+session verified `cpapi2 Email setmxcheck mxcheck=local` → result:1 and
+rollback to `auto`. See `CPAPI2_DIAGNOSIS_78.md`.
+
+However, the **SetMXCheck via the TOOL's codepath** (RunAPI2 → cpapi2
+via SSH in the `email apply` pipeline) has NOT been exercised end-to-end
+yet. The root session verified the CLI primitive directly, not through
+the Go tool's email apply pipeline. The routing source and destination
+for giorginisposi.it are both `local` → the plan produces a `skip` op →
+no routing write occurs. A full routing write smoke requires either
+(a) a source account whose routing differs from the destination, or
+(b) a manual test plan forcing a set op. Declared as a bounded residual:
+the individual primitive is proven, the Go codepath follows the
+default_address pattern exactly.
+
+### Filter write-path — NOT achievable
+
+A fresh read of giorginisposi@.193 (authorized, 2026-07-03) found
+**0 email filters** (account-level and per-mailbox). The StoreFilter
+write-path smoke is NOT achievable with this account. Writer is
+unit-tested + byte-verified individually (PR2B_3_PRE_CAPTURES.md).
+
+### Cron write-path — NOT achievable
+
+giorginisposi@.193 has **0 cron jobs** (confirmed both by the Fase 0.2
+inventory and the fresh 2026-07-03 read). The cron write-path smoke
+is NOT achievable with this account. Writer is unit-tested + byte-verified
+individually (PR2A_PRE_CAPTURES.md).
