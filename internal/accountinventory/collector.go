@@ -219,26 +219,31 @@ func collectCron(ctx context.Context, r cpanel.Runner) CronSection {
 			warnings = []string{}
 		}
 		sec.Jobs = append(sec.Jobs, CronJobEntry{
-			Type:            j.Type,
-			Minute:          j.Minute,
-			Hour:            j.Hour,
-			DayOfMonth:      j.DayOfMonth,
-			Month:           j.Month,
-			DayOfWeek:       j.DayOfWeek,
-			Macro:           j.Macro,
-			CommandRedacted: j.CommandRedacted,
-			CommandSHA256:   j.CommandSHA256,
-			RawLineSHA256:   j.RawLineSHA256,
-			Enabled:         j.Enabled,
-			LineNumber:      j.LineNumber,
-			Warnings:        warnings,
+			Type:             j.Type,
+			Minute:           j.Minute,
+			Hour:             j.Hour,
+			DayOfMonth:       j.DayOfMonth,
+			Month:            j.Month,
+			DayOfWeek:        j.DayOfWeek,
+			Macro:            j.Macro,
+			CommandRedacted:  j.CommandRedacted,
+			CommandClear:     j.CommandRaw,
+			CommandSHA256:    j.CommandSHA256,
+			RawLineSHA256:    j.RawLineSHA256,
+			RawLine:          j.RawLine,
+			Enabled:          j.Enabled,
+			LineNumber:       j.LineNumber,
+			Warnings:         warnings,
+			CommandCollected: j.CommandRaw != "",
 		})
 	}
 	for _, e := range res.Environment {
 		sec.Environment = append(sec.Environment, CronEnvEntry{
-			Name:          e.Name,
-			ValueRedacted: e.ValueRedacted,
-			LineNumber:    e.LineNumber,
+			Name:           e.Name,
+			ValueRedacted:  e.ValueRedacted,
+			ValueClear:     e.ValueRaw,
+			LineNumber:     e.LineNumber,
+			ValueCollected: e.ValueRaw != "",
 		})
 	}
 	return sec

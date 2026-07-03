@@ -139,6 +139,15 @@ type DNSSection struct {
 	Zones []DNSZoneResult `json:"zones"`
 }
 
+// CronJobEntry is one crontab job. The redacted fields are the display
+// and diff contract (unchanged). The clear fields (2A, option A: user
+// gate decision) carry the raw, un-redacted command for the cron apply
+// writer — redacted commands cannot be installed via `crontab -`.
+// CommandCollected is the honesty marker (pattern: BodyCollected,
+// RulesCollected): true means the raw command was collected from the
+// crontab; false means only redacted fields are available (pre-2A
+// artifact or collection failure). Display (diff, policy, checklist,
+// Markdown) continues to use the redacted fields exclusively.
 type CronJobEntry struct {
 	Type            string   `json:"type"`
 	Minute          string   `json:"minute,omitempty"`
@@ -148,17 +157,28 @@ type CronJobEntry struct {
 	DayOfWeek       string   `json:"day_of_week,omitempty"`
 	Macro           string   `json:"macro,omitempty"`
 	CommandRedacted string   `json:"command_redacted"`
+	CommandClear    string   `json:"command_clear,omitempty"`
 	CommandSHA256   string   `json:"command_sha256"`
 	RawLineSHA256   string   `json:"raw_line_sha256"`
+	RawLine         string   `json:"raw_line,omitempty"`
 	Enabled         bool     `json:"enabled"`
 	LineNumber      int      `json:"line_number"`
 	Warnings        []string `json:"warnings"`
+	// CommandCollected is true when the raw (un-redacted) command was
+	// collected from the crontab (2A). The cron plan gates on this
+	// before proving install-ability.
+	CommandCollected bool `json:"command_collected,omitempty"`
 }
 
+// CronEnvEntry is one crontab environment assignment. ValueClear
+// carries the raw value alongside the redacted form (same pattern as
+// CommandClear). ValueCollected is the honesty marker.
 type CronEnvEntry struct {
-	Name          string `json:"name"`
-	ValueRedacted string `json:"value_redacted"`
-	LineNumber    int    `json:"line_number"`
+	Name           string `json:"name"`
+	ValueRedacted  string `json:"value_redacted"`
+	ValueClear     string `json:"value_clear,omitempty"`
+	LineNumber     int    `json:"line_number"`
+	ValueCollected bool   `json:"value_collected,omitempty"`
 }
 
 // CronSection deviates from ConfigSection on purpose: crontab is fetched by

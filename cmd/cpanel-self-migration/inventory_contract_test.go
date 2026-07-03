@@ -237,11 +237,15 @@ func TestAccountInventoryContract(t *testing.T) {
 		t.Error("dns zones empty on happy path")
 	}
 
-	// 4. Security: the planted secret must not appear in ANY artifact —
-	// nor may the sha256 of the raw command (oracle check).
+	// 4. Security: the planted secret must not appear in DISPLAY artifacts
+	// (report.md, events.jsonl) nor in the redacted fields of the JSON.
+	// Since 2A (option A: commands in clear), the inventory JSON carries
+	// command_clear/value_clear for the cron writer — the raw command IS
+	// present there by design. The sha256 oracle check applies to the
+	// redacted-hash fields only (command_sha256 is over the redacted text).
 	rawHash := sha256.Sum256([]byte(plantedRawCommand))
 	oracleHex := hex.EncodeToString(rawHash[:])
-	for _, f := range []string{"inventory_source.json", "inventory_report.md", "report.json", "events.jsonl"} {
+	for _, f := range []string{"inventory_report.md", "report.json", "events.jsonl"} {
 		b, err := os.ReadFile(filepath.Join(outDir, f))
 		if err != nil {
 			t.Fatal(err)
@@ -252,6 +256,45 @@ func TestAccountInventoryContract(t *testing.T) {
 		}
 		if strings.Contains(s, oracleHex) {
 			t.Errorf("%s contains the sha256 of the RAW cron command (brute-force oracle)", f)
+		}
+	}
+	// The inventory JSON carries command_clear (2A, option A), so the
+	// planted secret IS present in the raw JSON. Verify the REDACTED
+	// fields do not leak it: parse the JSON and check each cron entry's
+	// command_redacted and value_redacted individually.
+	invBytes, err := os.ReadFile(filepath.Join(outDir, "inventory_source.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	invStr := string(invBytes)
+	if strings.Contains(invStr, oracleHex) {
+		t.Error("inventory_source.json contains the sha256 of the RAW command (oracle leak)")
+	}
+	if !strings.Contains(invStr, "command_clear") {
+		t.Error("inventory_source.json missing command_clear field (2A option A)")
+	}
+	// Parse and verify redacted fields are clean (C1 fix).
+	var invJSON struct {
+		Cron struct {
+			Jobs []struct {
+				CommandRedacted string `json:"command_redacted"`
+			} `json:"jobs"`
+			Environment []struct {
+				ValueRedacted string `json:"value_redacted"`
+			} `json:"environment"`
+		} `json:"cron"`
+	}
+	if err := json.Unmarshal(invBytes, &invJSON); err != nil {
+		t.Fatalf("parse inventory JSON: %v", err)
+	}
+	for i, j := range invJSON.Cron.Jobs {
+		if strings.Contains(j.CommandRedacted, plantedSecret) {
+			t.Errorf("cron.jobs[%d].command_redacted leaks the planted secret", i)
+		}
+	}
+	for i, e := range invJSON.Cron.Environment {
+		if strings.Contains(e.ValueRedacted, plantedSecret) {
+			t.Errorf("cron.environment[%d].value_redacted leaks the planted secret", i)
 		}
 	}
 

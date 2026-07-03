@@ -23,6 +23,8 @@ func TestChecklistSourcesAreOfflineByConstruction(t *testing.T) {
 		"add_forwarder", "set_default_address", "delete_forwarder",
 		"add_auto_responder", "delete_auto_responder",
 		"store_filter", "delete_filter", "setmxcheck",
+		// cron writer (PR 2A): the checklist stays offline.
+		"InstallCrontab", "crontab -",
 	}
 	files, err := filepath.Glob("checklist*.go")
 	if err != nil {
