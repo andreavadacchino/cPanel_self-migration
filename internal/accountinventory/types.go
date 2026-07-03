@@ -201,15 +201,48 @@ type DefaultAddressEntry struct {
 	DefaultAddress string `json:"default_address"`
 }
 
-// EmailFilterEntry is one email filter (PR 7E). Counts only: rule and
-// action bodies are unproven shapes and may embed personal patterns, so
-// they never reach any artifact.
+// FilterRule is one rule of an email filter (2B-3-pre fact 1–3). The
+// opt field is always null in all observed responses but is retained for
+// completeness. match_type (AND/OR join between rules) is NOT returned
+// by list_filters or get_filter — see 2B-3-pre fact 10.
+type FilterRule struct {
+	Part  string `json:"part"`
+	Match string `json:"match"`
+	Opt   any    `json:"opt"`
+	Val   string `json:"val"`
+}
+
+// FilterAction is one action of an email filter. Dest is null (nil
+// pointer) for actions that have no destination (fail, finish).
+type FilterAction struct {
+	Action string  `json:"action"`
+	Dest   *string `json:"dest"`
+}
+
+// EmailFilterEntry is one email filter (PR 7E, extended in 2B-3). Since
+// the user decision (2B-3 gate: option A), rules and actions are stored
+// in clear in the inventory for round-trip fidelity. RulesCollected is
+// the honesty marker: true means get_filter succeeded and the Rules/
+// Actions slices are trustworthy; false means the entry carries
+// list-level facts only (pre-2B-3 artifact, or a per-filter get failed)
+// and no equality over the content can be proven. RuleCount/ActionCount
+// are kept for backward compatibility with pre-2B-3 artifacts.
+//
+// ⚠️ match_type (AND/OR join between rules) is NOT round-trippable:
+// the cPanel API does not return it (2B-3-pre fact 10). Single-rule
+// filters are safe (match_type irrelevant); multi-rule filters must be
+// classified MANUAL by the plan.
 type EmailFilterEntry struct {
 	Account     string `json:"account"` // "" = account-level (all mail)
 	FilterName  string `json:"filter_name"`
 	Enabled     bool   `json:"enabled"`
 	RuleCount   int    `json:"rule_count"`
 	ActionCount int    `json:"action_count"`
+	// Rules and Actions carry the full filter content (2B-3, option A).
+	// Populated when RulesCollected is true.
+	Rules          []FilterRule   `json:"rules,omitempty"`
+	Actions        []FilterAction `json:"actions,omitempty"`
+	RulesCollected bool           `json:"rules_collected,omitempty"`
 }
 
 // RedirectEntry is one redirect/rewrite harvested from .htaccess by

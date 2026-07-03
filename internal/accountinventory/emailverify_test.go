@@ -33,6 +33,10 @@ func evLive(fwds []ForwarderEntry, defaults []DefaultAddressEntry) EmailLiveStat
 		ForwarderListErrors: map[string]string{},
 		Defaults:            defaults,
 		DefaultsListed:      true,
+		RoutingEntries:      []EmailRoutingEntry{{Domain: "example.com", Routing: "local"}},
+		RoutingListed:       true,
+		FiltersByAccount:    map[string][]EmailFilterEntry{},
+		FilterListErrors:    map[string]string{},
 	}
 }
 
@@ -68,8 +72,8 @@ func TestVerifyEmailPlanPendingBeforeApply(t *testing.T) {
 	if s := evStatus(t, rep, EmailSectionForwarders, "multi@example.com"); s.Status != EmailVerifyManualReview {
 		t.Errorf("manual = %q, want manual_review", s.Status)
 	}
-	if s := evStatus(t, rep, EmailSectionRouting, "example.com"); s.Status != EmailVerifyNotChecked {
-		t.Errorf("routing skip = %q, want not_checked", s.Status)
+	if s := evStatus(t, rep, EmailSectionRouting, "example.com"); s.Status != EmailVerifyUnchanged {
+		t.Errorf("routing skip = %q, want unchanged (routing is now verified)", s.Status)
 	}
 	if rep.Clean {
 		t.Error("pending ops must gate: clean = true")
@@ -135,8 +139,8 @@ func TestVerifyEmailPlanUnavailable(t *testing.T) {
 		DefaultsError:       "boom",
 	}
 	rep := VerifyEmailPlan(evPlan(), live)
-	if rep.Summary.Unavailable != 3 { // create, skip, set
-		t.Errorf("unavailable = %d, want 3: %+v", rep.Summary.Unavailable, rep.Ops)
+	if rep.Summary.Unavailable != 4 { // create, skip (fwd), set, skip (routing)
+		t.Errorf("unavailable = %d, want 4: %+v", rep.Summary.Unavailable, rep.Ops)
 	}
 	if rep.Clean {
 		t.Error("unavailable must gate")

@@ -127,16 +127,6 @@ func verifyEmailOp(op EmailPlanOp, live EmailLiveState, destUser string) EmailVe
 		res.Status, res.Reason = EmailVerifyManualReview, op.Reason
 		return res
 	}
-	// 2B-3 sections (filters, routing): verify re-lists only the sections
-	// whose writers have landed (forwarders/default_address in 2B-1,
-	// autoresponders in 2B-2).
-	if op.Section != EmailSectionForwarders && op.Section != EmailSectionDefaultAddress &&
-		op.Section != EmailSectionAutoresponders {
-		res.Status = EmailVerifyNotChecked
-		res.Reason = "section is not re-listed by email verify until its writer lands"
-		return res
-	}
-
 	switch {
 	case op.Section == EmailSectionAutoresponders:
 		if msg, failed := live.AutoresponderListErrors[op.Domain]; failed {
@@ -227,6 +217,92 @@ func verifyEmailOp(op EmailPlanOp, live EmailLiveState, destUser string) EmailVe
 		}
 		return res
 
+	case op.Section == EmailSectionFilters:
+		account, filtername := splitFilterKey(op.Key)
+		if msg, failed := live.FilterListErrors[account]; failed {
+			res.Status, res.Reason = EmailVerifyUnavailable, "fresh filter re-list failed: "+msg
+			return res
+		}
+		if op.Filter == nil && op.Action != EmailActionSkip {
+			res.Status = EmailVerifyDrift
+			res.Reason = fmt.Sprintf("filter %s op carries no content payload — malformed or hand-edited plan", op.Action)
+			return res
+		}
+		e, present := live.filterFor(account, filtername)
+		equivalent := present && op.Filter != nil && filterContentEquivalent(op.Filter, e)
+		res.Expected = filtername
+		if present {
+			res.Observed = e.FilterName
+		}
+		switch op.Action {
+		case EmailActionSkip:
+			if op.Filter != nil && equivalent {
+				res.Status = EmailVerifyUnchanged
+			} else if present {
+				res.Status = EmailVerifyDrift
+				res.Reason = "the plan-time destination filter is no longer live with the agreed content"
+			} else {
+				res.Status = EmailVerifyDrift
+				res.Reason = "the plan-time destination filter no longer exists"
+			}
+		case EmailActionCreate:
+			switch {
+			case equivalent:
+				res.Status = EmailVerifyApplied
+			case !present:
+				res.Status = EmailVerifyPending
+				res.Reason = "filter still missing on the destination (plan-time state)"
+			case !e.RulesCollected:
+				res.Status = EmailVerifyUnavailable
+				res.Reason = "a filter exists but its rules could not be read — cannot verify"
+			default:
+				res.Status = EmailVerifyDrift
+				res.Reason = "destination filter matches neither the desired content nor the plan-time (absent) state"
+			}
+		default:
+			res.Status = EmailVerifyDrift
+			res.Reason = fmt.Sprintf("unexpected filter action %q — malformed or hand-edited plan", op.Action)
+		}
+		return res
+
+	case op.Section == EmailSectionRouting:
+		if !live.RoutingListed {
+			res.Status, res.Reason = EmailVerifyUnavailable, "fresh routing re-list failed: "+live.RoutingError
+			return res
+		}
+		cur, ok := live.routingFor(op.Domain)
+		res.Observed = cur
+		if !ok {
+			res.Status, res.Reason = EmailVerifyDrift, "domain no longer appears in the routing list"
+			return res
+		}
+		switch op.Action {
+		case EmailActionSkip:
+			res.Expected = op.DestinationValue
+			if cur == op.DestinationValue {
+				res.Status = EmailVerifyUnchanged
+			} else {
+				res.Status = EmailVerifyDrift
+				res.Reason = "routing no longer matches the plan-time destination state"
+			}
+		case EmailActionSet:
+			res.Expected = op.Value
+			switch {
+			case cur == op.Value:
+				res.Status = EmailVerifyApplied
+			case cur == op.DestinationValue:
+				res.Status = EmailVerifyPending
+				res.Reason = "routing still carries the plan-time destination value"
+			default:
+				res.Status = EmailVerifyDrift
+				res.Reason = "routing matches neither the desired nor the plan-time state"
+			}
+		default:
+			res.Status = EmailVerifyDrift
+			res.Reason = fmt.Sprintf("unexpected routing action %q — malformed or hand-edited plan", op.Action)
+		}
+		return res
+
 	default: // default_address
 		if !live.DefaultsListed {
 			res.Status, res.Reason = EmailVerifyUnavailable, "fresh default-address re-list failed: "+live.DefaultsError
@@ -273,6 +349,8 @@ func emailUntracked(plan EmailApplyPlan, live EmailLiveState) []EmailPlanInfo {
 	knownPairs := map[forwarderPair]bool{}
 	knownDefaults := map[string]bool{}
 	knownAutoresponders := map[string]bool{}
+	knownFilters := map[string]bool{}
+	knownRouting := map[string]bool{}
 	for _, op := range plan.Ops {
 		switch op.Section {
 		case EmailSectionForwarders:
@@ -285,6 +363,10 @@ func emailUntracked(plan EmailApplyPlan, live EmailLiveState) []EmailPlanInfo {
 			knownDefaults[op.Domain] = true
 		case EmailSectionAutoresponders:
 			knownAutoresponders[canonEmailAddr(op.Key)] = true
+		case EmailSectionFilters:
+			knownFilters[op.Key] = true
+		case EmailSectionRouting:
+			knownRouting[op.Domain] = true
 		}
 	}
 	for _, info := range plan.Informational {
@@ -295,6 +377,10 @@ func emailUntracked(plan EmailApplyPlan, live EmailLiveState) []EmailPlanInfo {
 			knownDefaults[info.Domain] = true
 		case EmailSectionAutoresponders:
 			knownAutoresponders[canonEmailAddr(info.Key)] = true
+		case EmailSectionFilters:
+			knownFilters[info.Key] = true
+		case EmailSectionRouting:
+			knownRouting[info.Domain] = true
 		}
 	}
 
@@ -342,6 +428,38 @@ func emailUntracked(plan EmailApplyPlan, live EmailLiveState) []EmailPlanInfo {
 			out = append(out, EmailPlanInfo{
 				Section: EmailSectionAutoresponders, Domain: d,
 				Key: addr, Value: a.Subject,
+			})
+		}
+	}
+	filterAccounts := make([]string, 0, len(live.FiltersByAccount))
+	for a := range live.FiltersByAccount {
+		filterAccounts = append(filterAccounts, a)
+	}
+	sort.Strings(filterAccounts)
+	for _, acc := range filterAccounts {
+		for _, f := range live.FiltersByAccount[acc] {
+			key := filterKey(f)
+			if knownFilters[key] {
+				continue
+			}
+			out = append(out, EmailPlanInfo{
+				Section: EmailSectionFilters,
+				Key:     key,
+				Value:   fmt.Sprintf("%d rule(s), %d action(s)", f.RuleCount, f.ActionCount),
+			})
+		}
+	}
+	if live.RoutingListed {
+		for _, r := range live.RoutingEntries {
+			domain := strings.ToLower(strings.TrimSpace(r.Domain))
+			if knownRouting[domain] {
+				continue
+			}
+			out = append(out, EmailPlanInfo{
+				Section: EmailSectionRouting,
+				Domain:  domain,
+				Key:     domain,
+				Value:   r.Routing,
 			})
 		}
 	}

@@ -2,6 +2,7 @@ package accountinventory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -491,13 +492,30 @@ func collectEmailFilters(ctx context.Context, r cpanel.Runner, mailboxes []Mailb
 	}
 	appendFilters := func(account string, filters []cpanel.EmailFilterEntry) {
 		for _, f := range filters {
-			sec.Items = append(sec.Items, EmailFilterEntry{
+			entry := EmailFilterEntry{
 				Account:     account,
 				FilterName:  f.FilterName,
 				Enabled:     f.Enabled != 0,
 				RuleCount:   len(f.Rules),
 				ActionCount: len(f.Actions),
-			})
+			}
+			gf, err := cpanel.GetEmailFilter(ctx, r, f.FilterName, account)
+			if err != nil {
+				sec.Warnings = append(sec.Warnings,
+					fmt.Sprintf("get_filter %q (account=%q) failed: %v — rules not collected", f.FilterName, account, err))
+			} else {
+				rules, actions := decodeFilterRulesActions(gf)
+				if len(rules) != len(gf.Rules) || len(actions) != len(gf.Actions) {
+					sec.Warnings = append(sec.Warnings,
+						fmt.Sprintf("get_filter %q (account=%q): decoded %d/%d rules/actions but raw had %d/%d — shape surprise, rules not trusted",
+							f.FilterName, account, len(rules), len(actions), len(gf.Rules), len(gf.Actions)))
+				} else {
+					entry.Rules = rules
+					entry.Actions = actions
+					entry.RulesCollected = true
+				}
+			}
+			sec.Items = append(sec.Items, entry)
 		}
 	}
 	accountLevel, err := cpanel.ListEmailFilters(ctx, r, "")
@@ -544,6 +562,36 @@ func collectEmailFilters(ctx context.Context, r cpanel.Runner, mailboxes []Mailb
 		return a.ActionCount < b.ActionCount
 	})
 	return sec
+}
+
+// decodeFilterRulesActions converts the raw JSON rule/action arrays from
+// get_filter into the typed inventory fields. Unknown shapes degrade to
+// empty Part/Match/Val or Action/Dest, never a fatal error — the plan
+// will classify the filter manual if equality is unprovable.
+func decodeFilterRulesActions(gf cpanel.GetEmailFilterResult) ([]FilterRule, []FilterAction) {
+	rules := make([]FilterRule, 0, len(gf.Rules))
+	for _, raw := range gf.Rules {
+		var dec cpanel.FilterRuleDecoded
+		if err := json.Unmarshal(raw, &dec); err == nil {
+			rules = append(rules, FilterRule{
+				Part:  dec.Part,
+				Match: dec.Match,
+				Opt:   dec.Opt,
+				Val:   dec.Val,
+			})
+		}
+	}
+	actions := make([]FilterAction, 0, len(gf.Actions))
+	for _, raw := range gf.Actions {
+		var dec cpanel.FilterActionDecoded
+		if err := json.Unmarshal(raw, &dec); err == nil {
+			actions = append(actions, FilterAction{
+				Action: dec.Action,
+				Dest:   dec.Dest,
+			})
+		}
+	}
+	return rules, actions
 }
 
 func collectRedirects(ctx context.Context, r cpanel.Runner) RedirectSection {

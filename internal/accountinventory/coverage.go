@@ -66,6 +66,9 @@ var coverageRegistry = []CoverageArea{
 		Note: "API token NAMES are listable user-level; secrets are never retrievable — historical-dossier material"},
 	// autoresponder_bodies: collected since PR 2B-2 (get_auto_responder per
 	// listed address) — folded into the covered "autoresponders" section.
+	// email_filter_rules: collected since PR 2B-3 (get_filter per listed
+	// filter, option A: rules in clear) — folded into the covered
+	// "email_filters" section.
 	{Area: "boxtrapper", State: CoverageNotCollected,
 		Note: "BoxTrapper enable state and configuration"},
 	{Area: "contact_info", State: CoverageNotCollected,
@@ -74,8 +77,6 @@ var coverageRegistry = []CoverageArea{
 		Note: "password-protected directories (~/.htpasswds) — the protection passwords are at stake on transfer"},
 	{Area: "domain_aliases", State: CoverageNotCollected,
 		Note: "parked/alias domains as a dedicated field — today folded into the domains listing"},
-	{Area: "email_filter_rules", State: CoverageNotCollected,
-		Note: "full filter RULES (round-trippable, Fase 2B prerequisite) — today only per-account/per-mailbox counts are collected"},
 	{Area: "git_repositories", State: CoverageNotCollected,
 		Note: "cPanel-registered git repositories (working trees travel with the home transfer, the registrations do not)"},
 	{Area: "hotlink_protection", State: CoverageNotCollected,

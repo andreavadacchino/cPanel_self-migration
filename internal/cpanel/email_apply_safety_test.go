@@ -21,6 +21,7 @@ var emailWriteForbidden = []string{
 	"add_auto_responder",
 	"delete_auto_responder",
 	"store_filter",
+	"delete_filter",
 	"setmxcheck",
 }
 

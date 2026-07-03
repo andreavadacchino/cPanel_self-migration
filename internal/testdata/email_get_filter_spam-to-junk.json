@@ -1,0 +1,1 @@
+{"result":{"errors":null,"data":{"filtername":"spam-to-junk","rules":[{"part":"$header_subject:","match":"contains","opt":null,"val":"[SPAM]","number":1}],"actions":[{"action":"save","dest":"$home/mail/.Junk","number":1}]},"warnings":null,"messages":null,"status":1,"metadata":{}}}

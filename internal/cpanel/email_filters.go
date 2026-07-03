@@ -22,6 +22,50 @@ type EmailFilterEntry struct {
 	Actions    []json.RawMessage `json:"actions"`
 }
 
+// FilterRuleDecoded is a get_filter rule entry with typed fields.
+type FilterRuleDecoded struct {
+	Part   string `json:"part"`
+	Match  string `json:"match"`
+	Opt    any    `json:"opt"`
+	Val    string `json:"val"`
+	Number int    `json:"number"`
+}
+
+// FilterActionDecoded is a get_filter action entry with typed fields.
+type FilterActionDecoded struct {
+	Action string  `json:"action"`
+	Dest   *string `json:"dest"`
+	Number int     `json:"number"`
+}
+
+// GetEmailFilterResult is the decoded get_filter response. The response
+// shape includes a `number` field per rule/action (positional index) and
+// `opt` (always null in all observed responses — 2B-3-pre fact 3).
+// Rules and Actions are retained as raw JSON so consumers are not broken
+// by shape surprises in the rule/action bodies.
+type GetEmailFilterResult struct {
+	FilterName string            `json:"filtername"`
+	Rules      []json.RawMessage `json:"rules"`
+	Actions    []json.RawMessage `json:"actions"`
+}
+
+// GetEmailFilter returns a single filter by name (read-only).
+// ⚠️ On a NON-EXISTENT filter, cPanel returns status:1 with a TEMPLATE
+// response (filtername="Rule 1", 1 empty rule, 1 empty action) — NOT an
+// error (2B-3-pre fact 4). Callers must gate existence on list_filters.
+func GetEmailFilter(ctx context.Context, c Runner, filtername, account string) (GetEmailFilterResult, error) {
+	args := map[string]string{"filtername": filtername}
+	if account != "" {
+		args["account"] = account
+	}
+	data, err := RunUAPI[GetEmailFilterResult](ctx, c, "Email", "get_filter", args)
+	if err != nil {
+		return GetEmailFilterResult{}, err
+	}
+	logx.Debug("GetEmailFilter(%q, %q): rules=%d actions=%d", filtername, account, len(data.Rules), len(data.Actions))
+	return data, nil
+}
+
 // ListEmailFilters returns the filters of one scope (read-only):
 // account == "" is the account-level (all mail) filter set, otherwise
 // the per-mailbox set of that email address.

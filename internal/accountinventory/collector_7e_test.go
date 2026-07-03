@@ -73,9 +73,11 @@ func TestCollectDefaultAddresses(t *testing.T) {
 func TestCollectEmailFilters(t *testing.T) {
 	// One fixture serves both the account-level and the per-mailbox
 	// call (the collector labels entries via Account). The pseudo
-	// mailbox (no "@") must be skipped.
+	// mailbox (no "@") must be skipped. The get_filter fixture serves
+	// all names (the fakeRunner cannot distinguish per-filtername calls).
 	runner := &fakeRunner{responses: map[string][]byte{
 		"Email list_filters": loadFixture(t, "email_list_filters.json"),
+		"Email get_filter":   loadFixture(t, "email_get_filter_spam-to-junk.json"),
 	}}
 	mailboxes := []MailboxEntry{
 		{Email: "info@doctorbike.it"},
@@ -115,6 +117,7 @@ func TestCollectEmailFiltersUnavailable(t *testing.T) {
 func TestCollectEmailFiltersMailboxListUnavailable(t *testing.T) {
 	runner := &fakeRunner{responses: map[string][]byte{
 		"Email list_filters": loadFixture(t, "email_list_filters.json"),
+		"Email get_filter":   loadFixture(t, "email_get_filter_spam-to-junk.json"),
 	}}
 	sec := collectEmailFilters(context.Background(), runner, nil, true)
 	if !sec.Available {
@@ -131,6 +134,68 @@ func TestCollectEmailFiltersMailboxListUnavailable(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("missing narrowed-scope warning, got: %v", sec.Warnings)
+	}
+}
+
+// 2B-3: the enriched collector populates Rules, Actions and
+// RulesCollected from get_filter. When get_filter fails, the entry
+// degrades gracefully (rules_collected=false, warning, never lost).
+func TestCollectEmailFiltersRulesCollected(t *testing.T) {
+	runner := &fakeRunner{responses: map[string][]byte{
+		"Email list_filters": loadFixture(t, "email_list_filters.json"),
+		"Email get_filter":   loadFixture(t, "email_get_filter_spam-to-junk.json"),
+	}}
+	sec := collectEmailFilters(context.Background(), runner, nil, false)
+	if len(sec.Items) != 2 {
+		t.Fatalf("got %d items, want 2", len(sec.Items))
+	}
+	for _, item := range sec.Items {
+		if !item.RulesCollected {
+			t.Errorf("filter %q: rules_collected=false, want true", item.FilterName)
+		}
+		if len(item.Rules) == 0 {
+			t.Errorf("filter %q: no rules populated", item.FilterName)
+		}
+		if len(item.Actions) == 0 {
+			t.Errorf("filter %q: no actions populated", item.FilterName)
+		}
+	}
+	// Verify first entry has the expected rule content from the fixture.
+	// Note: fakeRunner returns the same get_filter fixture for all calls,
+	// so both entries get the spam-to-junk content.
+	first := sec.Items[0]
+	if first.Rules[0].Part != "$header_subject:" || first.Rules[0].Match != "contains" || first.Rules[0].Val != "[SPAM]" {
+		t.Errorf("first filter rule = %+v, want $header_subject: contains [SPAM]", first.Rules[0])
+	}
+	if first.Actions[0].Action != "save" {
+		t.Errorf("first filter action = %+v, want save", first.Actions[0])
+	}
+}
+
+// 2B-3: when get_filter fails, the entry must carry
+// rules_collected=false and a warning, but the entry itself survives.
+func TestCollectEmailFiltersGetFilterFails(t *testing.T) {
+	// No get_filter response → every get_filter call fails
+	runner := &fakeRunner{responses: map[string][]byte{
+		"Email list_filters": loadFixture(t, "email_list_filters.json"),
+	}}
+	sec := collectEmailFilters(context.Background(), runner, nil, false)
+	if !sec.Available {
+		t.Fatalf("section should still be available")
+	}
+	if len(sec.Items) != 2 {
+		t.Fatalf("got %d items, want 2 (entries must survive get_filter failure)", len(sec.Items))
+	}
+	for _, item := range sec.Items {
+		if item.RulesCollected {
+			t.Errorf("filter %q: rules_collected=true, want false (get_filter failed)", item.FilterName)
+		}
+		if len(item.Rules) != 0 {
+			t.Errorf("filter %q: has %d rules, want 0 (get_filter failed)", item.FilterName, len(item.Rules))
+		}
+	}
+	if len(sec.Warnings) != 2 {
+		t.Errorf("expected 2 get_filter warnings, got %d: %v", len(sec.Warnings), sec.Warnings)
 	}
 }
 
@@ -169,8 +234,13 @@ func TestCollectRedirectsUnavailable(t *testing.T) {
 // A legitimately mailbox-less account (list succeeded, zero entries)
 // must NOT get the narrowed-scope warning.
 func TestCollectEmailFiltersNoWarningWhenNoMailboxes(t *testing.T) {
+	// get_filter returns a single-filter response; the fakeRunner cannot
+	// distinguish per-filtername calls (values are in env vars, not the
+	// script text), so we supply a generic get_filter fixture. The collector
+	// tolerates shape mismatches between list and get gracefully.
 	runner := &fakeRunner{responses: map[string][]byte{
 		"Email list_filters": loadFixture(t, "email_list_filters.json"),
+		"Email get_filter":   loadFixture(t, "email_get_filter_spam-to-junk.json"),
 	}}
 	sec := collectEmailFilters(context.Background(), runner, nil, false)
 	if !sec.Available {
@@ -178,5 +248,11 @@ func TestCollectEmailFiltersNoWarningWhenNoMailboxes(t *testing.T) {
 	}
 	if len(sec.Warnings) != 0 {
 		t.Errorf("no warnings expected for a mailbox-less account, got: %v", sec.Warnings)
+	}
+	// 2B-3: every entry must have rules_collected=true when get_filter succeeds.
+	for _, item := range sec.Items {
+		if !item.RulesCollected {
+			t.Errorf("filter %q: rules_collected=false, want true", item.FilterName)
+		}
 	}
 }

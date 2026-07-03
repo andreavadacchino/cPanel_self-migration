@@ -59,6 +59,33 @@ func TestParseListEmailFiltersUnknownRuleShape(t *testing.T) {
 	}
 }
 
+// 2B-3: get_filter with a real filter returns typed rule/action data.
+func TestParseGetEmailFilterReal(t *testing.T) {
+	data, err := parseUAPI[GetEmailFilterResult]("Email", "get_filter", fixture(t, "email_get_filter_spam-to-junk.json"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if data.FilterName != "spam-to-junk" {
+		t.Errorf("filtername = %q, want spam-to-junk", data.FilterName)
+	}
+	if len(data.Rules) != 1 || len(data.Actions) != 1 {
+		t.Fatalf("rules/actions = %d/%d, want 1/1", len(data.Rules), len(data.Actions))
+	}
+}
+
+// 2B-3-pre fact 4: get_filter on a non-existent filter returns a
+// template with filtername="Rule 1" — status:1, NOT an error.
+func TestParseGetEmailFilterNonExistent(t *testing.T) {
+	resp := []byte(`{"result":{"data":{"filtername":"Rule 1","rules":[{"number":1}],"actions":[{"number":1}]},"errors":null,"warnings":null,"status":1,"messages":null,"metadata":{}}}`)
+	data, err := parseUAPI[GetEmailFilterResult]("Email", "get_filter", resp)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if data.FilterName != "Rule 1" {
+		t.Errorf("filtername = %q, want template 'Rule 1'", data.FilterName)
+	}
+}
+
 // Tie-break regression lock (round-2 reviewer): duplicate filter names
 // must order deterministically regardless of the input order.
 func TestListEmailFiltersTieBreakOrderIndependent(t *testing.T) {

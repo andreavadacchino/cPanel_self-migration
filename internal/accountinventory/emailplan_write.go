@@ -127,8 +127,15 @@ func emailOpDesired(op EmailPlanOp) string {
 			return fmt.Sprintf("autoresponder %s@%s — subject %q, %s, every %dh, %d body byte(s)",
 				op.Email, op.Domain, a.Subject, html, a.Interval, len(a.Body))
 		}
+		if op.Section == EmailSectionFilters && op.Filter != nil {
+			return fmt.Sprintf("filter %s — %d rule(s), %d action(s)",
+				op.Key, len(op.Filter.Rules), len(op.Filter.Actions))
+		}
 		return fmt.Sprintf("forward %s@%s → %s", op.Email, op.Domain, op.Forward)
 	case EmailActionSet:
+		if op.Section == EmailSectionRouting {
+			return fmt.Sprintf("routing → %s", op.Value)
+		}
 		return fmt.Sprintf("default address → %s", op.Value)
 	case EmailActionSkip:
 		if op.SourceValue != "" {

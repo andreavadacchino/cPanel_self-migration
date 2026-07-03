@@ -63,7 +63,6 @@
 | contact_info | not_collected | account contact addresses and notification preferences |
 | directory_privacy | not_collected | password-protected directories (~/.htpasswds) — the protection passwords are at stake on transfer |
 | domain_aliases | not_collected | parked/alias domains as a dedicated field — today folded into the domains listing |
-| email_filter_rules | not_collected | full filter RULES (round-trippable, Fase 2B prerequisite) — today only per-account/per-mailbox counts are collected |
 | git_repositories | not_collected | cPanel-registered git repositories (working trees travel with the home transfer, the registrations do not) |
 | hotlink_protection | not_collected | hotlink protection configuration |
 | leech_protection | not_collected | leech protection configuration |
