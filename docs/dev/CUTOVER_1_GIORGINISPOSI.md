@@ -1,6 +1,8 @@
 # Cutover #1 — giorginisposi.it (.193 → .78)
 
-Data inizio: 2026-07-03. Sessione supervisionata, Variante C.
+Data inizio preflight: 2026-07-03. **Cutover RIMANDATO** per decisione
+utente (sessione 2026-07-04). Lo snapshot DNS pre-switch e il riesame
+ordine-MX restano validi come evidenza per quando si eseguirà il cutover.
 
 ## Decisioni utente (vincolanti)
 
@@ -28,9 +30,9 @@ binario compilato contro .78):
 Pipeline completa: `--account-inventory` → `inventory *-plan` → `* apply`
 → `* verify --fail-on-drift` → `dnscluster synczone` → rollback pronto.
 
-### Residui non bloccanti
+### Residui non bloccanti (aggiornati post #56)
 
-- `replace` DNS ops: v1 li skippa (in questo caso protegge il DKIM)
+- `replace` DNS ops: **v2 implementato e binary-proven** (PR #56, smoke 2026-07-04)
 - `fwdopt=fail/blackhole`, `is_html=1`, `start/stop`: mai byte-verificati
 - `synczone`: mai eseguito live (il primo uso reale = lo switch P4)
 
@@ -101,7 +103,11 @@ delta maildir finale. Rischio trascurabile.
 
 Ordine operativo confermato. Decisione TTL: opzione 1 (abbassare adesso).
 
-## P1 — Abbassamento TTL (IN ATTESA)
+## P1 — Abbassamento TTL (RIMANDATO)
+
+**Stato: RIMANDATO** — per decisione utente, il cutover non è in programma
+in questa sessione. Le informazioni sotto restano valide per quando si
+eseguirà P1.
 
 Record da editare su WHM (.193) → DNS Zone Manager → giorginisposi.it:
 
