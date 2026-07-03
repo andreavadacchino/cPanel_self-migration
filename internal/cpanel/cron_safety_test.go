@@ -31,7 +31,8 @@ var cronWritePatternsNoAllowlist = []string{
 // must correspond to an existing file (a dangling entry would silently
 // open a hole if someone later creates a file with that name).
 var cronWritePatternsAllowlist = map[string]bool{
-	"internal/cpanel/cron_apply.go": true,
+	"internal/cpanel/cron_apply.go":               true,
+	"cmd/cpanel-self-migration/cron_apply_cmd.go": true,
 }
 
 // TestNoCronWritePatterns asserts crontab write patterns are absent from

@@ -104,14 +104,36 @@ il ruolo deve tornare a **sync**.
 
 **Variante B — sync DOPO lo switch per-account**:
 - Pro: controllo per-account; solo le zone pronte vengono propagate.
-- Contro: richiede un meccanismo per propagare selettivamente (cPanel
-  non supporta sync per-zona — è tutto o niente).
+- Contro: richiede un meccanismo per propagare selettivamente.
 - Rischio: la finestra tra il DNS switch e la propagazione lascia i
   resolver con i vecchi record.
 
-**Raccomandazione dell'operatore**: variante A con pulizia preventiva
-delle zone su .78 (rimuovere zone di test, verificare che ogni zona su
-.78 sia allineata o assente). Ma la decisione è dell'utente.
+**Variante C — peer standalone + push per-zona** (2026-07-03 probe):
+Il claim "cPanel non supporta sync per-zona" è stato SMENTITO dal
+probe read-only. `dnscluster synczone <zone>` esiste e propaga UNA
+singola zona a tutti i peer del cluster (script root-level in
+`/usr/local/cpanel/scripts/dnscluster`). Disponibile anche
+`synczonelocal <zone>` (pull di una sola zona al server locale).
+
+- Procedura candidata:
+  1. Peer resta **standalone** per tutta la campagna.
+  2. Al cutover di ogni account: `dns apply` sulla zona, poi
+     `dnscluster synczone <domain>` (root, su .78) per propagare
+     SOLO quella zona ai NS pubblici.
+  3. A fine campagna: ruolo sync ripristinato.
+- Pro: nessun rischio di sovrascrittura di zone di produzione non
+  ancora migrate; nessuna pulizia preventiva necessaria; granularità
+  per-account.
+- Contro: richiede accesso root su .78 per ogni `synczone`; non
+  ancora byte-verificato con un test live (da fare in sessione dedicata
+  PRIMA del primo cutover reale).
+- Piano di byte-verify: aggiungere un TXT test su .78 via `dns apply`,
+  poi `dnscluster synczone giorginisposi.it` (root), poi dig al peer
+  per confermare la propagazione. Rimuovere il TXT e ri-sincronizzare.
+
+**Raccomandazione dell'operatore**: Variante C (più sicura, granulare,
+nessuna pulizia preventiva). Richiede un byte-verify di `synczone`
+prima del primo cutover reale. Ma la DECISIONE resta dell'utente.
 
 ### 4.2 Sospensione account su .193
 ```bash
@@ -157,19 +179,20 @@ whmapi1 suspendacct user=<user> reason="Migrated to .78"
 |-----------|-------|-----------|
 | Data di partenza campagna | **APERTA** | Utente |
 | Finestra di cutover (orario) | **APERTA** | Utente |
-| Ripristino ruolo sync DNS | **APERTA** — variante A o B | Utente |
+| Ripristino ruolo sync DNS | **APERTA** — variante A, B o C | Utente |
 | Ordine degli account | **APERTA** | Utente (suggerimento: giorginisposi primo, gli altri dopo conferma) |
 | Pulizia zone spazzatura su .78 | **APERTA** | Utente |
 
-## 8. Command file mancanti (work rimanente)
+## 8. Command file — COMPLETATI
 
-| Command | Stato | Workaround |
-|---------|-------|-----------|
-| `dns apply` | Primitive implementate, CLI mancante | Throwaway harness |
-| `cron apply` | Primitive implementate, CLI mancante | Throwaway harness |
-| `email apply` filtri/routing | Primitive implementate, CLI mancante | Throwaway harness |
+| Command | Stato |
+|---------|-------|
+| `dns apply` | **Binary-proven** (apply + verify + rollback) |
+| `dns verify` | **Binary-proven** (CLEAN + fail-on-drift) |
+| `cron apply` | **Binary-proven** (apply + verify + rollback) |
+| `cron verify` | **Binary-proven** (CLEAN + fail-on-drift) |
+| `inventory cron-plan` | **Binary-proven** (offline plan builder) |
+| `email apply` filtri/routing | **Binary-proven** (StoreFilter + DeleteFilter + SetMXCheck) |
 
-Questi command file sono wiring (dispatch + flag + backup management)
-attorno alle primitive già provate live. La priorità dipende dal numero
-di account della campagna: per giorginisposi (singolo) il throwaway è
-sufficiente; per 55 account serve il CLI.
+Tutti i writer sono stati cablati nel CLI e provati end-to-end
+attraverso il binario compilato contro .78 (PR cli-wiring-binary-smoke).

@@ -85,7 +85,9 @@ func runEmailVerifyCmd(args []string) int {
 	// Domains verify must re-list: every 2B-1-section op + informational.
 	domainSet := map[string]bool{}
 	arDomainSet := map[string]bool{}
+	filterAccountSet := map[string]bool{}
 	needDefaults := false
+	needRouting := false
 	for _, op := range plan.Ops {
 		switch op.Section {
 		case accountinventory.EmailSectionForwarders:
@@ -94,6 +96,11 @@ func runEmailVerifyCmd(args []string) int {
 			needDefaults = true
 		case accountinventory.EmailSectionAutoresponders:
 			arDomainSet[op.Domain] = true
+		case accountinventory.EmailSectionFilters:
+			account, _ := splitFilterKey(op.Key)
+			filterAccountSet[account] = true
+		case accountinventory.EmailSectionRouting:
+			needRouting = true
 		}
 	}
 	for _, info := range plan.Informational {
@@ -104,6 +111,11 @@ func runEmailVerifyCmd(args []string) int {
 			needDefaults = true
 		case accountinventory.EmailSectionAutoresponders:
 			arDomainSet[info.Domain] = true
+		case accountinventory.EmailSectionFilters:
+			account, _ := splitFilterKey(info.Key)
+			filterAccountSet[account] = true
+		case accountinventory.EmailSectionRouting:
+			needRouting = true
 		}
 	}
 	domains := make([]string, 0, len(domainSet))
@@ -116,6 +128,11 @@ func runEmailVerifyCmd(args []string) int {
 		arDomains = append(arDomains, d)
 	}
 	sort.Strings(arDomains)
+	filterAccounts := make([]string, 0, len(filterAccountSet))
+	for a := range filterAccountSet {
+		filterAccounts = append(filterAccounts, a)
+	}
+	sort.Strings(filterAccounts)
 
 	// Fetch the live state — only when there is something to re-list. A
 	// manual-only plan needs no config and opens no SSH.
@@ -125,7 +142,7 @@ func runEmailVerifyCmd(args []string) int {
 		AutorespondersByDomain:  map[string][]accountinventory.AutoresponderEntry{},
 		AutoresponderListErrors: map[string]string{},
 	}
-	if len(domains) > 0 || needDefaults || len(arDomains) > 0 {
+	if len(domains) > 0 || needDefaults || len(arDomains) > 0 || len(filterAccounts) > 0 || needRouting {
 		ctx := context.Background()
 		client, err := dialEmailDest(ctx, *cfgFlag)
 		if err != nil {
@@ -157,6 +174,25 @@ func runEmailVerifyCmd(args []string) int {
 				continue
 			}
 			live.AutorespondersByDomain[d] = entries
+		}
+		live.FiltersByAccount = map[string][]accountinventory.EmailFilterEntry{}
+		live.FilterListErrors = map[string]string{}
+		for _, acct := range filterAccounts {
+			entries, err := fetchFilterAccount(ctx, client, acct)
+			if err != nil {
+				live.FilterListErrors[acct] = err.Error()
+				continue
+			}
+			live.FiltersByAccount[acct] = entries
+		}
+		if needRouting {
+			mxEntries, err := cpanel.ListMXs(ctx, client)
+			if err != nil {
+				live.RoutingError = err.Error()
+			} else {
+				live.RoutingListed = true
+				live.RoutingEntries = normalizeRouting(mxEntries)
+			}
 		}
 	}
 

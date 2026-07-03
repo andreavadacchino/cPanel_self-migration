@@ -100,8 +100,23 @@ func TestDispatchDNSRefusesUnknown(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("exit code = %d, want 2; stderr:\n%s", code, stderr)
 	}
-	if !strings.Contains(stderr, "usage: cpanel-self-migration dns verify") {
+	if !strings.Contains(stderr, "usage: cpanel-self-migration dns") {
 		t.Errorf("stderr missing dns usage line:\n%s", stderr)
+	}
+}
+
+// The `cron` namespace mirrors `dns` and `email`: an unknown or missing
+// subcommand exits 2 with the cron usage, never falling through to the
+// migration flow.
+func TestDispatchCronRefusesUnknown(t *testing.T) {
+	for _, args := range [][]string{{"cron", "bogus"}, {"cron"}} {
+		code, stderr := runDispatchChild(t, args...)
+		if code != 2 {
+			t.Fatalf("%v: exit code = %d, want 2; stderr:\n%s", args, code, stderr)
+		}
+		if !strings.Contains(stderr, "usage: cpanel-self-migration cron <apply|verify>") {
+			t.Errorf("%v: stderr missing cron usage line:\n%s", args, stderr)
+		}
 	}
 }
 

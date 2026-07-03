@@ -108,8 +108,18 @@ func printEmailApplyDryRun(plan accountinventory.EmailApplyPlan) {
 			}
 			fmt.Printf("  create autoresponder  %s (subject %q)\n", op.Key, subject)
 			writes++
+		case op.Section == accountinventory.EmailSectionFilters && op.Action == accountinventory.EmailActionCreate:
+			nRules := 0
+			if op.Filter != nil {
+				nRules = len(op.Filter.Rules)
+			}
+			fmt.Printf("  create filter     %s (%d rule(s))\n", op.Key, nRules)
+			writes++
 		case op.Action == accountinventory.EmailActionCreate:
 			fmt.Printf("  create forwarder  %s → %s\n", op.Key, op.Forward)
+			writes++
+		case op.Section == accountinventory.EmailSectionRouting && op.Action == accountinventory.EmailActionSet:
+			fmt.Printf("  set routing       %s → %s  (plan-time dest: %q)\n", op.Domain, op.Value, op.DestinationValue)
 			writes++
 		case op.Action == accountinventory.EmailActionSet:
 			fmt.Printf("  set default addr  %s → %s  (plan-time dest: %q)\n", op.Domain, op.Value, op.DestinationValue)
@@ -295,6 +305,142 @@ func normalizeDefaults(entries []cpanel.DefaultAddressEntry) []accountinventory.
 	return out
 }
 
+// normalizeRouting converts cpanel MailRoutingEntry to inventory
+// EmailRoutingEntry (same conversion as the collector).
+func normalizeRouting(entries []cpanel.MailRoutingEntry) []accountinventory.EmailRoutingEntry {
+	out := make([]accountinventory.EmailRoutingEntry, 0, len(entries))
+	for _, d := range entries {
+		mx := make([]accountinventory.MXRecordEntry, 0, len(d.Entries))
+		for _, e := range d.Entries {
+			mx = append(mx, accountinventory.MXRecordEntry{Priority: int64(e.Priority), Exchange: e.MX})
+		}
+		out = append(out, accountinventory.EmailRoutingEntry{
+			Domain:       d.Domain,
+			Routing:      d.MXCheck,
+			Detected:     d.Detected,
+			AlwaysAccept: d.AlwaysAccept != 0,
+			MXRecords:    mx,
+		})
+	}
+	return out
+}
+
+// splitFilterKey splits a filter op key into account and filter name.
+// Mirrors accountinventory.splitFilterKey (unexported).
+func splitFilterKey(key string) (account, filtername string) {
+	parts := strings.SplitN(key, "/", 2)
+	if len(parts) != 2 {
+		return "", key
+	}
+	account = parts[0]
+	if account == "(account-level)" {
+		account = ""
+	}
+	return account, parts[1]
+}
+
+// decodeFilterForCmd converts a get_filter result into inventory-shape
+// rules and actions. Same logic as the collector's decodeFilterRulesActions
+// (kept local to avoid exporting the collector helper).
+func decodeFilterForCmd(gf cpanel.GetEmailFilterResult) ([]accountinventory.FilterRule, []accountinventory.FilterAction) {
+	rules := make([]accountinventory.FilterRule, 0, len(gf.Rules))
+	for _, raw := range gf.Rules {
+		var dec cpanel.FilterRuleDecoded
+		if err := json.Unmarshal(raw, &dec); err == nil {
+			rules = append(rules, accountinventory.FilterRule{Part: dec.Part, Match: dec.Match, Opt: dec.Opt, Val: dec.Val})
+		}
+	}
+	actions := make([]accountinventory.FilterAction, 0, len(gf.Actions))
+	for _, raw := range gf.Actions {
+		var dec cpanel.FilterActionDecoded
+		if err := json.Unmarshal(raw, &dec); err == nil {
+			actions = append(actions, accountinventory.FilterAction{Action: dec.Action, Dest: dec.Dest})
+		}
+	}
+	return rules, actions
+}
+
+// filterRulesToDecoded converts inventory FilterRule to cpanel
+// FilterRuleDecoded for the StoreFilter call.
+func filterRulesToDecoded(rules []accountinventory.FilterRule) []cpanel.FilterRuleDecoded {
+	out := make([]cpanel.FilterRuleDecoded, len(rules))
+	for i, r := range rules {
+		out[i] = cpanel.FilterRuleDecoded{Part: r.Part, Match: r.Match, Opt: r.Opt, Val: r.Val}
+	}
+	return out
+}
+
+// filterActionsToDecoded converts inventory FilterAction to cpanel
+// FilterActionDecoded for the StoreFilter call.
+func filterActionsToDecoded(actions []accountinventory.FilterAction) []cpanel.FilterActionDecoded {
+	out := make([]cpanel.FilterActionDecoded, len(actions))
+	for i, a := range actions {
+		out[i] = cpanel.FilterActionDecoded{Action: a.Action, Dest: a.Dest}
+	}
+	return out
+}
+
+// fetchFilterAccount lists all filters for one account scope and enriches
+// each with decoded rules via get_filter. Used by the verify command for
+// the full-scope live-state picture.
+func fetchFilterAccount(ctx context.Context, client cpanel.Runner, account string) ([]accountinventory.EmailFilterEntry, error) {
+	filters, err := cpanel.ListEmailFilters(ctx, client, account)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]accountinventory.EmailFilterEntry, 0, len(filters))
+	for _, f := range filters {
+		entry := accountinventory.EmailFilterEntry{
+			Account:     account,
+			FilterName:  f.FilterName,
+			Enabled:     f.Enabled != 0,
+			RuleCount:   len(f.Rules),
+			ActionCount: len(f.Actions),
+		}
+		gf, gerr := cpanel.GetEmailFilter(ctx, client, f.FilterName, account)
+		if gerr == nil {
+			rules, actions := decodeFilterForCmd(gf)
+			entry.Rules = rules
+			entry.Actions = actions
+			entry.RulesCollected = true
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+// fetchFilterEntry lists filters for one account scope and returns the
+// inventory-shape entry for the named filter (with decoded rules via
+// get_filter). Returns nil if the filter is absent. This is the per-op
+// analogue of fetchAutoresponderAddress: one list call + one get call.
+func fetchFilterEntry(ctx context.Context, client cpanel.Runner, account, filtername string) ([]accountinventory.EmailFilterEntry, error) {
+	filters, err := cpanel.ListEmailFilters(ctx, client, account)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range filters {
+		if f.FilterName != filtername {
+			continue
+		}
+		entry := accountinventory.EmailFilterEntry{
+			Account:     account,
+			FilterName:  f.FilterName,
+			Enabled:     f.Enabled != 0,
+			RuleCount:   len(f.Rules),
+			ActionCount: len(f.Actions),
+		}
+		gf, gerr := cpanel.GetEmailFilter(ctx, client, f.FilterName, account)
+		if gerr == nil {
+			rules, actions := decodeFilterForCmd(gf)
+			entry.Rules = rules
+			entry.Actions = actions
+			entry.RulesCollected = true
+		}
+		return []accountinventory.EmailFilterEntry{entry}, nil
+	}
+	return nil, nil
+}
+
 // runEmailApplyWrites is the write path: fresh re-list → per-op guard →
 // backup-or-nothing → writes with unconditional per-op verify-after →
 // paired report. The report is always written once the run reaches the
@@ -312,10 +458,12 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 		outMD = deriveMDPath(outJSON)
 	}
 
-	var createDomains, arDomains []string
+	var createDomains, arDomains, filterAccounts []string
 	seenDomain := map[string]bool{}
 	seenARDomain := map[string]bool{}
+	seenFilterAccount := map[string]bool{}
 	needDefaults := false
+	needRouting := false
 	for _, op := range plan.Ops {
 		switch {
 		case op.Section == accountinventory.EmailSectionForwarders && op.Action == accountinventory.EmailActionCreate:
@@ -330,14 +478,23 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 				seenARDomain[op.Domain] = true
 				arDomains = append(arDomains, op.Domain)
 			}
+		case op.Section == accountinventory.EmailSectionFilters && op.Action == accountinventory.EmailActionCreate:
+			account, _ := splitFilterKey(op.Key)
+			if !seenFilterAccount[account] {
+				seenFilterAccount[account] = true
+				filterAccounts = append(filterAccounts, account)
+			}
+		case op.Section == accountinventory.EmailSectionRouting && op.Action == accountinventory.EmailActionSet:
+			needRouting = true
 		}
 	}
 	sort.Strings(createDomains)
 	sort.Strings(arDomains)
+	sort.Strings(filterAccounts)
 
 	ctx := context.Background()
 	var client *sshx.Client
-	if len(createDomains) > 0 || needDefaults || len(arDomains) > 0 {
+	if len(createDomains) > 0 || needDefaults || len(arDomains) > 0 || len(filterAccounts) > 0 || needRouting {
 		client, err = dialEmailDest(ctx, cfgFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -347,6 +504,53 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 	}
 
 	live, fwdBackup, defBackup, arBackup := fetchEmailLiveState(ctx, client, createDomains, needDefaults, arDomains)
+
+	// Filter and routing live state + backup (2B-3 wiring).
+	live.FiltersByAccount = map[string][]accountinventory.EmailFilterEntry{}
+	live.FilterListErrors = map[string]string{}
+	filterBackup := map[string]accountinventory.EmailBackupSection{}
+	for _, acct := range filterAccounts {
+		rawFilters, raw, err := cpanel.ListEmailFiltersWithRaw(ctx, client, acct)
+		if err != nil {
+			live.FilterListErrors[acct] = err.Error()
+			continue
+		}
+		invEntries := make([]accountinventory.EmailFilterEntry, 0, len(rawFilters))
+		for _, f := range rawFilters {
+			entry := accountinventory.EmailFilterEntry{
+				Account: acct, FilterName: f.FilterName,
+				Enabled:   f.Enabled != 0,
+				RuleCount: len(f.Rules), ActionCount: len(f.Actions),
+			}
+			gf, gerr := cpanel.GetEmailFilter(ctx, client, f.FilterName, acct)
+			if gerr == nil {
+				rules, actions := decodeFilterForCmd(gf)
+				entry.Rules = rules
+				entry.Actions = actions
+				entry.RulesCollected = true
+			}
+			invEntries = append(invEntries, entry)
+		}
+		live.FiltersByAccount[acct] = invEntries
+		filterBackup[acct] = accountinventory.EmailBackupSection{
+			RawUAPIResponse: json.RawMessage(raw),
+			Filters:         invEntries,
+		}
+	}
+	var routingBackup *accountinventory.EmailBackupSection
+	if needRouting {
+		mxEntries, raw, rerr := cpanel.ListMXsWithRaw(ctx, client)
+		if rerr != nil {
+			live.RoutingError = rerr.Error()
+		} else {
+			live.RoutingListed = true
+			live.RoutingEntries = normalizeRouting(mxEntries)
+			routingBackup = &accountinventory.EmailBackupSection{
+				RawUAPIResponse: json.RawMessage(raw),
+				Routing:         live.RoutingEntries,
+			}
+		}
+	}
 
 	// Evaluate every actionable op against the fresh state.
 	type pendingWrite struct {
@@ -404,6 +608,8 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 			ForwardersByDomain:     fwdBackup,
 			DefaultAddresses:       defBackup,
 			AutorespondersByDomain: arBackup,
+			FiltersByAccount:       filterBackup,
+			Routing:                routingBackup,
 		}
 		if err := accountinventory.WriteEmailBackupJSON(backupPath, backup); err != nil {
 			fmt.Fprintln(os.Stderr, "error: backup-or-nothing — backup write failed, NOTHING was written:", err)
@@ -492,6 +698,56 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 				IsHTML: a.IsHTML, Interval: a.Interval,
 				Start: a.Start, Stop: a.Stop, Charset: a.Charset,
 			})
+		case op.Section == accountinventory.EmailSectionFilters && op.Action == accountinventory.EmailActionCreate:
+			// store_filter UPSERTS, same pre-write re-check pattern as
+			// autoresponder create.
+			account, filtername := splitFilterKey(op.Key)
+			freshEntries, ferr := fetchFilterEntry(ctx, client, account, filtername)
+			if ferr != nil {
+				results[w.idx].Status = accountinventory.EmailOpRefused
+				results[w.idx].StatusReason = "pre-write filter re-check failed: " + ferr.Error()
+				continue
+			}
+			miniLive := accountinventory.EmailLiveState{
+				FiltersByAccount: map[string][]accountinventory.EmailFilterEntry{account: freshEntries},
+				FilterListErrors: map[string]string{},
+			}
+			decision, reason := accountinventory.EvaluateEmailOp(op, miniLive, plan.DestinationUser)
+			switch decision {
+			case accountinventory.EmailDecisionAlready:
+				results[w.idx].Status = accountinventory.EmailOpAlready
+				continue
+			case accountinventory.EmailDecisionRefused:
+				results[w.idx].Status = accountinventory.EmailOpRefused
+				results[w.idx].StatusReason = reason
+				continue
+			}
+			writeErr = cpanel.StoreFilter(ctx, client, filtername, account,
+				filterRulesToDecoded(op.Filter.Rules), filterActionsToDecoded(op.Filter.Actions))
+		case op.Section == accountinventory.EmailSectionRouting && op.Action == accountinventory.EmailActionSet:
+			// SetMXCheck OVERWRITES, same pre-write re-check as default
+			// address.
+			freshMXs, rerr := cpanel.ListMXs(ctx, client)
+			if rerr != nil {
+				results[w.idx].Status = accountinventory.EmailOpRefused
+				results[w.idx].StatusReason = "pre-write routing re-check failed: " + rerr.Error()
+				continue
+			}
+			miniLive := accountinventory.EmailLiveState{
+				RoutingListed:  true,
+				RoutingEntries: normalizeRouting(freshMXs),
+			}
+			decision, reason := accountinventory.EvaluateEmailOp(op, miniLive, plan.DestinationUser)
+			switch decision {
+			case accountinventory.EmailDecisionAlready:
+				results[w.idx].Status = accountinventory.EmailOpAlready
+				continue
+			case accountinventory.EmailDecisionRefused:
+				results[w.idx].Status = accountinventory.EmailOpRefused
+				results[w.idx].StatusReason = reason
+				continue
+			}
+			writeErr = cpanel.SetMXCheck(ctx, client, op.Domain, op.Value)
 		default:
 			results[w.idx].Status = accountinventory.EmailOpFailed
 			results[w.idx].StatusReason = fmt.Sprintf("no writer for section %s action %s — malformed plan", op.Section, op.Action)
@@ -550,6 +806,21 @@ func refetchEmailSection(ctx context.Context, client cpanel.Runner, op accountin
 			return live, err
 		}
 		live.AutorespondersByDomain[op.Domain] = entries
+	case accountinventory.EmailSectionFilters:
+		account, filtername := splitFilterKey(op.Key)
+		entries, err := fetchFilterEntry(ctx, client, account, filtername)
+		if err != nil {
+			return live, err
+		}
+		live.FiltersByAccount = map[string][]accountinventory.EmailFilterEntry{account: entries}
+		live.FilterListErrors = map[string]string{}
+	case accountinventory.EmailSectionRouting:
+		mxEntries, err := cpanel.ListMXs(ctx, client)
+		if err != nil {
+			return live, err
+		}
+		live.RoutingListed = true
+		live.RoutingEntries = normalizeRouting(mxEntries)
 	}
 	return live, nil
 }
@@ -641,6 +912,14 @@ func runEmailRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFl
 				fmt.Printf("  restore default   %s → %q (backup value)\n", op.Domain, op.Value)
 			case accountinventory.EmailRollbackAutoresponderRemove:
 				fmt.Printf("  remove autoresponder  %s (the tool's own applied create)\n", op.Address)
+			case accountinventory.EmailRollbackFilterRemove:
+				scope := op.Account
+				if scope == "" {
+					scope = "(account-level)"
+				}
+				fmt.Printf("  remove filter     %q (scope %s) (the tool's own applied create)\n", op.Address, scope)
+			case accountinventory.EmailRollbackRoutingRestore:
+				fmt.Printf("  restore routing   %s → %q (backup value)\n", op.Domain, op.Value)
 			}
 		}
 		if len(ops) == 0 {
@@ -820,6 +1099,90 @@ func executeEmailRollbackOp(ctx context.Context, client cpanel.Runner, op accoun
 		for _, e := range entries {
 			if strings.EqualFold(strings.TrimSpace(e.Domain), op.Domain) &&
 				accountinventory.DefaultValuesEquivalent(op.Value, e.DefaultAddress, destUser) {
+				res.Status = accountinventory.EmailOpApplied
+				return res
+			}
+		}
+		res.Status, res.StatusReason = accountinventory.EmailOpFailed, "restore reported success but the value is not observable in the fresh re-list"
+		return res
+	case accountinventory.EmailRollbackFilterRemove:
+		res.Section = accountinventory.EmailSectionFilters
+		res.Key = op.Address // filtername
+		entries, ferr := fetchFilterEntry(ctx, client, op.Account, op.Address)
+		if ferr != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, "pre-check re-list failed: "+ferr.Error()
+			return res
+		}
+		if len(entries) == 0 {
+			res.Status = accountinventory.EmailOpAlready
+			res.StatusReason = "filter already absent — nothing to remove"
+			return res
+		}
+		if !accountinventory.FilterMatchesContent(op.Filter, entries[0]) {
+			res.Status = accountinventory.EmailOpRefused
+			res.StatusReason = fmt.Sprintf("the live filter %q diverged from the content the tool applied — a human changed it since; resolve explicitly", op.Address)
+			return res
+		}
+		if err := cpanel.DeleteFilter(ctx, client, op.Address, op.Account); err != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, err.Error()
+			return res
+		}
+		entries, ferr = fetchFilterEntry(ctx, client, op.Account, op.Address)
+		if ferr != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, "verify-after re-list failed: "+ferr.Error()
+			return res
+		}
+		if len(entries) > 0 {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, "delete reported success but the filter is still live"
+			return res
+		}
+		res.Status = accountinventory.EmailOpApplied
+		return res
+
+	case accountinventory.EmailRollbackRoutingRestore:
+		res.Section = accountinventory.EmailSectionRouting
+		res.Key = op.Domain
+		res.Value = op.Value
+		mxEntries, rerr := cpanel.ListMXs(ctx, client)
+		if rerr != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, "pre-check re-list failed: "+rerr.Error()
+			return res
+		}
+		routingEntries := normalizeRouting(mxEntries)
+		var current string
+		found := false
+		for _, e := range routingEntries {
+			if strings.EqualFold(strings.TrimSpace(e.Domain), op.Domain) {
+				current, found = e.Routing, true
+				break
+			}
+		}
+		if !found {
+			res.Status, res.StatusReason = accountinventory.EmailOpRefused, "domain no longer appears in the routing list"
+			return res
+		}
+		if current == op.Value {
+			res.Status = accountinventory.EmailOpAlready
+			res.StatusReason = "routing already carries the backup value"
+			return res
+		}
+		if op.ExpectedCurrent != "" && current != op.ExpectedCurrent {
+			res.Status = accountinventory.EmailOpRefused
+			res.StatusReason = fmt.Sprintf("current routing %q diverged from the post-apply state %q — a human changed it since; resolve explicitly", current, op.ExpectedCurrent)
+			return res
+		}
+		if err := cpanel.SetMXCheck(ctx, client, op.Domain, op.Value); err != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, err.Error()
+			return res
+		}
+		mxEntries, rerr = cpanel.ListMXs(ctx, client)
+		if rerr != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, "verify-after re-list failed: "+rerr.Error()
+			return res
+		}
+		routingEntries = normalizeRouting(mxEntries)
+		for _, e := range routingEntries {
+			if strings.EqualFold(strings.TrimSpace(e.Domain), op.Domain) && e.Routing == op.Value {
 				res.Status = accountinventory.EmailOpApplied
 				return res
 			}
