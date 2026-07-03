@@ -381,25 +381,157 @@ func TestEmailPlanDefaultAddressSectionUnavailable(t *testing.T) {
 
 // --- 2B-2/2B-3 sections carried as manual from day one ----------------------
 
-func TestEmailPlanAutorespondersAlwaysManual(t *testing.T) {
+// srcAutoresponder returns a fully-collected source autoresponder entry.
+func srcAutoresponder(addr, domain string) AutoresponderEntry {
+	return AutoresponderEntry{
+		Email: addr, Domain: domain,
+		Subject: "Out of office", From: "Info Desk",
+		Body: "Sono in ferie.\nRientro lunedì.\n",
+		IsHTML: 0, Interval: 8, Start: 0, Stop: 0, Charset: "utf-8",
+		BodyCollected: true,
+	}
+}
+
+func TestEmailPlanAutoresponderCreate(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	src.Autoresponders = []AutoresponderEntry{srcAutoresponder("info@example.com", "example.com")}
+	dest := epInventory("destination", "acct", "example.com")
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "autoresponders", "info@example.com")
+	if op.Action != EmailActionCreate {
+		t.Fatalf("action = %q (reason %q), want create", op.Action, op.Reason)
+	}
+	if op.Email != "info" || op.Domain != "example.com" {
+		t.Errorf("write params local/domain = %q/%q", op.Email, op.Domain)
+	}
+	if op.Autoresponder == nil {
+		t.Fatal("create op must carry the full autoresponder content payload")
+	}
+	a := op.Autoresponder
+	if a.Body != "Sono in ferie.\nRientro lunedì.\n" || a.Subject != "Out of office" ||
+		a.From != "Info Desk" || a.Interval != 8 || a.IsHTML != 0 || a.Charset != "utf-8" {
+		t.Errorf("payload = %+v", a)
+	}
+	if p.Summary.Create != 1 {
+		t.Errorf("summary create = %d, want 1", p.Summary.Create)
+	}
+}
+
+func TestEmailPlanAutoresponderSkipWhenEquivalent(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	src.Autoresponders = []AutoresponderEntry{srcAutoresponder("info@example.com", "example.com")}
+	dest := epInventory("destination", "acct", "example.com")
+	d := srcAutoresponder("info@example.com", "example.com")
+	// cPanel normalizes trailing newline runs to exactly one (2B-2-pre
+	// fact 5): a dest body differing only there is behaviorally identical.
+	d.Body = "Sono in ferie.\nRientro lunedì.\n\n\n"
+	dest.Autoresponders = []AutoresponderEntry{d}
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "autoresponders", "info@example.com")
+	if op.Action != EmailActionSkip {
+		t.Fatalf("action = %q (reason %q), want skip", op.Action, op.Reason)
+	}
+}
+
+func TestEmailPlanAutoresponderManualWhenDestDiffers(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	src.Autoresponders = []AutoresponderEntry{srcAutoresponder("info@example.com", "example.com")}
+	dest := epInventory("destination", "acct", "example.com")
+	d := srcAutoresponder("info@example.com", "example.com")
+	d.Body = "I am on vacation.\n"
+	dest.Autoresponders = []AutoresponderEntry{d}
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "autoresponders", "info@example.com")
+	if op.Action != EmailActionManual {
+		t.Fatalf("action = %q, want manual (the writer must never overwrite)", op.Action)
+	}
+	if !strings.Contains(op.Reason, "overwrite") {
+		t.Errorf("reason %q should explain the never-overwrite refusal", op.Reason)
+	}
+}
+
+func TestEmailPlanAutoresponderManualWhenBodyNotCollected(t *testing.T) {
+	// Source entry without BodyCollected (pre-2B-2 artifact or failed get):
+	// no equality can be proven, no create payload would be faithful.
 	src := epInventory("source", "acct", "example.com")
 	src.Autoresponders = []AutoresponderEntry{
-		{Email: "info@example.com", Domain: "example.com", Subject: "Out of office", Interval: 3600},
+		{Email: "info@example.com", Domain: "example.com", Subject: "OOO", Interval: 8},
 	}
 	dest := epInventory("destination", "acct", "example.com")
-	// Even an apparently identical dest autoresponder stays manual: bodies
-	// are not collected until 2B-2, equality cannot be proven.
-	dest.Autoresponders = []AutoresponderEntry{
-		{Email: "info@example.com", Domain: "example.com", Subject: "Out of office", Interval: 3600},
-	}
 
 	p := BuildEmailPlan(src, dest, nil)
 	op := findEmailOp(t, p, "autoresponders", "info@example.com")
 	if op.Action != EmailActionManual {
 		t.Fatalf("action = %q, want manual", op.Action)
 	}
-	if !strings.Contains(op.Reason, "2B-2") {
-		t.Errorf("reason %q should name the PR that will implement it", op.Reason)
+	if !strings.Contains(op.Reason, "re-run") {
+		t.Errorf("reason %q should tell the operator to re-run the inventory", op.Reason)
+	}
+
+	// Dest entry without BodyCollected while the address exists there:
+	// equality unprovable → manual, fail-safe.
+	src2 := epInventory("source", "acct", "example.com")
+	src2.Autoresponders = []AutoresponderEntry{srcAutoresponder("info@example.com", "example.com")}
+	dest2 := epInventory("destination", "acct", "example.com")
+	dest2.Autoresponders = []AutoresponderEntry{
+		{Email: "info@example.com", Domain: "example.com", Subject: "Out of office", Interval: 8},
+	}
+	p2 := BuildEmailPlan(src2, dest2, nil)
+	op2 := findEmailOp(t, p2, "autoresponders", "info@example.com")
+	if op2.Action != EmailActionManual {
+		t.Fatalf("dest-uncollected action = %q, want manual", op2.Action)
+	}
+}
+
+func TestEmailPlanAutoresponderManualWhenDomainMissingOnDest(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	src.Autoresponders = []AutoresponderEntry{srcAutoresponder("info@other.example", "other.example")}
+	dest := epInventory("destination", "acct", "example.com")
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "autoresponders", "info@other.example")
+	if op.Action != EmailActionManual {
+		t.Fatalf("action = %q, want manual", op.Action)
+	}
+	if !strings.Contains(op.Reason, "missing on destination") {
+		t.Errorf("reason %q", op.Reason)
+	}
+}
+
+func TestEmailPlanAutoresponderMalformedAddressIsManual(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	a := srcAutoresponder("not-an-address", "example.com")
+	a.Email = "not-an-address"
+	src.Autoresponders = []AutoresponderEntry{a}
+	dest := epInventory("destination", "acct", "example.com")
+
+	p := BuildEmailPlan(src, dest, nil)
+	op := findEmailOp(t, p, "autoresponders", "not-an-address")
+	if op.Action != EmailActionManual {
+		t.Fatalf("action = %q, want manual", op.Action)
+	}
+}
+
+func TestEmailPlanDestOnlyAutorespondersAreInformational(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	dest := epInventory("destination", "acct", "example.com")
+	dest.Autoresponders = []AutoresponderEntry{srcAutoresponder("only-dest@example.com", "example.com")}
+
+	p := BuildEmailPlan(src, dest, nil)
+	if len(opsBySection(p, "autoresponders")) != 0 {
+		t.Fatalf("dest-only autoresponders must produce no ops: %+v", opsBySection(p, "autoresponders"))
+	}
+	found := false
+	for _, info := range p.Informational {
+		if info.Section == "autoresponders" && info.Key == "only-dest@example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("dest-only autoresponder missing from informational: %+v", p.Informational)
 	}
 }
 

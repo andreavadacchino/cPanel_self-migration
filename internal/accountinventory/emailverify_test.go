@@ -157,3 +157,115 @@ func TestVerifyEmailPlanManualSectionsGate(t *testing.T) {
 		t.Errorf("reason = %q", rep.ManualSections[0].Reason)
 	}
 }
+
+// --- autoresponders (PR 2B-2) -------------------------------------------------
+
+func evAutoresponderPlan() EmailApplyPlan {
+	content := &EmailAutoresponderContent{
+		From: "Info Desk", Subject: "Out of office",
+		Body: "Sono in ferie.\n", IsHTML: 0, Interval: 8, Charset: "utf-8",
+	}
+	return EmailApplyPlan{
+		Mode: "email-apply-plan", FormatVersion: 1,
+		DestinationUser: "acct",
+		Ops: []EmailPlanOp{
+			{Section: EmailSectionAutoresponders, Action: EmailActionCreate,
+				Domain: "example.com", Key: "info@example.com", Email: "info", Autoresponder: content},
+			{Section: EmailSectionAutoresponders, Action: EmailActionSkip,
+				Domain: "example.com", Key: "kept@example.com", SourceValue: "Kept",
+				DestinationValue: "Kept", Autoresponder: &EmailAutoresponderContent{
+					From: "K", Subject: "Kept", Body: "Kept body.\n", Interval: 4, Charset: "utf-8"}},
+			{Section: EmailSectionAutoresponders, Action: EmailActionManual,
+				Domain: "example.com", Key: "m@example.com", Reason: "content differs"},
+		},
+	}
+}
+
+func evAutoresponderLive(ars []AutoresponderEntry) EmailLiveState {
+	live := evLive(nil, nil)
+	live.AutorespondersByDomain = map[string][]AutoresponderEntry{"example.com": ars}
+	live.AutoresponderListErrors = map[string]string{}
+	return live
+}
+
+func TestVerifyEmailPlanAutoresponders(t *testing.T) {
+	applied := AutoresponderEntry{
+		Email: "info@example.com", Domain: "example.com",
+		Subject: "Out of office", From: "Info Desk", Body: "Sono in ferie.\n",
+		Interval: 8, Charset: "utf-8", BodyCollected: true,
+	}
+	kept := AutoresponderEntry{
+		Email: "kept@example.com", Domain: "example.com",
+		Subject: "Kept", From: "K", Body: "Kept body.\n",
+		Interval: 4, Charset: "utf-8", BodyCollected: true,
+	}
+
+	t.Run("before apply: create pending, skip unchanged, manual review — not clean", func(t *testing.T) {
+		rep := VerifyEmailPlan(evAutoresponderPlan(), evAutoresponderLive([]AutoresponderEntry{kept}))
+		if s := evStatus(t, rep, EmailSectionAutoresponders, "info@example.com"); s.Status != EmailVerifyPending {
+			t.Errorf("create = %q (%s), want pending", s.Status, s.Reason)
+		}
+		if s := evStatus(t, rep, EmailSectionAutoresponders, "kept@example.com"); s.Status != EmailVerifyUnchanged {
+			t.Errorf("skip = %q (%s), want unchanged", s.Status, s.Reason)
+		}
+		if s := evStatus(t, rep, EmailSectionAutoresponders, "m@example.com"); s.Status != EmailVerifyManualReview {
+			t.Errorf("manual = %q, want manual_review", s.Status)
+		}
+		if rep.Clean {
+			t.Error("pending create must gate")
+		}
+	})
+
+	t.Run("after apply: create applied — clean", func(t *testing.T) {
+		rep := VerifyEmailPlan(evAutoresponderPlan(), evAutoresponderLive([]AutoresponderEntry{applied, kept}))
+		if s := evStatus(t, rep, EmailSectionAutoresponders, "info@example.com"); s.Status != EmailVerifyApplied {
+			t.Errorf("create = %q (%s), want applied", s.Status, s.Reason)
+		}
+		if !rep.Clean {
+			t.Errorf("expected clean, summary %+v", rep.Summary)
+		}
+	})
+
+	t.Run("content diverged: drift", func(t *testing.T) {
+		bad := applied
+		bad.Body = "Qualcosa di diverso.\n"
+		rep := VerifyEmailPlan(evAutoresponderPlan(), evAutoresponderLive([]AutoresponderEntry{bad, kept}))
+		if s := evStatus(t, rep, EmailSectionAutoresponders, "info@example.com"); s.Status != EmailVerifyDrift {
+			t.Errorf("create = %q, want drift", s.Status)
+		}
+		gone := VerifyEmailPlan(evAutoresponderPlan(), evAutoresponderLive([]AutoresponderEntry{applied}))
+		if s := evStatus(t, gone, EmailSectionAutoresponders, "kept@example.com"); s.Status != EmailVerifyDrift {
+			t.Errorf("skip with vanished dest = %q, want drift", s.Status)
+		}
+	})
+
+	t.Run("re-list failed: unavailable, gates", func(t *testing.T) {
+		live := evAutoresponderLive(nil)
+		live.AutoresponderListErrors["example.com"] = "ssh timeout"
+		rep := VerifyEmailPlan(evAutoresponderPlan(), live)
+		if s := evStatus(t, rep, EmailSectionAutoresponders, "info@example.com"); s.Status != EmailVerifyUnavailable {
+			t.Errorf("create = %q, want unavailable", s.Status)
+		}
+		if rep.Clean {
+			t.Error("unavailable must gate")
+		}
+	})
+
+	t.Run("live autoresponder unknown to the plan: untracked, informational", func(t *testing.T) {
+		extra := AutoresponderEntry{Email: "new@example.com", Domain: "example.com",
+			Subject: "New", Body: "n\n", BodyCollected: true}
+		rep := VerifyEmailPlan(evAutoresponderPlan(), evAutoresponderLive([]AutoresponderEntry{applied, kept, extra}))
+		found := false
+		for _, u := range rep.Untracked {
+			if u.Section == EmailSectionAutoresponders && u.Key == "new@example.com" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("untracked = %+v, want new@example.com listed", rep.Untracked)
+		}
+		if !rep.Clean {
+			t.Error("untracked must never gate")
+		}
+	})
+}

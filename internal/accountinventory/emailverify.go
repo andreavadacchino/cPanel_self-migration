@@ -127,14 +127,61 @@ func verifyEmailOp(op EmailPlanOp, live EmailLiveState, destUser string) EmailVe
 		res.Status, res.Reason = EmailVerifyManualReview, op.Reason
 		return res
 	}
-	// 2B-2/2B-3 sections: verify re-lists only the 2B-1 write surface.
-	if op.Section != EmailSectionForwarders && op.Section != EmailSectionDefaultAddress {
+	// 2B-3 sections (filters, routing): verify re-lists only the sections
+	// whose writers have landed (forwarders/default_address in 2B-1,
+	// autoresponders in 2B-2).
+	if op.Section != EmailSectionForwarders && op.Section != EmailSectionDefaultAddress &&
+		op.Section != EmailSectionAutoresponders {
 		res.Status = EmailVerifyNotChecked
 		res.Reason = "section is not re-listed by email verify until its writer lands"
 		return res
 	}
 
 	switch {
+	case op.Section == EmailSectionAutoresponders:
+		if msg, failed := live.AutoresponderListErrors[op.Domain]; failed {
+			res.Status, res.Reason = EmailVerifyUnavailable, "fresh autoresponder re-list failed: "+msg
+			return res
+		}
+		if op.Autoresponder == nil {
+			res.Status = EmailVerifyDrift
+			res.Reason = fmt.Sprintf("autoresponder %s op carries no content payload — malformed or hand-edited plan", op.Action)
+			return res
+		}
+		res.Expected = op.Autoresponder.Subject
+		e, present := live.autoresponderFor(op.Domain, op.Key)
+		if present {
+			res.Observed = e.Subject
+		}
+		equivalent := present && autoresponderContentEquivalent(op.Autoresponder, e)
+		switch op.Action {
+		case EmailActionSkip:
+			if equivalent {
+				res.Status = EmailVerifyUnchanged
+			} else {
+				res.Status = EmailVerifyDrift
+				res.Reason = "the plan-time destination autoresponder is no longer live with the agreed content"
+			}
+		case EmailActionCreate:
+			switch {
+			case equivalent:
+				res.Status = EmailVerifyApplied
+			case !present:
+				res.Status = EmailVerifyPending
+				res.Reason = "autoresponder still missing on the destination (plan-time state)"
+			case !e.BodyCollected:
+				res.Status = EmailVerifyUnavailable
+				res.Reason = "an autoresponder exists but its body could not be read — cannot verify"
+			default:
+				res.Status = EmailVerifyDrift
+				res.Reason = "destination autoresponder matches neither the desired content nor the plan-time (absent) state"
+			}
+		default:
+			res.Status = EmailVerifyDrift
+			res.Reason = fmt.Sprintf("unexpected autoresponder action %q — malformed or hand-edited plan", op.Action)
+		}
+		return res
+
 	case op.Section == EmailSectionForwarders:
 		if msg, failed := live.ForwarderListErrors[op.Domain]; failed {
 			res.Status, res.Reason = EmailVerifyUnavailable, "fresh forwarder re-list failed: "+msg
@@ -225,6 +272,7 @@ func verifyEmailOp(op EmailPlanOp, live EmailLiveState, destUser string) EmailVe
 func emailUntracked(plan EmailApplyPlan, live EmailLiveState) []EmailPlanInfo {
 	knownPairs := map[forwarderPair]bool{}
 	knownDefaults := map[string]bool{}
+	knownAutoresponders := map[string]bool{}
 	for _, op := range plan.Ops {
 		switch op.Section {
 		case EmailSectionForwarders:
@@ -235,6 +283,8 @@ func emailUntracked(plan EmailApplyPlan, live EmailLiveState) []EmailPlanInfo {
 			knownPairs[forwarderPair{Addr: canonEmailAddr(op.Key), Target: canonEmailAddr(target)}] = true
 		case EmailSectionDefaultAddress:
 			knownDefaults[op.Domain] = true
+		case EmailSectionAutoresponders:
+			knownAutoresponders[canonEmailAddr(op.Key)] = true
 		}
 	}
 	for _, info := range plan.Informational {
@@ -243,6 +293,8 @@ func emailUntracked(plan EmailApplyPlan, live EmailLiveState) []EmailPlanInfo {
 			knownPairs[forwarderPair{Addr: canonEmailAddr(info.Key), Target: canonEmailAddr(info.Value)}] = true
 		case EmailSectionDefaultAddress:
 			knownDefaults[info.Domain] = true
+		case EmailSectionAutoresponders:
+			knownAutoresponders[canonEmailAddr(info.Key)] = true
 		}
 	}
 
@@ -273,6 +325,23 @@ func emailUntracked(plan EmailApplyPlan, live EmailLiveState) []EmailPlanInfo {
 			out = append(out, EmailPlanInfo{
 				Section: EmailSectionDefaultAddress, Domain: domain,
 				Key: domain, Value: e.DefaultAddress,
+			})
+		}
+	}
+	arDomains := make([]string, 0, len(live.AutorespondersByDomain))
+	for d := range live.AutorespondersByDomain {
+		arDomains = append(arDomains, d)
+	}
+	sort.Strings(arDomains)
+	for _, d := range arDomains {
+		for _, a := range live.AutorespondersByDomain[d] {
+			addr := canonEmailAddr(a.Email)
+			if knownAutoresponders[addr] {
+				continue
+			}
+			out = append(out, EmailPlanInfo{
+				Section: EmailSectionAutoresponders, Domain: d,
+				Key: addr, Value: a.Subject,
 			})
 		}
 	}

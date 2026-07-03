@@ -159,3 +159,84 @@ func envArgsByKey(t *testing.T, script string, env map[string]string) map[string
 	}
 	return out
 }
+
+// --- autoresponder write primitives (2B-2-pre byte-verified contract) --------
+
+func TestAddAutoresponderBuildsVerifiedCall(t *testing.T) {
+	f := &fakeRunner{out: uapiOK(`null`)}
+	w := AutoresponderWrite{
+		From: "Info Desk", Subject: "Out of office",
+		Body: "Sono in ferie.\n", IsHTML: 0, Interval: 8, Charset: "utf-8",
+	}
+	if err := AddAutoresponder(bg, f, "example.com", "info", w); err != nil {
+		t.Fatalf("AddAutoresponder: %v", err)
+	}
+	if !strings.Contains(f.script, "uapi --output=json Email add_auto_responder") {
+		t.Errorf("script = %q", f.script)
+	}
+	envByKey := envArgsByKey(t, f.script, f.env)
+	want := map[string]string{
+		"domain": "example.com", "email": "info", "from": "Info Desk",
+		"subject": "Out of office", "body": "Sono in ferie.\n",
+		"is_html": "0", "interval": "8", "charset": "utf-8",
+	}
+	for k, v := range want {
+		if envByKey[k] != v {
+			t.Errorf("arg %s = %q, want %q", k, envByKey[k], v)
+		}
+	}
+	// start/stop unset (0) must be OMITTED: the byte-verified add stores
+	// null when they are absent (2B-2-pre fact 1).
+	for _, k := range []string{"start", "stop"} {
+		if _, present := envByKey[k]; present {
+			t.Errorf("arg %s must be omitted when zero", k)
+		}
+	}
+}
+
+func TestAddAutoresponderIncludesStartStopWhenSet(t *testing.T) {
+	f := &fakeRunner{out: uapiOK(`null`)}
+	w := AutoresponderWrite{
+		From: "T", Subject: "s", Body: "b\n", IsHTML: 1, Interval: 12,
+		Start: 1783062169, Stop: 1783666969, Charset: "utf-8",
+	}
+	if err := AddAutoresponder(bg, f, "example.com", "info", w); err != nil {
+		t.Fatalf("AddAutoresponder: %v", err)
+	}
+	envByKey := envArgsByKey(t, f.script, f.env)
+	if envByKey["start"] != "1783062169" || envByKey["stop"] != "1783666969" {
+		t.Errorf("start/stop = %q/%q", envByKey["start"], envByKey["stop"])
+	}
+	if envByKey["is_html"] != "1" {
+		t.Errorf("is_html = %q", envByKey["is_html"])
+	}
+}
+
+func TestDeleteAutoresponderBuildsVerifiedCall(t *testing.T) {
+	f := &fakeRunner{out: uapiOK(`null`)}
+	if err := DeleteAutoresponder(bg, f, "info@example.com"); err != nil {
+		t.Fatalf("DeleteAutoresponder: %v", err)
+	}
+	if !strings.Contains(f.script, "uapi --output=json Email delete_auto_responder") {
+		t.Errorf("script = %q", f.script)
+	}
+	envByKey := envArgsByKey(t, f.script, f.env)
+	if envByKey["email"] != "info@example.com" {
+		t.Errorf("args = %v", envByKey)
+	}
+}
+
+func TestListAutorespondersWithRawReturnsVerbatimBytes(t *testing.T) {
+	raw := uapiOK(`[{"email":"b@example.com","subject":"B"},{"email":"a@example.com","subject":"A"}]`)
+	f := &fakeRunner{out: raw}
+	entries, got, err := ListAutorespondersWithRaw(bg, f, "example.com")
+	if err != nil {
+		t.Fatalf("ListAutorespondersWithRaw: %v", err)
+	}
+	if string(got) != string(raw) {
+		t.Errorf("raw bytes not verbatim")
+	}
+	if len(entries) != 2 || entries[0].Email != "a@example.com" {
+		t.Errorf("entries = %+v, want sorted by email", entries)
+	}
+}

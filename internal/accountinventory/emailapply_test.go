@@ -238,3 +238,164 @@ func TestComputeEmailRollbackDegraded(t *testing.T) {
 		t.Errorf("degraded notes = %v", notes)
 	}
 }
+
+// --- EvaluateEmailOp: autoresponder create (PR 2B-2) -------------------------
+
+func eaAutoresponderOp() EmailPlanOp {
+	return EmailPlanOp{
+		Section: EmailSectionAutoresponders, Action: EmailActionCreate,
+		Domain: "example.com", Key: "info@example.com", Email: "info",
+		Autoresponder: &EmailAutoresponderContent{
+			From: "Info Desk", Subject: "Out of office",
+			Body: "Sono in ferie.\n", IsHTML: 0, Interval: 8, Charset: "utf-8",
+		},
+	}
+}
+
+func eaLiveAutoresponders(ars []AutoresponderEntry) EmailLiveState {
+	live := eaLive(nil, nil)
+	live.AutorespondersByDomain = map[string][]AutoresponderEntry{"example.com": ars}
+	live.AutoresponderListErrors = map[string]string{}
+	return live
+}
+
+func eaLiveAutoresponderEntry() AutoresponderEntry {
+	return AutoresponderEntry{
+		Email: "info@example.com", Domain: "example.com",
+		Subject: "Out of office", From: "Info Desk",
+		Body: "Sono in ferie.\n", IsHTML: 0, Interval: 8, Charset: "utf-8",
+		BodyCollected: true,
+	}
+}
+
+func TestEvaluateAutoresponderCreate(t *testing.T) {
+	op := eaAutoresponderOp()
+
+	t.Run("address empty -> write", func(t *testing.T) {
+		live := eaLiveAutoresponders(nil)
+		if d, r := EvaluateEmailOp(op, live, "acct"); d != EmailDecisionWrite {
+			t.Errorf("decision = %q (%s), want write", d, r)
+		}
+	})
+
+	t.Run("outcome present (equivalent content) -> already_present", func(t *testing.T) {
+		live := eaLiveAutoresponders([]AutoresponderEntry{eaLiveAutoresponderEntry()})
+		if d, _ := EvaluateEmailOp(op, live, "acct"); d != EmailDecisionAlready {
+			t.Errorf("decision = %q, want already_present", d)
+		}
+	})
+
+	t.Run("different content on the address -> refused (never overwrite)", func(t *testing.T) {
+		e := eaLiveAutoresponderEntry()
+		e.Body = "Qualcun altro ha scritto questo.\n"
+		live := eaLiveAutoresponders([]AutoresponderEntry{e})
+		d, r := EvaluateEmailOp(op, live, "acct")
+		if d != EmailDecisionRefused {
+			t.Errorf("decision = %q, want refused", d)
+		}
+		if !strings.Contains(r, "overwrite") {
+			t.Errorf("reason = %q, should explain the never-overwrite refusal", r)
+		}
+	})
+
+	t.Run("present but body unreadable -> refused fail-closed", func(t *testing.T) {
+		e := eaLiveAutoresponderEntry()
+		e.Body, e.BodyCollected = "", false
+		live := eaLiveAutoresponders([]AutoresponderEntry{e})
+		if d, _ := EvaluateEmailOp(op, live, "acct"); d != EmailDecisionRefused {
+			t.Errorf("decision = %q, want refused", d)
+		}
+	})
+
+	t.Run("re-list failure -> refused fail-closed", func(t *testing.T) {
+		live := eaLiveAutoresponders(nil)
+		live.AutoresponderListErrors["example.com"] = "ssh timeout"
+		if d, _ := EvaluateEmailOp(op, live, "acct"); d != EmailDecisionRefused {
+			t.Errorf("decision = %q, want refused", d)
+		}
+	})
+
+	t.Run("op without payload -> refused (malformed plan)", func(t *testing.T) {
+		broken := op
+		broken.Autoresponder = nil
+		live := eaLiveAutoresponders(nil)
+		if d, _ := EvaluateEmailOp(broken, live, "acct"); d != EmailDecisionRefused {
+			t.Errorf("decision = %q, want refused", d)
+		}
+	})
+}
+
+func TestEmailOutcomePresentAutoresponder(t *testing.T) {
+	op := eaAutoresponderOp()
+	if EmailOutcomePresent(op, eaLiveAutoresponders(nil), "acct") {
+		t.Error("outcome present on an empty address")
+	}
+	if !EmailOutcomePresent(op, eaLiveAutoresponders([]AutoresponderEntry{eaLiveAutoresponderEntry()}), "acct") {
+		t.Error("outcome NOT present with the equivalent live entry")
+	}
+	// Trailing-newline normalization (2B-2-pre fact 5) must apply.
+	e := eaLiveAutoresponderEntry()
+	e.Body = "Sono in ferie.\n\n\n"
+	if !EmailOutcomePresent(op, eaLiveAutoresponders([]AutoresponderEntry{e}), "acct") {
+		t.Error("outcome NOT present with a trailing-newline-only difference")
+	}
+	diff := eaLiveAutoresponderEntry()
+	diff.Subject = "Other"
+	if EmailOutcomePresent(op, eaLiveAutoresponders([]AutoresponderEntry{diff}), "acct") {
+		t.Error("outcome present with a DIFFERENT live entry")
+	}
+}
+
+func TestComputeEmailRollbackAutoresponderCreate(t *testing.T) {
+	op := eaAutoresponderOp()
+	report := EmailApplyReport{
+		RunMode: "apply",
+		Results: []EmailOpResult{
+			{EmailPlanOp: op, Status: EmailOpApplied},
+			{EmailPlanOp: eaAutoresponderOp(), Status: EmailOpAlready}, // NEVER inverted
+		},
+	}
+	report.Results[1].Key = "other@example.com"
+	backup := EmailBackup{}
+
+	ops, err := ComputeEmailRollback(report, backup)
+	if err != nil {
+		t.Fatalf("ComputeEmailRollback: %v", err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("ops = %+v, want exactly the own applied create inverted", ops)
+	}
+	ro := ops[0]
+	if ro.Kind != EmailRollbackAutoresponderRemove {
+		t.Errorf("kind = %q", ro.Kind)
+	}
+	if ro.Address != "info@example.com" || ro.Domain != "example.com" {
+		t.Errorf("target = %s / %s", ro.Address, ro.Domain)
+	}
+	if ro.Autoresponder == nil || ro.Autoresponder.Subject != "Out of office" {
+		t.Errorf("the inverse op must carry the applied content as its expected-current state: %+v", ro.Autoresponder)
+	}
+}
+
+func TestComputeEmailRollbackDegradedAutorespondersAreManual(t *testing.T) {
+	backup := EmailBackup{
+		AutorespondersByDomain: map[string]EmailBackupSection{
+			"example.com": {Autoresponders: []AutoresponderEntry{eaLiveAutoresponderEntry()}},
+		},
+	}
+	ops, notes := ComputeEmailRollbackDegraded(backup)
+	for _, o := range ops {
+		if o.Kind == EmailRollbackAutoresponderRemove {
+			t.Fatalf("degraded rollback computed an autoresponder DELETE without the report: %+v", o)
+		}
+	}
+	found := false
+	for _, n := range notes {
+		if strings.Contains(n, "autoresponder") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("degraded rollback must flag autoresponders as MANUAL, notes = %v", notes)
+	}
+}

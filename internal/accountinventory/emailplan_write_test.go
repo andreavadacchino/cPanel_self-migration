@@ -98,3 +98,29 @@ func TestWriteEmailPlanMarkdown(t *testing.T) {
 		t.Error("missing never-delete statement")
 	}
 }
+
+// PR 2B-2: an autoresponder create op renders its own description, not
+// the forwarder shape.
+func TestEmailPlanMarkdownAutoresponderCreate(t *testing.T) {
+	src := epInventory("source", "acct", "example.com")
+	src.Autoresponders = []AutoresponderEntry{srcAutoresponder("info@example.com", "example.com")}
+	dest := epInventory("destination", "acct", "example.com")
+	p := BuildEmailPlan(src, dest, nil)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plan.md")
+	if err := WriteEmailPlanMarkdown(path, p); err != nil {
+		t.Fatalf("WriteEmailPlanMarkdown: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, "autoresponder") || !strings.Contains(s, "Out of office") {
+		t.Errorf("markdown should describe the autoresponder create, got:\n%s", s)
+	}
+	if strings.Contains(s, "forward info@example.com") {
+		t.Errorf("autoresponder create rendered with the forwarder shape:\n%s", s)
+	}
+}

@@ -81,6 +81,25 @@ type EmailPlanOp struct {
 	// time — the per-op precondition `email apply` re-checks against a
 	// fresh re-list before writing (the email analogue of the DNS serial).
 	PlanTimeDestForwards []string `json:"plan_time_dest_forwards,omitempty"`
+	// Autoresponder carries the full content payload of an autoresponder
+	// create op (PR 2B-2). Its plan-time precondition is implicit in the
+	// action: the destination address had NO autoresponder (a differing
+	// one is terminal manual — the writer never overwrites).
+	Autoresponder *EmailAutoresponderContent `json:"autoresponder,omitempty"`
+}
+
+// EmailAutoresponderContent is the round-trippable autoresponder content
+// (get_auto_responder → add_auto_responder, 2B-2-pre facts 3/5): exactly
+// the fields the writer sends and the verify paths compare.
+type EmailAutoresponderContent struct {
+	From     string `json:"from"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body"`
+	IsHTML   int    `json:"is_html"`
+	Interval int    `json:"interval"`
+	Start    int64  `json:"start,omitempty"`
+	Stop     int64  `json:"stop,omitempty"`
+	Charset  string `json:"charset,omitempty"`
 }
 
 // EmailPlanInfo describes a destination-only item: listed so a human sees
@@ -457,28 +476,141 @@ func planDefaultAddresses(plan *EmailApplyPlan, src, dest NormalizedInventory) {
 	}
 }
 
-// planAutoresponders carries every source autoresponder as a terminal
-// manual op: bodies are not collected until 2B-2, so equality can never
-// be proven and no skip would be honest.
-func planAutoresponders(plan *EmailApplyPlan, src, dest NormalizedInventory) {
-	destByEmail := map[string]bool{}
-	for _, a := range dest.Autoresponders {
-		destByEmail[canonEmailAddr(a.Email)] = true
+// normalizeAutoresponderBody applies the byte-verified cPanel storage
+// normalization (2B-2-pre fact 5): trailing "\n" runs collapse to exactly
+// one. A get_auto_responder output is already in this form; normalizing
+// both sides makes the equality immune to hand-edited artifacts.
+func normalizeAutoresponderBody(b string) string {
+	return strings.TrimRight(b, "\n") + "\n"
+}
+
+// autoresponderCharset defaults an empty charset to the cPanel default.
+func autoresponderCharset(c string) string {
+	if strings.TrimSpace(c) == "" {
+		return "utf-8"
 	}
+	return strings.TrimSpace(c)
+}
+
+// autorespondersEquivalent reports whether two COLLECTED autoresponders
+// are behaviorally identical: every round-trippable content field, with
+// the body compared under the storage normalization.
+func autorespondersEquivalent(a, b AutoresponderEntry) bool {
+	return a.Subject == b.Subject &&
+		a.From == b.From &&
+		normalizeAutoresponderBody(a.Body) == normalizeAutoresponderBody(b.Body) &&
+		a.IsHTML == b.IsHTML &&
+		a.Interval == b.Interval &&
+		a.Start == b.Start &&
+		a.Stop == b.Stop &&
+		autoresponderCharset(a.Charset) == autoresponderCharset(b.Charset)
+}
+
+// planAutoresponders applies the 2B rule table to the autoresponder
+// section (PR 2B-2). Bodies are collected since 2B-2, so equality is
+// provable when BOTH sides carry BodyCollected; anything unprovable
+// degrades to terminal manual (fail-safe). ⚠️ add_auto_responder UPSERTS
+// (2B-2-pre fact 7): a differing destination autoresponder is terminal
+// manual — the writer never overwrites somebody's content. Dest-only
+// autoresponders are informational, never deleted.
+func planAutoresponders(plan *EmailApplyPlan, src, dest NormalizedInventory) {
+	destDomains := map[string]bool{}
+	for _, d := range dest.Domains {
+		destDomains[strings.ToLower(d.Name)] = true
+	}
+	destByEmail := map[string]AutoresponderEntry{}
+	destPresent := map[string]bool{}
+	for _, a := range dest.Autoresponders {
+		addr := canonEmailAddr(a.Email)
+		if !destPresent[addr] {
+			destPresent[addr] = true
+			destByEmail[addr] = a
+		}
+	}
+
+	srcSeen := map[string]bool{}
 	for _, a := range src.Autoresponders {
+		addr := canonEmailAddr(a.Email)
+		if srcSeen[addr] {
+			continue // duplicate source rows collapse into one op
+		}
+		srcSeen[addr] = true
+
 		op := EmailPlanOp{
 			Section:     EmailSectionAutoresponders,
 			Domain:      strings.ToLower(strings.TrimSpace(a.Domain)),
-			Key:         canonEmailAddr(a.Email),
+			Key:         addr,
 			SourceValue: a.Subject,
-			Action:      EmailActionManual,
 		}
-		if destByEmail[canonEmailAddr(a.Email)] {
-			op.Reason = "an autoresponder exists on the destination, but bodies are not collected until 2B-2 — confirm by hand"
-		} else {
-			op.Reason = "autoresponder apply lands in 2B-2 (body collector missing) — recreate by hand or wait"
+		local, domain, ok := splitEmailAddr(a.Email)
+		if ok {
+			op.Domain = strings.ToLower(domain)
+		}
+		d, onDest := destByEmail[addr]
+		if onDest {
+			op.DestinationValue = d.Subject
+		}
+
+		switch {
+		case !ok:
+			op.Action = EmailActionManual
+			op.Reason = fmt.Sprintf("autoresponder address %q does not split into local@domain — cannot be expressed as write parameters", strings.TrimSpace(a.Email))
+		case !a.BodyCollected:
+			op.Action = EmailActionManual
+			op.Reason = "the source inventory carries no autoresponder body (pre-2B-2 artifact or a failed per-address read) — re-run --account-inventory on the source, then re-plan"
+		case onDest && !d.BodyCollected:
+			op.Action = EmailActionManual
+			op.Reason = "an autoresponder exists on the destination but its inventory carries no body (pre-2B-2 artifact or a failed per-address read) — re-run the destination inventory, then re-plan"
+		case onDest && autorespondersEquivalent(a, d):
+			op.Action = EmailActionSkip
+			// The agreed content travels with the skip op too: email verify
+			// re-checks the destination still carries it (dnsverify
+			// precedent: a skip proves plan-time equality, verify proves it
+			// is still live).
+			op.Autoresponder = &EmailAutoresponderContent{
+				From:     a.From,
+				Subject:  a.Subject,
+				Body:     normalizeAutoresponderBody(a.Body),
+				IsHTML:   a.IsHTML,
+				Interval: a.Interval,
+				Start:    a.Start,
+				Stop:     a.Stop,
+				Charset:  autoresponderCharset(a.Charset),
+			}
+		case onDest:
+			op.Action = EmailActionManual
+			op.Reason = "an autoresponder with DIFFERENT content already exists on the destination — the writer never overwrites (the add call would destroy it); resolve by hand (terminal)"
+		case !destDomains[op.Domain]:
+			op.Action = EmailActionManual
+			op.Reason = fmt.Sprintf("domain %s is missing on destination — create it first, then re-plan", op.Domain)
+		default:
+			op.Action = EmailActionCreate
+			op.Email = strings.ToLower(local)
+			op.Autoresponder = &EmailAutoresponderContent{
+				From:     a.From,
+				Subject:  a.Subject,
+				Body:     normalizeAutoresponderBody(a.Body),
+				IsHTML:   a.IsHTML,
+				Interval: a.Interval,
+				Start:    a.Start,
+				Stop:     a.Stop,
+				Charset:  autoresponderCharset(a.Charset),
+			}
 		}
 		plan.Ops = append(plan.Ops, op)
+	}
+
+	for _, a := range dest.Autoresponders {
+		addr := canonEmailAddr(a.Email)
+		if srcSeen[addr] {
+			continue
+		}
+		plan.Informational = append(plan.Informational, EmailPlanInfo{
+			Section: EmailSectionAutoresponders,
+			Domain:  strings.ToLower(strings.TrimSpace(a.Domain)),
+			Key:     addr,
+			Value:   a.Subject,
+		})
 	}
 }
 

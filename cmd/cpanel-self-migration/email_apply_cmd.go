@@ -100,11 +100,18 @@ func printEmailApplyDryRun(plan accountinventory.EmailApplyPlan) {
 	fmt.Println()
 	writes := 0
 	for _, op := range plan.Ops {
-		switch op.Action {
-		case accountinventory.EmailActionCreate:
+		switch {
+		case op.Section == accountinventory.EmailSectionAutoresponders && op.Action == accountinventory.EmailActionCreate:
+			subject := ""
+			if op.Autoresponder != nil {
+				subject = op.Autoresponder.Subject
+			}
+			fmt.Printf("  create autoresponder  %s (subject %q)\n", op.Key, subject)
+			writes++
+		case op.Action == accountinventory.EmailActionCreate:
 			fmt.Printf("  create forwarder  %s → %s\n", op.Key, op.Forward)
 			writes++
-		case accountinventory.EmailActionSet:
+		case op.Action == accountinventory.EmailActionSet:
 			fmt.Printf("  set default addr  %s → %s  (plan-time dest: %q)\n", op.Domain, op.Value, op.DestinationValue)
 			writes++
 		}
@@ -141,12 +148,14 @@ func dialEmailDest(ctx context.Context, cfgFlag string) (*sshx.Client, error) {
 }
 
 // fetchEmailLiveState re-lists the touched sections on the destination
-// (fresh state for the per-op guard) and, when collectRaw is true, also
-// archives the verbatim responses for the backup.
-func fetchEmailLiveState(ctx context.Context, client cpanel.Runner, domains []string, needDefaults bool) (accountinventory.EmailLiveState, map[string]accountinventory.EmailBackupSection, *accountinventory.EmailBackupSection) {
+// (fresh state for the per-op guard) and also archives the verbatim
+// responses for the backup.
+func fetchEmailLiveState(ctx context.Context, client cpanel.Runner, domains []string, needDefaults bool, arDomains []string) (accountinventory.EmailLiveState, map[string]accountinventory.EmailBackupSection, *accountinventory.EmailBackupSection, map[string]accountinventory.EmailBackupSection) {
 	live := accountinventory.EmailLiveState{
-		ForwardersByDomain:  map[string][]accountinventory.ForwarderEntry{},
-		ForwarderListErrors: map[string]string{},
+		ForwardersByDomain:      map[string][]accountinventory.ForwarderEntry{},
+		ForwarderListErrors:     map[string]string{},
+		AutorespondersByDomain:  map[string][]accountinventory.AutoresponderEntry{},
+		AutoresponderListErrors: map[string]string{},
 	}
 	fwdBackup := map[string]accountinventory.EmailBackupSection{}
 	for _, d := range domains {
@@ -175,7 +184,60 @@ func fetchEmailLiveState(ctx context.Context, client cpanel.Runner, domains []st
 			}
 		}
 	}
-	return live, fwdBackup, defBackup
+	arBackup := map[string]accountinventory.EmailBackupSection{}
+	for _, d := range arDomains {
+		entries, listRaw, gets, err := fetchAutorespondersWithRaw(ctx, client, d)
+		if err != nil {
+			live.AutoresponderListErrors[d] = err.Error()
+			continue
+		}
+		live.AutorespondersByDomain[d] = entries
+		arBackup[d] = accountinventory.EmailBackupSection{
+			RawUAPIResponse: json.RawMessage(listRaw),
+			Autoresponders:  entries,
+			RawGetResponses: gets,
+		}
+	}
+	return live, fwdBackup, defBackup, arBackup
+}
+
+// fetchAutorespondersWithRaw lists one domain's autoresponders and reads
+// each body (existence gated on the list — 2B-2-pre fact 4). A failed
+// per-address body read keeps the entry with BodyCollected=false: the
+// guard then refuses ops on that address fail-closed instead of guessing.
+func fetchAutorespondersWithRaw(ctx context.Context, client cpanel.Runner, domain string) ([]accountinventory.AutoresponderEntry, []byte, map[string]json.RawMessage, error) {
+	list, listRaw, err := cpanel.ListAutorespondersWithRaw(ctx, client, domain)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	entries := make([]accountinventory.AutoresponderEntry, 0, len(list))
+	gets := map[string]json.RawMessage{}
+	for _, a := range list {
+		addr := a.Email
+		if !strings.Contains(addr, "@") {
+			addr = addr + "@" + domain
+		}
+		entry := accountinventory.AutoresponderEntry{
+			Email: addr, Domain: domain, Subject: a.Subject, Interval: int(a.Interval),
+		}
+		det, raw, err := cpanel.GetAutoresponderWithRaw(ctx, client, addr)
+		if err == nil {
+			entry.From = det.From
+			entry.Body = det.Body
+			entry.IsHTML = int(det.IsHTML)
+			entry.Interval = int(det.Interval)
+			entry.Start = int64(det.Start)
+			entry.Stop = int64(det.Stop)
+			entry.Charset = det.Charset
+			if det.Subject != "" {
+				entry.Subject = det.Subject
+			}
+			entry.BodyCollected = true
+			gets[addr] = json.RawMessage(raw)
+		}
+		entries = append(entries, entry)
+	}
+	return entries, listRaw, gets, nil
 }
 
 func normalizeForwarders(entries []cpanel.ForwarderEntry, domain string) []accountinventory.ForwarderEntry {
@@ -211,8 +273,9 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 		outMD = deriveMDPath(outJSON)
 	}
 
-	var createDomains []string
+	var createDomains, arDomains []string
 	seenDomain := map[string]bool{}
+	seenARDomain := map[string]bool{}
 	needDefaults := false
 	for _, op := range plan.Ops {
 		switch {
@@ -223,13 +286,19 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 			}
 		case op.Section == accountinventory.EmailSectionDefaultAddress && op.Action == accountinventory.EmailActionSet:
 			needDefaults = true
+		case op.Section == accountinventory.EmailSectionAutoresponders && op.Action == accountinventory.EmailActionCreate:
+			if !seenARDomain[op.Domain] {
+				seenARDomain[op.Domain] = true
+				arDomains = append(arDomains, op.Domain)
+			}
 		}
 	}
 	sort.Strings(createDomains)
+	sort.Strings(arDomains)
 
 	ctx := context.Background()
 	var client *sshx.Client
-	if len(createDomains) > 0 || needDefaults {
+	if len(createDomains) > 0 || needDefaults || len(arDomains) > 0 {
 		client, err = dialEmailDest(ctx, cfgFlag)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -238,7 +307,7 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 		defer func() { _ = client.Close() }()
 	}
 
-	live, fwdBackup, defBackup := fetchEmailLiveState(ctx, client, createDomains, needDefaults)
+	live, fwdBackup, defBackup, arBackup := fetchEmailLiveState(ctx, client, createDomains, needDefaults, arDomains)
 
 	// Evaluate every actionable op against the fresh state.
 	type pendingWrite struct {
@@ -292,9 +361,10 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 			GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
 			DestinationUser: plan.DestinationUser,
 			PlanFile:        planPath, PlanSHA256: planSHA,
-			ReportFile:         outJSON,
-			ForwardersByDomain: fwdBackup,
-			DefaultAddresses:   defBackup,
+			ReportFile:             outJSON,
+			ForwardersByDomain:     fwdBackup,
+			DefaultAddresses:       defBackup,
+			AutorespondersByDomain: arBackup,
 		}
 		if err := accountinventory.WriteEmailBackupJSON(backupPath, backup); err != nil {
 			fmt.Fprintln(os.Stderr, "error: backup-or-nothing — backup write failed, NOTHING was written:", err)
@@ -316,11 +386,25 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 	for _, w := range writes {
 		op := w.op
 		var writeErr error
-		switch op.Action {
-		case accountinventory.EmailActionCreate:
+		switch {
+		case op.Section == accountinventory.EmailSectionForwarders && op.Action == accountinventory.EmailActionCreate:
 			writeErr = cpanel.AddForwarder(ctx, client, op.Domain, op.Email, op.Forward)
-		case accountinventory.EmailActionSet:
+		case op.Section == accountinventory.EmailSectionDefaultAddress && op.Action == accountinventory.EmailActionSet:
 			writeErr = cpanel.SetDefaultAddress(ctx, client, op.Domain, op.Value)
+		case op.Section == accountinventory.EmailSectionAutoresponders && op.Action == accountinventory.EmailActionCreate:
+			// EvaluateEmailOp already refused a payload-less op; the guard
+			// proved the address empty, so the upsert cannot destroy
+			// anything inside the accepted TOCTOU window.
+			a := op.Autoresponder
+			writeErr = cpanel.AddAutoresponder(ctx, client, op.Domain, op.Email, cpanel.AutoresponderWrite{
+				From: a.From, Subject: a.Subject, Body: a.Body,
+				IsHTML: a.IsHTML, Interval: a.Interval,
+				Start: a.Start, Stop: a.Stop, Charset: a.Charset,
+			})
+		default:
+			results[w.idx].Status = accountinventory.EmailOpFailed
+			results[w.idx].StatusReason = fmt.Sprintf("no writer for section %s action %s — malformed plan", op.Section, op.Action)
+			continue
 		}
 		if writeErr != nil {
 			results[w.idx].Status = accountinventory.EmailOpFailed
@@ -350,8 +434,10 @@ func runEmailApplyWrites(plan accountinventory.EmailApplyPlan, planPath, cfgFlag
 // verify-after.
 func refetchEmailSection(ctx context.Context, client cpanel.Runner, op accountinventory.EmailPlanOp) (accountinventory.EmailLiveState, error) {
 	live := accountinventory.EmailLiveState{
-		ForwardersByDomain:  map[string][]accountinventory.ForwarderEntry{},
-		ForwarderListErrors: map[string]string{},
+		ForwardersByDomain:      map[string][]accountinventory.ForwarderEntry{},
+		ForwarderListErrors:     map[string]string{},
+		AutorespondersByDomain:  map[string][]accountinventory.AutoresponderEntry{},
+		AutoresponderListErrors: map[string]string{},
 	}
 	switch op.Section {
 	case accountinventory.EmailSectionForwarders:
@@ -367,6 +453,12 @@ func refetchEmailSection(ctx context.Context, client cpanel.Runner, op accountin
 		}
 		live.DefaultsListed = true
 		live.Defaults = normalizeDefaults(entries)
+	case accountinventory.EmailSectionAutoresponders:
+		entries, _, _, err := fetchAutorespondersWithRaw(ctx, client, op.Domain)
+		if err != nil {
+			return live, err
+		}
+		live.AutorespondersByDomain[op.Domain] = entries
 	}
 	return live, nil
 }
@@ -456,6 +548,8 @@ func runEmailRollback(backupPath, reportFlag string, acceptLoss, yes bool, cfgFl
 				fmt.Printf("  remove forwarder  %s → %s (the tool's own applied create)\n", op.Address, op.Forwarder)
 			case accountinventory.EmailRollbackDefaultRestore:
 				fmt.Printf("  restore default   %s → %q (backup value)\n", op.Domain, op.Value)
+			case accountinventory.EmailRollbackAutoresponderRemove:
+				fmt.Printf("  remove autoresponder  %s (the tool's own applied create)\n", op.Address)
 			}
 		}
 		if len(ops) == 0 {
@@ -544,6 +638,52 @@ func executeEmailRollbackOp(ctx context.Context, client cpanel.Runner, op accoun
 		default:
 			res.Status = accountinventory.EmailOpApplied
 		}
+		return res
+
+	case accountinventory.EmailRollbackAutoresponderRemove:
+		res.Section = accountinventory.EmailSectionAutoresponders
+		entries, _, _, err := fetchAutorespondersWithRaw(ctx, client, op.Domain)
+		if err != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, "pre-check re-list failed: "+err.Error()
+			return res
+		}
+		var cur accountinventory.AutoresponderEntry
+		present := false
+		for _, e := range entries {
+			if strings.EqualFold(strings.TrimSpace(e.Email), strings.TrimSpace(op.Address)) {
+				cur, present = e, true
+				break
+			}
+		}
+		if !present {
+			res.Status = accountinventory.EmailOpAlready
+			res.StatusReason = "autoresponder already absent — nothing to remove"
+			return res
+		}
+		// Rollback refuses an item whose current state diverged from the
+		// post-apply state (a human customized it since — never-delete
+		// somebody's content). An unreadable body also refuses fail-closed.
+		if !accountinventory.AutoresponderMatchesContent(op.Autoresponder, cur) {
+			res.Status = accountinventory.EmailOpRefused
+			res.StatusReason = fmt.Sprintf("the live autoresponder on %s diverged from the content the tool applied — a human changed it since; resolve explicitly", op.Address)
+			return res
+		}
+		if err := cpanel.DeleteAutoresponder(ctx, client, op.Address); err != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, err.Error()
+			return res
+		}
+		entries, _, _, err = fetchAutorespondersWithRaw(ctx, client, op.Domain)
+		if err != nil {
+			res.Status, res.StatusReason = accountinventory.EmailOpFailed, "verify-after re-list failed: "+err.Error()
+			return res
+		}
+		for _, e := range entries {
+			if strings.EqualFold(strings.TrimSpace(e.Email), strings.TrimSpace(op.Address)) {
+				res.Status, res.StatusReason = accountinventory.EmailOpFailed, "delete reported success but the autoresponder is still live"
+				return res
+			}
+		}
+		res.Status = accountinventory.EmailOpApplied
 		return res
 
 	case accountinventory.EmailRollbackDefaultRestore:

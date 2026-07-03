@@ -20,6 +20,7 @@ func TestEmailPlanSourcesAreOfflineByConstruction(t *testing.T) {
 		"set_default_address",
 		"delete_forwarder",
 		"add_auto_responder",
+		"delete_auto_responder",
 		"store_filter",
 		"setmxcheck",
 	}

@@ -49,6 +49,13 @@ type EmailLiveState struct {
 	// DefaultsError carries the failure otherwise.
 	DefaultsListed bool
 	DefaultsError  string
+	// AutorespondersByDomain holds the fresh autoresponder list per touched
+	// domain (PR 2B-2), with bodies fetched per address; an entry whose
+	// per-address body read failed carries BodyCollected=false and every op
+	// depending on it refuses fail-closed.
+	AutorespondersByDomain map[string][]AutoresponderEntry
+	// AutoresponderListErrors records domains whose re-list failed.
+	AutoresponderListErrors map[string]string
 }
 
 // destForwardTargets returns the canonical target set for one source
@@ -73,6 +80,30 @@ func (l EmailLiveState) forwardPairPresent(domain, address, target string) bool 
 		}
 	}
 	return false
+}
+
+// autoresponderFor returns the live autoresponder for one address.
+func (l EmailLiveState) autoresponderFor(domain, address string) (AutoresponderEntry, bool) {
+	for _, a := range l.AutorespondersByDomain[domain] {
+		if canonEmailAddr(a.Email) == canonEmailAddr(address) {
+			return a, true
+		}
+	}
+	return AutoresponderEntry{}, false
+}
+
+// autoresponderContentEquivalent compares a plan payload against a live
+// entry using the same field set and body normalization as the plan's
+// autorespondersEquivalent (verify can never disagree with the plan).
+func autoresponderContentEquivalent(c *EmailAutoresponderContent, e AutoresponderEntry) bool {
+	if c == nil || !e.BodyCollected {
+		return false
+	}
+	return autorespondersEquivalent(AutoresponderEntry{
+		Subject: c.Subject, From: c.From, Body: c.Body,
+		IsHTML: c.IsHTML, Interval: c.Interval, Start: c.Start, Stop: c.Stop,
+		Charset: c.Charset, BodyCollected: true,
+	}, e)
 }
 
 // defaultFor returns the live default address for a domain.
@@ -101,6 +132,9 @@ func EmailOutcomePresent(op EmailPlanOp, live EmailLiveState, destUser string) b
 		// Class-aware equality: a :fail: value round-trips with a
 		// locale-dependent tail, so exact comparison would false-negative.
 		return defaultsEquivalent(op.Value, cur, destUser, destUser)
+	case op.Section == EmailSectionAutoresponders && op.Action == EmailActionCreate:
+		e, ok := live.autoresponderFor(op.Domain, op.Key)
+		return ok && autoresponderContentEquivalent(op.Autoresponder, e)
 	}
 	return false
 }
@@ -149,8 +183,41 @@ func EvaluateEmailOp(op EmailPlanOp, live EmailLiveState, destUser string) (deci
 		return EmailDecisionRefused, fmt.Sprintf(
 			"destination default address changed since the plan (plan-time %q, now %q) — re-plan and review",
 			op.DestinationValue, cur)
+
+	case op.Section == EmailSectionAutoresponders && op.Action == EmailActionCreate:
+		if op.Autoresponder == nil {
+			return EmailDecisionRefused, fmt.Sprintf("autoresponder create op for %s carries no content payload — malformed or hand-edited plan", op.Key)
+		}
+		if msg, failed := live.AutoresponderListErrors[op.Domain]; failed {
+			return EmailDecisionRefused, fmt.Sprintf("fresh autoresponder re-list failed for %s: %s", op.Domain, msg)
+		}
+		e, present := live.autoresponderFor(op.Domain, op.Key)
+		if !present {
+			// The plan-time precondition of an autoresponder create is
+			// "address empty" (a differing dest is terminal manual at plan
+			// time) — still empty means it still holds.
+			return EmailDecisionWrite, ""
+		}
+		if !e.BodyCollected {
+			return EmailDecisionRefused, fmt.Sprintf(
+				"an autoresponder exists on %s but its body could not be read — cannot prove equality, refusing fail-closed", op.Key)
+		}
+		if autoresponderContentEquivalent(op.Autoresponder, e) {
+			return EmailDecisionAlready, ""
+		}
+		return EmailDecisionRefused, fmt.Sprintf(
+			"an autoresponder with different content appeared on %s since the plan — the writer never overwrites (the add call would destroy it); re-plan and review", op.Key)
 	}
 	return EmailDecisionRefused, fmt.Sprintf("op %s/%s is not actionable (action %q)", op.Section, op.Key, op.Action)
+}
+
+// AutoresponderMatchesContent is the exported content-equality check the
+// rollback pre-check uses: the live entry must still carry exactly the
+// content the tool applied (same field set and body normalization as the
+// plan). A live entry whose body could not be read never matches —
+// fail-closed toward refusal.
+func AutoresponderMatchesContent(c *EmailAutoresponderContent, e AutoresponderEntry) bool {
+	return autoresponderContentEquivalent(c, e)
 }
 
 // DefaultValuesEquivalent is the exported, same-account form of the
@@ -243,6 +310,11 @@ type EmailBackupSection struct {
 	RawUAPIResponse json.RawMessage       `json:"raw_uapi_response"`
 	Forwarders      []ForwarderEntry      `json:"forwarders,omitempty"`
 	Defaults        []DefaultAddressEntry `json:"default_addresses,omitempty"`
+	// Autoresponders (PR 2B-2): normalized entries with their bodies;
+	// RawGetResponses archives the verbatim per-address body reads keyed
+	// by address (the list raw alone carries no content).
+	Autoresponders  []AutoresponderEntry       `json:"autoresponders,omitempty"`
+	RawGetResponses map[string]json.RawMessage `json:"raw_get_responses,omitempty"`
 }
 
 // EmailBackup is the pre-write state of every section the plan touches.
@@ -256,9 +328,10 @@ type EmailBackup struct {
 	PlanSHA256      string `json:"plan_sha256,omitempty"`
 	// ReportFile is the path of the paired apply report (recorded at
 	// backup time — the report path is known before the first write).
-	ReportFile         string                        `json:"report_file"`
-	ForwardersByDomain map[string]EmailBackupSection `json:"forwarders_by_domain,omitempty"`
-	DefaultAddresses   *EmailBackupSection           `json:"default_addresses,omitempty"`
+	ReportFile             string                        `json:"report_file"`
+	ForwardersByDomain     map[string]EmailBackupSection `json:"forwarders_by_domain,omitempty"`
+	DefaultAddresses       *EmailBackupSection           `json:"default_addresses,omitempty"`
+	AutorespondersByDomain map[string]EmailBackupSection `json:"autoresponders_by_domain,omitempty"`
 }
 
 // backupDefaultFor returns the backed-up default address for a domain.
@@ -280,8 +353,9 @@ func (b EmailBackup) backupDefaultFor(domain string) (string, bool) {
 // module-wide email write scan, only the writer files may name the API
 // functions).
 const (
-	EmailRollbackForwarderRemove = "forwarder_remove"
-	EmailRollbackDefaultRestore  = "default_restore"
+	EmailRollbackForwarderRemove     = "forwarder_remove"
+	EmailRollbackDefaultRestore      = "default_restore"
+	EmailRollbackAutoresponderRemove = "autoresponder_remove"
 )
 
 // EmailRollbackOp is one inverse op, computed ONLY for ops the report
@@ -300,6 +374,11 @@ type EmailRollbackOp struct {
 	// be in: the pair present (forwarder_remove) / the applied value
 	// (default_restore, stored here).
 	ExpectedCurrent string `json:"expected_current,omitempty"`
+	// Autoresponder (autoresponder_remove): the content the tool applied —
+	// the expected-current state; rollback refuses to delete an
+	// autoresponder whose live content diverged from it (a human
+	// customized it since).
+	Autoresponder *EmailAutoresponderContent `json:"autoresponder,omitempty"`
 }
 
 // ComputeEmailRollback derives the inverse ops from a report+backup pair:
@@ -336,6 +415,19 @@ func ComputeEmailRollback(report EmailApplyReport, backup EmailBackup) ([]EmailR
 				Value:           backupVal,
 				ExpectedCurrent: r.Value,
 			})
+		case r.Section == EmailSectionAutoresponders && r.Action == EmailActionCreate:
+			if r.Autoresponder == nil {
+				return nil, fmt.Errorf("applied autoresponder create for %s carries no content payload — cannot compute a guarded rollback (fail-closed)", r.Key)
+			}
+			// The guard proved the address was EMPTY before the write, so
+			// the inverse of the tool's own create is a delete — the only
+			// deletes the tool ever emits.
+			out = append(out, EmailRollbackOp{
+				Kind:          EmailRollbackAutoresponderRemove,
+				Domain:        r.Domain,
+				Address:       r.Key,
+				Autoresponder: r.Autoresponder,
+			})
 		default:
 			return nil, fmt.Errorf("applied op %s/%s has unexpected shape (section %s, action %s) — refusing to invert it",
 				r.Section, r.Key, r.Section, r.Action)
@@ -369,6 +461,15 @@ func ComputeEmailRollbackDegraded(backup EmailBackup) (ops []EmailRollbackOp, ma
 	for _, d := range domains {
 		manualNotes = append(manualNotes, fmt.Sprintf(
 			"forwarders for %s: rollback is MANUAL without the report — compare the live list against the backup and remove only forwarders you know the tool created", d))
+	}
+	arDomains := make([]string, 0, len(backup.AutorespondersByDomain))
+	for d := range backup.AutorespondersByDomain {
+		arDomains = append(arDomains, d)
+	}
+	sort.Strings(arDomains)
+	for _, d := range arDomains {
+		manualNotes = append(manualNotes, fmt.Sprintf(
+			"autoresponders for %s: rollback is MANUAL without the report — compare the live list against the backup and remove only autoresponders you know the tool created", d))
 	}
 	sort.Slice(ops, func(i, j int) bool { return ops[i].Domain < ops[j].Domain })
 	return ops, manualNotes
