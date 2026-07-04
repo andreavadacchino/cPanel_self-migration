@@ -7,71 +7,91 @@ Copia-incolla da qui in giù.
 Stai lavorando sul tool Go **cpanel-self-migration**, directory
 /Users/andreavadacchino/Desktop/pADV/cPanel_self-migration.
 
-Leggi PRIMA: DEVELOPMENT_STATE.md, COMMAND.md.
+Leggi PRIMA: DEVELOPMENT_STATE.md, COMMAND.md, PR61_BLOCKER_SCOPING.md.
 
-## Stato al 2026-07-04 (sera)
+## Stato al 2026-07-04 (fine giornata)
 
-### PR #57 — MERGED (workbench session model)
-### PR #58 — MERGED (workbench UI)
-### PR #59 — MERGED (UI-driven migration execution)
+### PR mergiate oggi
 
-La Workbench ora PUÒ ESEGUIRE i passi della migrazione:
-- 10 azioni: dns/email/cron × apply/verify/rollback + migrate_content
-- Conferma forte (digitare nome account) per operazioni write
-- Doppia conferma per rollback
-- Artifact auto-allegati su exit 0
-- Auto-transition a `ready_for_cutover` quando tutti e 3 i verify CLEAN
-- Timeline registra ogni esecuzione (comando, durata, esito)
-- Safety: workbench.go resta governance-only (AST-enforced)
+| PR | Contenuto | Gate |
+|---|---|---|
+| #59 | UI-driven migration exec (10 azioni, conferma forte, artifact attach, auto-transition) | R1→R2→R3 APPROVE, Docker ×2 |
+| #60 | HTML exec forms + dogfooding #1 report | Template-only, test pass |
+| #61 | UI-complete cycle (create session, pipeline, plans, blocker scoping) | R1→R2 APPROVE, Docker ×2 |
 
-### Invariante emendato (#59)
+### Stato architetturale
 
-L'invariante "apply terminal-only" di #58 è stato CONSAPEVOLMENTE emendato:
-la UI PUÒ lanciare subprocess (stessa exec.CommandContext del pipeline
-read-only), MA solo con conferma forte. Il safety test ora verifica:
-1. workbench.go non ha exec/apply verbs (INVARIATO)
-2. OGNI file con --yes-apply-writes chiama validateStrongConfirmation
-3. AST ordering: conferma PRIMA di buildArgv nel handler
+La Workbench è ora un prodotto UI-complete per il ciclo single-account:
+- **Create**: POST /workbench/create (form nel browser)
+- **Pipeline**: exec action `run_pipeline` (4-step, 5 artifact auto-attach)
+- **Plans**: exec actions `dns_plan`, `email_plan`, `cron_plan`
+- **Acceptances**: form per-azione su dashboard `/`
+- **Apply**: exec actions `dns_apply`, `email_apply`, `cron_apply` + `migrate_content` (conferma forte)
+- **Verify**: exec actions `dns_verify`, `email_verify`, `cron_verify` (click singolo)
+- **Rollback**: exec actions `dns_rollback`, `email_rollback`, `cron_rollback` (doppia conferma)
+- **Auto-transition**: `ready_for_cutover` automatico quando tutti e 3 verify CLEAN
+- **Blocker scoping**: apply gateato solo da `blocks_apply` (2 regole); `blocks_cutover` (8 regole) non impedisce apply
+- **Governance**: shared jobManager lock (no race con /run e /accept)
 
-### Cutover #1 — giorginisposi
+### Invarianti emendati
 
-Fermo a P1 (TTL lowering su .193 da parte dell'utente).
-Vedi CUTOVER_1_GIORGINISPOSI.md.
+1. **#58 → #59**: workbench.go resta governance-only; workbench_exec.go PUÒ exec con conferma forte (AST-enforced)
+2. **#61**: blocker scoping — `blocks_cutover` non impedisce apply ma impedisce `ready_for_cutover`
 
-### PR #60 — MERGED (exec forms + dogfooding report)
+### Dogfooding #1 (eseguito, report in DOGFOODING_1_REPORT.md)
 
-Aggiunti form HTML per le 10 azioni exec nel workbench. Dogfooding #1
-completato: verdetto NEGATIVO — il ciclo NON è completabile solo dalla UI.
-6 gap strutturali documentate in DOGFOODING_1_REPORT.md.
+Verdetto: ciclo NON completabile UI-only. 6 gap trovate, 4 HIGH fixate in #61.
+Le 2 non-fix dichiarate:
+- FRICTION #3: `/run` click via browser automation fallisce (Origin header) — da verificare con click umano
+- FRICTION #5: batch-accept scriptato non supportato (flusso one-by-one è di prodotto)
 
-## Prossima sessione: scelta
+## Prossima sessione: DOGFOODING #2
 
-Due opzioni (decidere all'inizio della sessione):
+### Obiettivo
 
-### Opzione A: Chiudere le gap UI (PR piccola)
+Ripetere il ciclo INTERAMENTE dalla UI con le gap chiuse. Build da main
+(che include #59+#60+#61), poi: create session → pipeline → plans →
+acceptances → apply → verify → ready_for_cutover AUTOMATICO. STOP.
 
-Colmare i 4 gap principali per rendere il ciclo UI-only:
-1. Form creazione sessione in `/workbench`
-2. Exec actions per plans (dns_plan, email_plan, cron_plan)
-3. Exec action "run_pipeline" (pipeline + artifact attach)
-4. Decoupling checklist BLOCKED da exec gate
+### Regole
 
-Poi dogfooding #2 end-to-end.
+- **Tutto dalla UI** — terminale = finding
+- **Letture .193 autorizzate** (inventory + delta); catturare load prima
+- **Scritture SOLO su sacrificale .78**; peer standalone verificato prima di DNS apply
+- **NIENTE cutover/TTL** — zona produzione intoccabile
+- **NIENTE --force** per far passare transizioni; se non scatta = BUG
 
-### Opzione B: Cutover reale (modalità hybrid)
+### Sequenza attesa
 
-Usare il tool com'è (UI governance + terminale exec) per completare il
-cutover di giorginisposi. Il tool è funzionalmente completo per un
-operatore che accetta il terminale per pipeline/plans.
+1. `cpanel-self-migration ui --dir ./dogfood_giorginisposi` (terminale — atteso)
+2. Browser → `/workbench` → "Create session" (form: name=giorginisposi)
+3. Browser → session detail → "Run Pipeline" (exec)
+4. Browser → "DNS Plan" + "Email Plan" + "Cron Plan" (exec)
+5. Browser → dashboard `/` → accept blockers one-by-one (click reale!)
+6. Browser → session detail → "DNS Apply" (conferma forte: digitare "giorginisposi")
+7. Ripetere per email + cron
+8. Browser → "DNS Verify" + "Email Verify" + "Cron Verify"
+9. Osservare auto-transition a `ready_for_cutover`
+10. STOP — sessione resta ready_for_cutover per il cutover futuro
 
-Prerequisiti per B:
-- P1 (TTL lowering) da completare dall'utente su WHM .193
-- 4h di attesa post-TTL
-- Eseguire il runbook Variante C (docs/dev/CUTOVER_RUNBOOK.md)
+### Deliverable
 
-## Workflow
+- DOGFOODING_2_REPORT.md con confronto vs #1
+- Verdetto finale: "UI-only completabile: SÌ/NO"
+- Se SÌ → prossimo: cutover reale (data utente)
+- Se NO → PR di fix, poi dogfooding #3
+
+### Prerequisiti tecnici
+
+- `dogfood_giorginisposi/` directory con host.yaml (già presente da #1)
+- Account giorginisposi@.78 esistente
+- `go build ./cmd/cpanel-self-migration/` da main aggiornato
+
+## Workflow (promemoria)
 
 - Solo push a fork (`git push fork`)
 - TDD
-- go-reviewer adversariale multi-giro
+- go-reviewer multi-giro fino APPROVE PULITO
+- Docker LINUX_ALL_GREEN eseguito (non promesso)
+- Gate nel body PRIMA di chiedere merge
 - `runner.go` off-limits
