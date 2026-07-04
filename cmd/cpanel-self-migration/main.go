@@ -88,6 +88,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration cron <apply|verify> … (each has its own --help)")
 		os.Exit(2)
 	}
+	// The `migration` namespace is the session governance layer: offline
+	// management of migration sessions (create, list, show, set-status,
+	// attach-artifact, archive). Never falls through to the migration flow.
+	if len(os.Args) >= 2 && os.Args[1] == "migration" {
+		os.Exit(runMigrationCmd(os.Args[2:]))
+	}
 	// The `email` namespace (PR 2B-1) mirrors `dns`: apply is the email
 	// config writer (destination only), verify the read-only
 	// re-certification; an unknown subcommand is an error, never a

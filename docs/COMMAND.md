@@ -546,3 +546,55 @@ Safety, by construction:
 
 Possible next refinements: revoking an acceptance from the browser,
 operator-name persistence, artifact downloads.
+
+## Subcommand: `migration`
+
+Session governance for single-account migrations. Fully offline — never
+connects to any server. Manages the lifecycle state and artifact trail of
+one migration from creation to archive.
+
+```bash
+# Create a new migration session
+cpanel-self-migration migration init \
+  --name giorginisposi \
+  --source-profile old193 \
+  --destination-profile new78
+
+# List all sessions (ordered by created_at)
+cpanel-self-migration migration list [--json]
+
+# Show session details
+cpanel-self-migration migration show <session-id> [--json]
+
+# Transition to a new status (validated against the transition matrix)
+cpanel-self-migration migration set-status <session-id> --status checklist_ready
+# Force an illegal transition (requires reason, recorded in timeline)
+cpanel-self-migration migration set-status <session-id> --status blocked --force --reason "external dependency"
+
+# Attach an artifact (copies into session dir, computes SHA256)
+cpanel-self-migration migration attach-artifact <session-id> \
+  --kind migration_checklist --path ./migration_checklist.json
+
+# Archive a completed/blocked/failed session
+cpanel-self-migration migration archive <session-id>
+```
+
+**Storage**: `~/.cpanel-self-migration/migrations/` (override with
+`--home` flag or `CPANEL_MIGRATION_HOME` env). Directories 0700, files
+0600. All writes are atomic (write-temp + fsync + rename).
+
+**Statuses**: `draft` → `preflight_required` → `inventory_ready` →
+`checklist_ready` → `[manual_actions_required]` → `ready_for_apply` →
+`apply_in_progress` → `apply_done` → `verification_required` →
+`ready_for_cutover` → `cutover_done` → `archived`. `blocked`/`failed`
+reachable from any active state. `archived` is terminal.
+
+**Artifact kinds** (whitelist): `inventory_source`, `inventory_destination`,
+`inventory_diff`, `policy_report`, `dns_plan`, `migration_checklist`,
+`acceptances`, `apply_report`, `dns_apply_report`, `dns_verify_report`,
+`email_plan`, `email_apply_report`, `email_verify_report`, `cron_plan`,
+`cron_apply_report`, `cron_verify_report`, `events_jsonl`. Unknown kind →
+exit 2.
+
+Exit codes: `0` success, `1` operational error (session not found,
+transition not allowed), `2` usage error (bad flags, unknown kind/status).
