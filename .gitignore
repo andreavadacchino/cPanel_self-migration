@@ -11,3 +11,4 @@
 # Local diagnostic / audit reports — not part of the source
 /diagnostics/
 dns_verify_report.md
+dogfood_giorginisposi/

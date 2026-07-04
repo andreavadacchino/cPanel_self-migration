@@ -536,6 +536,63 @@ func TestExecGoldenArgvMigrateContent(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Test: run_pipeline action invokes multiple steps
+// ---------------------------------------------------------------------------
+
+func TestExecRunPipeline(t *testing.T) {
+	h, sessID, csrf, fr := newExecTestEnv(t)
+
+	form := url.Values{
+		"csrf":   {csrf},
+		"action": {"run_pipeline"},
+	}
+	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sessID+"/exec", form)
+	if rr.Code == http.StatusForbidden || rr.Code == http.StatusBadRequest {
+		t.Fatalf("run_pipeline rejected: %d %s", rr.Code, rr.Body.String())
+	}
+
+	calls := fr.recorded()
+	if len(calls) < 4 {
+		t.Fatalf("run_pipeline should invoke 4 steps, got %d", len(calls))
+	}
+	if calls[0].name != "account inventory" {
+		t.Errorf("step 0 name = %q, want 'account inventory'", calls[0].name)
+	}
+	if calls[3].name != "inventory checklist" {
+		t.Errorf("step 3 name = %q, want 'inventory checklist'", calls[3].name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test: dns_plan action (read-only, no confirmation needed)
+// ---------------------------------------------------------------------------
+
+func TestExecDNSPlan(t *testing.T) {
+	h, sessID, csrf, fr := newExecTestEnv(t)
+
+	form := url.Values{
+		"csrf":   {csrf},
+		"action": {"dns_plan"},
+	}
+	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sessID+"/exec", form)
+	if rr.Code == http.StatusForbidden || rr.Code == http.StatusBadRequest {
+		t.Fatalf("dns_plan rejected: %d %s", rr.Code, rr.Body.String())
+	}
+
+	calls := fr.recorded()
+	if len(calls) == 0 {
+		t.Fatal("no subprocess invoked for dns_plan")
+	}
+	argv := calls[0].argv
+	joined := strings.Join(argv, " ")
+	for _, must := range []string{"inventory", "dns-plan", "--source", "--destination", "--output-json"} {
+		if !strings.Contains(joined, must) {
+			t.Errorf("dns_plan argv missing %q: got %v", must, argv)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Test: rollback requires DOUBLE strong confirmation
 // ---------------------------------------------------------------------------
 

@@ -159,6 +159,7 @@ func New(o Options) (http.Handler, error) {
 			csrf:   s.csrf,
 			runner: s.job.runner,
 			base:   base,
+			job:    s.job,
 			dir:    o.Dir,
 		}
 	}
@@ -536,6 +537,13 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		s.workbench.handleList(w, r)
+		return true
+	}
+
+	if path == "/workbench/create" {
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.workbench.handleCreate(w, r)
+		})
 		return true
 	}
 
