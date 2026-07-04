@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cpanel-self-migration — workbench</title>
+<style>
+  :root { color-scheme: light; }
+  body { font: 15px/1.5 -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #1a2233; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #e3e8f0; vertical-align: top; }
+  th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: #5b6575; }
+  a { color: #1a56db; text-decoration: none; } a:hover { text-decoration: underline; }
+  .badge { display: inline-block; padding: .1rem .5rem; border-radius: .3rem; font-size: .8rem; font-weight: 600; }
+  .badge.draft { background: #e3e8f0; color: #374151; }
+  .badge.active { background: #dbeafe; color: #1e40af; }
+  .badge.done { background: #def7ec; color: #03543f; }
+  .badge.error { background: #fde8e8; color: #9b1c1c; }
+  .badge.archived { background: #f3f4f6; color: #6b7280; }
+  .empty { color: #7a8598; font-style: italic; padding: 2rem; text-align: center; }
+  .warn { color: #92400e; font-size: .85rem; margin: .5rem 0; }
+  nav { margin-bottom: 1.5rem; font-size: .9rem; }
+</style>
+</head>
+<body>
+<nav><a href="/">← Dashboard</a></nav>
+<h1>Migration Sessions</h1>
+
+{{range .Warnings}}<p class="warn">⚠ {{.}}</p>{{end}}
+
+{{if .Sessions}}
+<table>
+<thead><tr>
+  <th>Name</th><th>Status</th><th>Step</th><th>Source</th><th>Dest</th><th>Artifacts</th><th>Updated</th>
+</tr></thead>
+<tbody>
+{{range .Sessions}}
+<tr>
+  <td><a href="/workbench/session/{{.ID}}"><strong>{{.Name}}</strong></a><br><code class="mono">{{.ID}}</code></td>
+  <td>{{template "statusBadge" .Status}}</td>
+  <td>{{.CurrentStep}}</td>
+  <td>{{.SourceProfile}}</td>
+  <td>{{.DestinationProfile}}</td>
+  <td>{{len .Artifacts}}</td>
+  <td class="mono">{{fmtTime .UpdatedAt}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p class="empty">No migration sessions. Create one with:<br><code>cpanel-self-migration migration init --name … --source-profile … --destination-profile …</code></p>
+{{end}}
+
+{{define "statusBadge"}}{{if eq . "draft"}}<span class="badge draft">{{.}}</span>{{else if eq . "archived"}}<span class="badge archived">{{.}}</span>{{else if or (eq . "cutover_done") (eq . "apply_done")}}<span class="badge done">{{.}}</span>{{else if or (eq . "blocked") (eq . "failed")}}<span class="badge error">{{.}}</span>{{else}}<span class="badge active">{{.}}</span>{{end}}{{end}}
+</body>
+</html>

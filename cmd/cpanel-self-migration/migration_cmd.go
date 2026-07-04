@@ -128,10 +128,13 @@ func runMigrationList(args []string) int {
 		return 1
 	}
 
-	sessions, err := store.List()
+	sessions, warnings, err := store.List()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		return 1
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 
 	if *jsonOut {

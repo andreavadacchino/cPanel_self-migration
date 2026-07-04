@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,14 @@ import (
 	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/version"
+)
+
+var (
+	ErrSessionNotFound    = errors.New("session not found")
+	ErrInvalidSessionID   = errors.New("invalid session id")
+	ErrInvalidStatus      = errors.New("invalid status")
+	ErrTransitionDenied   = errors.New("transition not allowed")
+	ErrUnknownArtifactKind = errors.New("unknown artifact kind")
 )
 
 // Store manages migration sessions on the local filesystem.
@@ -84,24 +93,26 @@ func (s *Store) Create(name, sourceProfile, destProfile string, now time.Time) (
 	return sess, nil
 }
 
-// List returns all sessions ordered by created_at ascending.
-func (s *Store) List() ([]Session, error) {
+// List returns all sessions ordered by created_at ascending, plus any
+// warnings for corrupted/skipped entries. Callers decide how to surface warnings.
+func (s *Store) List() ([]Session, []string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	entries, err := os.ReadDir(s.root)
 	if err != nil {
-		return nil, fmt.Errorf("read store dir: %w", err)
+		return nil, nil, fmt.Errorf("read store dir: %w", err)
 	}
 
 	var sessions []Session
+	var warnings []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		sess, err := s.readSession(e.Name())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skipping corrupted session %q: %v\n", e.Name(), err)
+			warnings = append(warnings, fmt.Sprintf("skipping corrupted session %q: %v", e.Name(), err))
 			continue
 		}
 		sessions = append(sessions, *sess)
@@ -117,7 +128,7 @@ func (s *Store) List() ([]Session, error) {
 	if sessions == nil {
 		sessions = []Session{}
 	}
-	return sessions, nil
+	return sessions, warnings, nil
 }
 
 // Get retrieves a single session by ID.
@@ -231,19 +242,22 @@ func (s *Store) writeSession(folderID string, sess *Session) error {
 // readSession loads a session from disk.
 func (s *Store) readSession(id string) (*Session, error) {
 	if !isCleanID(id) {
-		return nil, fmt.Errorf("invalid session id %q", id)
+		return nil, fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
 	}
 	path := filepath.Join(s.root, id, "session.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("session %q not found", id)
+			return nil, fmt.Errorf("session %q: %w", id, ErrSessionNotFound)
 		}
 		return nil, fmt.Errorf("read session %q: %w", id, err)
 	}
 	var sess Session
 	if err := json.Unmarshal(data, &sess); err != nil {
 		return nil, fmt.Errorf("parse session %q: %w", id, err)
+	}
+	if sess.ID != id {
+		return nil, fmt.Errorf("session %q: id field mismatch (found %q)", id, sess.ID)
 	}
 	return &sess, nil
 }

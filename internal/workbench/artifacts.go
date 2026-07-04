@@ -20,10 +20,10 @@ import (
 // partial artifacts on crash.
 func (s *Store) AttachArtifact(sessionID string, kind ArtifactKind, srcPath string, now time.Time) (*Session, error) {
 	if !ValidArtifactKind(kind) {
-		return nil, fmt.Errorf("unknown artifact kind %q", kind)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownArtifactKind, string(kind))
 	}
 	if !isCleanID(sessionID) {
-		return nil, fmt.Errorf("invalid session id %q", sessionID)
+		return nil, fmt.Errorf("%w: %q", ErrInvalidSessionID, sessionID)
 	}
 
 	// Open the source file BEFORE acquiring the lock to eliminate TOCTOU:

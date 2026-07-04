@@ -2,6 +2,7 @@ package workbench
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,9 +96,12 @@ func TestListSessionsDeterministicOrder(t *testing.T) {
 	_, _ = s.Create("alpha", "src", "dst", now)
 	_, _ = s.Create("gamma", "src", "dst", now.Add(2*time.Second))
 
-	list, err := s.List()
+	list, warnings, err := s.List()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("unexpected warnings: %v", warnings)
 	}
 	if len(list) != 3 {
 		t.Fatalf("len = %d, want 3", len(list))
@@ -114,7 +118,7 @@ func TestListSessionsDeterministicOrder(t *testing.T) {
 	}
 
 	// Second call: same order
-	list2, _ := s.List()
+	list2, _, _ := s.List()
 	for i := range list {
 		if list[i].ID != list2[i].ID {
 			t.Errorf("list order unstable at %d", i)
@@ -144,6 +148,20 @@ func TestGetSessionNotFound(t *testing.T) {
 	_, err := s.Get("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for missing session")
+	}
+	if !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("error = %v, want ErrSessionNotFound", err)
+	}
+}
+
+func TestGetSessionInvalidID(t *testing.T) {
+	s := newTestStore(t)
+	_, err := s.Get("../etc/passwd")
+	if err == nil {
+		t.Fatal("expected error for invalid id")
+	}
+	if !errors.Is(err, ErrInvalidSessionID) {
+		t.Errorf("error = %v, want ErrInvalidSessionID", err)
 	}
 }
 
