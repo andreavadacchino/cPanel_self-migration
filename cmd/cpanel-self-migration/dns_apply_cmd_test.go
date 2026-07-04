@@ -77,6 +77,7 @@ for r in data["result"]["data"]:
     export _STUB_ARGS _STUB_ZFILE="$ZFILE" _STUB_NEW_SERIAL="$new_serial"
     python3 -c '
 import json, sys, base64, os
+from urllib.parse import unquote_plus
 zfile = os.environ["_STUB_ZFILE"]
 with open(zfile) as f:
     state = json.load(f)
@@ -92,7 +93,12 @@ if remove_lines:
 max_line = max((r.get("line_index",0) for r in records), default=0)
 for kv in os.environ["_STUB_ARGS"].split("\t"):
     if kv.startswith("add-") and "=" in kv:
-        rec_json = kv.split("=",1)[1]
+        # Emulate cpsrvd: it form-url-decodes each uapi arg VALUE ("+"->space,
+        # "%XX"->byte). The tool percent-encodes values (encodeUAPIArgValue) so
+        # they round-trip; decoding here mirrors the real server. This is also
+        # the regression guard: drop the tool-side encoding and a "+" in the
+        # payload arrives here as a space -> verify-after would fail.
+        rec_json = unquote_plus(kv.split("=",1)[1])
         try:
             rec = json.loads(rec_json)
             max_line += 1
