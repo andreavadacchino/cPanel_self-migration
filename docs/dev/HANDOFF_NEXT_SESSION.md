@@ -28,6 +28,7 @@ NON archiviata, NON arrivata a ready_for_cutover. Zona produzione intatta
    **Root cause nel log WHM root-only su .78** → serve decisione utente su
    sessione root per leggerlo e stabilire bug-prodotto vs quirk-ambiente. Il tool
    gestisce il fallimento correttamente (backup, atomico, nessun apply parziale).
+   **Diagnosi completa + snippet di riproduzione: `N1_DNS_APPLY_MASS_EDIT_FAILURE.md`.**
 
 2. **N2 [HIGH per DNS cluster]** — nessun affordance UI per la pre-condizione
    "peer DNS .78 standalone" (rule #4). Verificata fuori-banda con dig (DKIM
