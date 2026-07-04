@@ -357,7 +357,7 @@ const refreshMeta = `http-equiv="refresh"`
 
 func TestHandlerMonitorHiddenWithoutEvents(t *testing.T) {
 	_, body := getIndex(t, t.TempDir())
-	if strings.Contains(body, "Run monitor") {
+	if strings.Contains(body, "Monitor esecuzione") {
 		t.Error("monitor panel rendered without events.jsonl")
 	}
 	if !strings.Contains(body, "--json-events") {
@@ -370,7 +370,7 @@ func TestHandlerMonitorShowsCompletedApplyRun(t *testing.T) {
 	writeMonitorEvents(t, dir, fullApplyRun("run-20260702-150000")...)
 	_, body := getIndex(t, dir)
 	for _, want := range []string{
-		"Run monitor", "run-20260702-150000", "APPLY",
+		"Monitor esecuzione", "run-20260702-150000", "APPLY",
 		"migrate_mail", "1 failed", "bad@example.com", "dst_wp",
 	} {
 		if !strings.Contains(body, want) {

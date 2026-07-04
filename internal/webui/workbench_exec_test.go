@@ -552,14 +552,52 @@ func TestExecRunPipeline(t *testing.T) {
 	}
 
 	calls := fr.recorded()
-	if len(calls) < 4 {
-		t.Fatalf("run_pipeline should invoke 4 steps, got %d", len(calls))
+	if len(calls) < 5 {
+		t.Fatalf("run_pipeline should invoke 5 steps, got %d", len(calls))
 	}
 	if calls[0].name != "account inventory" {
 		t.Errorf("step 0 name = %q, want 'account inventory'", calls[0].name)
 	}
-	if calls[3].name != "inventory checklist" {
-		t.Errorf("step 3 name = %q, want 'inventory checklist'", calls[3].name)
+	// dns-plan runs before the checklist so the first checklist already
+	// carries the DNS import actions (dogfooding #2 N4).
+	if calls[3].name != "inventory dns-plan" {
+		t.Errorf("step 3 name = %q, want 'inventory dns-plan'", calls[3].name)
+	}
+	if calls[4].name != "inventory checklist" {
+		t.Errorf("step 4 name = %q, want 'inventory checklist'", calls[4].name)
+	}
+}
+
+// TestExecRunPipelineTolerantDNSPlanFailure pins the N4 tolerance on the
+// workbench entry point: a dns-plan failure must not abort run_pipeline — the
+// checklist step still runs so a partial checklist is produced.
+func TestExecRunPipelineTolerantDNSPlanFailure(t *testing.T) {
+	h, sessID, csrf, fr := newExecTestEnv(t)
+	fr.fail = "inventory dns-plan"
+
+	form := url.Values{
+		"csrf":   {csrf},
+		"action": {"run_pipeline"},
+	}
+	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sessID+"/exec", form)
+	if rr.Code >= 400 {
+		t.Fatalf("run_pipeline aborted on a tolerated dns-plan failure: %d %s", rr.Code, rr.Body.String())
+	}
+
+	calls := fr.recorded()
+	if len(calls) != 5 {
+		t.Fatalf("steps executed = %d, want 5 (dns-plan failure tolerated, pipeline continues)", len(calls))
+	}
+	if calls[4].name != "inventory checklist" {
+		t.Errorf("last step = %q, want the checklist to run despite the dns-plan failure", calls[4].name)
+	}
+
+	// The workbench path has no per-step Failed UI (unlike the /run dashboard),
+	// so the tolerated failure MUST be recorded in the session timeline reason
+	// — otherwise the operator sees "ok=true" with no hint the DNS plan is gone.
+	detail := doWorkbenchReq(h, http.MethodGet, "/workbench/session/"+sessID, nil).Body.String()
+	if !strings.Contains(detail, "tolerated") || !strings.Contains(detail, "inventory dns-plan") {
+		t.Error("session timeline must record the tolerated dns-plan failure, not just report ok=true")
 	}
 }
 

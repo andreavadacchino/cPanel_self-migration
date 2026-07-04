@@ -215,8 +215,38 @@ real binary. Accounts must be registered in Orbit to be reachable;
 `turtlebeachandora.com`/`fidopetstore.it` exist on the server but are NOT
 in Orbit — `doctorbike.it` and `italplant.com` are and were used.
 
+## Dogfooding #2 (2026-07-04) — verdetto e follow-up
+
+Ciclo UI-only di giorginisposi (report completo:
+`DOGFOODING_2_REPORT.md`). **Verdetto: UI-only NON completabile end-to-end**,
+ma le 6 friction del dogfooding #1 sono TUTTE chiuse. Il ciclo funziona da UI
+fino al `dns apply`, che si ferma per:
+
+- **N1 [APERTO, bloccante]** — `dns apply` fallisce su .78 con
+  `DNS::mass_edit_zone: The request failed` (Error ID server-side),
+  riproducibile 2/2. Op singoli e batch-semplice funzionano; fallisce il batch
+  multi-op coi `replace` (probabile TXT multi-segmento DKIM). Root cause nel log
+  WHM root-only → sessione dedicata. Diagnosi completa + snippet in
+  `N1_DNS_APPLY_MASS_EDIT_FAILURE.md`.
+- **N2 [FIX in PR #62]** — nessun affordance UI per la pre-condizione "peer
+  cluster DNS standalone" (rule #4). Aggiunto un warning pre-«Apply DNS».
+- **N4 [FIX in PR #62]** — `pipelineSteps` generava il checklist prima del
+  dns-plan → checklist iniziale sotto-riportava le azioni DNS. Ora il dns-plan
+  gira prima del checklist (step Tolerant: un suo fallimento non aborta la
+  pipeline).
+- **N3 [design, non bloccante]** — l'exec non avanza lo status: per
+  l'auto-transition a `ready_for_cutover` serve percorrere a mano la governance
+  fino a `verification_required`.
+
+**PR #62** (`feat/webui-it-pipeline-ordering-warning`, fork): traduzione webui
+in italiano + N4 + N2. Gate: go-reviewer R1→R2→R3 APPROVE pulito, Docker
+LINUX_ALL_GREEN. In attesa di merge.
+
 ## Suggested next steps
 
+- **N1**: sessione root su .78 per il log dell'Error ID → bug-prodotto
+  (replace TXT multi-segmento) vs quirk-ambiente. Vedi
+  `N1_DNS_APPLY_MASS_EDIT_FAILURE.md`.
 - **Campaign Mode v0**: gated orchestrator that sequences inventory →
   diff → policy → plan → apply → verify per-account with approval gates.
   Prerequisite: the three user decisions (sync variant, date/window,

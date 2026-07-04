@@ -1,97 +1,59 @@
 # Prompt di avvio — prossima sessione
 
-Copia-incolla da qui in giù.
-
----
-
 Stai lavorando sul tool Go **cpanel-self-migration**, directory
 /Users/andreavadacchino/Desktop/pADV/cPanel_self-migration.
 
-Leggi PRIMA: DEVELOPMENT_STATE.md, COMMAND.md, PR61_BLOCKER_SCOPING.md.
+Leggi PRIMA: docs/dev/DOGFOODING_2_REPORT.md, docs/dev/DEVELOPMENT_STATE.md,
+docs/dev/PR61_BLOCKER_SCOPING.md.
 
-## Stato al 2026-07-04 (fine giornata)
+## Stato al 2026-07-04 (fine giornata) — dopo Dogfooding #2
 
-### PR mergiate oggi
+### Verdetto #2: **UI-only completabile = NO** (ma NO "operativo", non strutturale)
 
-| PR | Contenuto | Gate |
-|---|---|---|
-| #59 | UI-driven migration exec (10 azioni, conferma forte, artifact attach, auto-transition) | R1→R2→R3 APPROVE, Docker ×2 |
-| #60 | HTML exec forms + dogfooding #1 report | Template-only, test pass |
-| #61 | UI-complete cycle (create session, pipeline, plans, blocker scoping) | R1→R2 APPROVE, Docker ×2 |
+Le **6 friction del #1 sono tutte chiuse** e verificate con click reali nel
+browser (create, pipeline+auto-attach, plans, acceptances, apply con blocker
+presente). Il ciclo UI-only funziona end-to-end **fino al `dns apply`**, dove si
+ferma. Dettaglio completo in `DOGFOODING_2_REPORT.md`.
 
-### Stato architetturale
+Sessione dogfooding #2: `mig_20260704_1a4eaa2cc7d7`, a `preflight_required`,
+NON archiviata, NON arrivata a ready_for_cutover. Zona produzione intatta
+(A giorginisposi.it pubblico = .193).
 
-La Workbench è ora un prodotto UI-complete per il ciclo single-account:
-- **Create**: POST /workbench/create (form nel browser)
-- **Pipeline**: exec action `run_pipeline` (4-step, 5 artifact auto-attach)
-- **Plans**: exec actions `dns_plan`, `email_plan`, `cron_plan`
-- **Acceptances**: form per-azione su dashboard `/`
-- **Apply**: exec actions `dns_apply`, `email_apply`, `cron_apply` + `migrate_content` (conferma forte)
-- **Verify**: exec actions `dns_verify`, `email_verify`, `cron_verify` (click singolo)
-- **Rollback**: exec actions `dns_rollback`, `email_rollback`, `cron_rollback` (doppia conferma)
-- **Auto-transition**: `ready_for_cutover` automatico quando tutti e 3 verify CLEAN
-- **Blocker scoping**: apply gateato solo da `blocks_apply` (2 regole); `blocks_cutover` (8 regole) non impedisce apply
-- **Governance**: shared jobManager lock (no race con /run e /accept)
+### Friction residue (da chiudere, in ordine di priorità)
 
-### Invarianti emendati
+1. **[BLOCCANTE] N1 — `dns apply` fallisce**: `DNS::mass_edit_zone: The request
+   failed (Error ID m7sumx/qnrpvb)`, riproducibile 2/2. Isolato a livello utente:
+   add/remove/batch-semplice singoli funzionano; fallisce il **batch multi-op con
+   i replace** (probabile DKIM TXT multi-segmento o combinazione 2-remove+3-add).
+   **Root cause nel log WHM root-only su .78** → serve decisione utente su
+   sessione root per leggerlo e stabilire bug-prodotto vs quirk-ambiente. Il tool
+   gestisce il fallimento correttamente (backup, atomico, nessun apply parziale).
+   **Diagnosi completa + snippet di riproduzione: `N1_DNS_APPLY_MASS_EDIT_FAILURE.md`.**
 
-1. **#58 → #59**: workbench.go resta governance-only; workbench_exec.go PUÒ exec con conferma forte (AST-enforced)
-2. **#61**: blocker scoping — `blocks_cutover` non impedisce apply ma impedisce `ready_for_cutover`
+2. **N2 [HIGH per DNS cluster]** — nessun affordance UI per la pre-condizione
+   "peer DNS .78 standalone" (rule #4). Verificata fuori-banda con dig (DKIM
+   pubblica == source ≠ dest → standalone confermato). Aggiungere warning/check.
 
-### Dogfooding #1 (eseguito, report in DOGFOODING_1_REPORT.md)
+3. **N4 [MEDIUM]** — `pipelineSteps` genera il checklist PRIMA del dns-plan →
+   checklist iniziale sotto-riporta le azioni DNS (6→14 dopo la 1ª acceptance).
+   Fix: step `dns-plan` prima del checklist, o rigenerare il checklist dopo i plan.
 
-Verdetto: ciclo NON completabile UI-only. 6 gap trovate, 4 HIGH fixate in #61.
-Le 2 non-fix dichiarate:
-- FRICTION #3: `/run` click via browser automation fallisce (Origin header) — da verificare con click umano
-- FRICTION #5: batch-accept scriptato non supportato (flusso one-by-one è di prodotto)
+4. **N3 [MEDIUM/design]** — l'exec non avanza mai lo status; per l'auto-transition
+   serve percorrere a mano la scala governance a `verification_required`.
 
-## Prossima sessione: DOGFOODING #2
+### PR in coda (richiesta utente 2026-07-04): traduzione webui in italiano
 
-### Obiettivo
-
-Ripetere il ciclo INTERAMENTE dalla UI con le gap chiuse. Build da main
-(che include #59+#60+#61), poi: create session → pipeline → plans →
-acceptances → apply → verify → ready_for_cutover AUTOMATICO. STOP.
-
-### Regole
-
-- **Tutto dalla UI** — terminale = finding
-- **Letture .193 autorizzate** (inventory + delta); catturare load prima
-- **Scritture SOLO su sacrificale .78**; peer standalone verificato prima di DNS apply
-- **NIENTE cutover/TTL** — zona produzione intoccabile
-- **NIENTE --force** per far passare transizioni; se non scatta = BUG
-
-### Sequenza attesa
-
-1. `cpanel-self-migration ui --dir ./dogfood_giorginisposi` (terminale — atteso)
-2. Browser → `/workbench` → "Create session" (form: name=giorginisposi)
-3. Browser → session detail → "Run Pipeline" (exec)
-4. Browser → "DNS Plan" + "Email Plan" + "Cron Plan" (exec)
-5. Browser → dashboard `/` → accept blockers one-by-one (click reale!)
-6. Browser → session detail → "DNS Apply" (conferma forte: digitare "giorginisposi")
-7. Ripetere per email + cron
-8. Browser → "DNS Verify" + "Email Verify" + "Cron Verify"
-9. Osservare auto-transition a `ready_for_cutover`
-10. STOP — sessione resta ready_for_cutover per il cutover futuro
-
-### Deliverable
-
-- DOGFOODING_2_REPORT.md con confronto vs #1
-- Verdetto finale: "UI-only completabile: SÌ/NO"
-- Se SÌ → prossimo: cutover reale (data utente)
-- Se NO → PR di fix, poi dogfooding #3
-
-### Prerequisiti tecnici
-
-- `dogfood_giorginisposi/` directory con host.yaml (già presente da #1)
-- Account giorginisposi@.78 esistente
-- `go build ./cmd/cpanel-self-migration/` da main aggiornato
+L'utente ha chiesto **"tradurre tutto in italiano"** = webui (dashboard +
+workbench) **e** deliverable, con timing "dopo il dogfooding". Deliverable già
+in IT. Da fare: tradurre i template `internal/webui/templates/index.html`,
+`workbench_list.html`, `workbench_detail.html` (label, bottoni, messaggi) da EN
+a IT. Fork-only, `--repo` esplicito, TDD, go-reviewer multi-giro fino APPROVE
+PULITO, Docker LINUX_ALL_GREEN eseguito, gate nel body prima del merge, handoff.
 
 ## Workflow (promemoria)
 
-- Solo push a fork (`git push fork`)
-- TDD
-- go-reviewer multi-giro fino APPROVE PULITO
-- Docker LINUX_ALL_GREEN eseguito (non promesso)
-- Gate nel body PRIMA di chiedere merge
+- Solo push a fork (`git push fork`); PR con `gh pr create --repo andreavadacchino/cPanel_self-migration`
+- TDD; go-reviewer multi-giro fino APPROVE PULITO; Docker LINUX_ALL_GREEN eseguito (non promesso)
+- Gate dichiarato NEL BODY prima di chiedere il merge
 - `runner.go` off-limits
+- Scritture reali SOLO su sacrificale .78; letture .193 (prod) con load-check prima; MAI --force per transizioni

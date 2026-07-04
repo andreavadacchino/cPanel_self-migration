@@ -101,7 +101,7 @@ func TestHandlerRendersChecklist(t *testing.T) {
 		t.Error("page missing the acceptance author")
 	}
 	// Fresh inputs: no stale banner.
-	if strings.Contains(body, "STALE") {
+	if strings.Contains(body, "OBSOLETO") {
 		t.Error("fresh inputs must not render the STALE banner")
 	}
 }
@@ -114,7 +114,7 @@ func TestHandlerStaleInputBannerDominates(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	if !strings.Contains(body, "STALE") {
+	if !strings.Contains(body, "OBSOLETO") {
 		t.Error("mismatched input hash must render the STALE banner")
 	}
 	if !strings.Contains(body, "policy_report.json") {
@@ -267,7 +267,7 @@ func TestHandlerAbsoluteInputRefNeverLeaksContent(t *testing.T) {
 	if strings.Contains(body, marker) {
 		t.Fatal("SECURITY: file content from an absolute input ref reached the rendered page")
 	}
-	if !strings.Contains(body, "STALE") || !strings.Contains(body, "secret.txt") {
+	if !strings.Contains(body, "OBSOLETO") || !strings.Contains(body, "secret.txt") {
 		t.Error("the mismatch must still be reported as a stale entry (path + verdict only)")
 	}
 }
