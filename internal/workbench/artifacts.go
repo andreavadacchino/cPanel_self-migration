@@ -103,6 +103,11 @@ func copyFileAtomic(src, dst string) (string, error) {
 		os.Remove(tmp)
 		return "", err
 	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return "", err
+	}
 	if err := out.Close(); err != nil {
 		os.Remove(tmp)
 		return "", err
