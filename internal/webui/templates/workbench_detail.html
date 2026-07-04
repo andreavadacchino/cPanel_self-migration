@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Session.Name}} — workbench</title>
+<style>
+  :root { color-scheme: light; }
+  body { font: 15px/1.5 -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #1a2233; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #e3e8f0; padding-bottom: .3rem; }
+  h3 { font-size: .95rem; margin-top: 1.2rem; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
+  pre { background: #f8fafc; border: 1px solid #e3e8f0; border-radius: .4rem; padding: .8rem; overflow-x: auto; font-size: .82rem; }
+  table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; }
+  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #e3e8f0; vertical-align: top; }
+  th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: #5b6575; }
+  a { color: #1a56db; text-decoration: none; } a:hover { text-decoration: underline; }
+  .badge { display: inline-block; padding: .1rem .5rem; border-radius: .3rem; font-size: .8rem; font-weight: 600; }
+  .badge.draft { background: #e3e8f0; color: #374151; }
+  .badge.active { background: #dbeafe; color: #1e40af; }
+  .badge.done { background: #def7ec; color: #03543f; }
+  .badge.error { background: #fde8e8; color: #9b1c1c; }
+  .badge.archived { background: #f3f4f6; color: #6b7280; }
+  fieldset { border: 1px solid #e3e8f0; border-radius: .5rem; margin: 1rem 0; padding: .8rem 1rem; }
+  legend { font-weight: 600; padding: 0 .4rem; }
+  label { display: block; margin: .3rem 0; font-size: .9rem; }
+  select, input[type=text] { font: inherit; padding: .25rem .4rem; border: 1px solid #c3ccd9; border-radius: .3rem; }
+  button { font: inherit; font-weight: 600; padding: .4rem 1rem; border: 0; border-radius: .4rem; background: #1a56db; color: #fff; cursor: pointer; }
+  button.danger { background: #dc2626; }
+  .meta { display: grid; grid-template-columns: auto 1fr; gap: .2rem 1rem; margin: .5rem 0; }
+  .meta dt { color: #5b6575; font-size: .85rem; } .meta dd { margin: 0; }
+  .timeline { font-size: .85rem; }
+  .timeline td:first-child { white-space: nowrap; }
+  nav { margin-bottom: 1.5rem; font-size: .9rem; }
+  .section { margin: 1.5rem 0; }
+</style>
+</head>
+<body>
+<nav><a href="/workbench">← Sessions</a> · <a href="/">Dashboard</a></nav>
+
+<h1>{{.Session.Name}} {{template "statusBadge" .Session.Status}}</h1>
+
+<div class="section">
+<h2>Overview</h2>
+<dl class="meta">
+  <dt>ID</dt><dd><code>{{.Session.ID}}</code></dd>
+  <dt>Source</dt><dd>{{.Session.SourceProfile}}</dd>
+  <dt>Destination</dt><dd>{{.Session.DestinationProfile}}</dd>
+  <dt>Current Step</dt><dd><strong>{{.Session.CurrentStep}}</strong></dd>
+  <dt>Created</dt><dd>{{fmtTime .Session.CreatedAt}}</dd>
+  <dt>Updated</dt><dd>{{fmtTime .Session.UpdatedAt}}</dd>
+  <dt>Tool Version</dt><dd><code>{{.Session.ToolVersion}}</code></dd>
+  {{if .Session.LastError}}<dt>Last Error</dt><dd style="color:#9b1c1c">{{.Session.LastError}}</dd>{{end}}
+</dl>
+</div>
+
+<div class="section">
+<h2>Artifacts ({{len .Session.Artifacts}})</h2>
+{{if .Session.Artifacts}}
+<table>
+<thead><tr><th>Kind</th><th>SHA256</th><th>Attached</th><th>Path</th></tr></thead>
+<tbody>
+{{range .Session.Artifacts}}
+<tr>
+  <td><code>{{.Kind}}</code></td>
+  <td><code>{{shortSHA .SHA256}}</code></td>
+  <td class="mono">{{fmtTime .AttachedAt}}</td>
+  <td class="mono" style="font-size:.75em; max-width:20rem; overflow:hidden; text-overflow:ellipsis">{{.Path}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p style="color:#7a8598">No artifacts attached yet.</p>
+{{end}}
+</div>
+
+<div class="section">
+<h2>Apply Center</h2>
+<p style="color:#5b6575; font-size:.9rem">Commands are for copy-paste into the terminal. The UI never executes apply/cutover.</p>
+
+<h3>DNS</h3>
+<pre>cpanel-self-migration dns apply \
+  --plan &lt;dns_plan artifact path&gt; \
+  --config configs/host.yaml</pre>
+
+<h3>Email</h3>
+<pre>cpanel-self-migration email apply \
+  --plan &lt;email_plan artifact path&gt; \
+  --config configs/host.yaml</pre>
+
+<h3>Cron</h3>
+<pre>cpanel-self-migration cron apply \
+  --plan &lt;cron_plan artifact path&gt; \
+  --config configs/host.yaml</pre>
+</div>
+
+<div class="section">
+<h2>Timeline ({{len .Session.Timeline}} events)</h2>
+{{if .Session.Timeline}}
+<table class="timeline">
+<thead><tr><th>Time</th><th>Action</th><th>Details</th></tr></thead>
+<tbody>
+{{range .Session.Timeline}}
+<tr>
+  <td class="mono">{{fmtTime .Timestamp}}</td>
+  <td>{{.Action}}</td>
+  <td>{{if .FromStatus}}{{.FromStatus}} → {{.ToStatus}}{{end}}{{if .Reason}} — {{.Reason}}{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}
+<p style="color:#7a8598">No events yet.</p>
+{{end}}
+</div>
+
+<div class="section">
+<h2>Governance</h2>
+
+<fieldset>
+<legend>Transition Status</legend>
+<form method="POST" action="/workbench/session/{{.Session.ID}}/status">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>New status:
+    <select name="status">
+      {{range .AllStatuses}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+  </label>
+  <label><input type="checkbox" name="force" value="1"> Force (bypass transition matrix)</label>
+  <label>Reason (required if forced, ≥10 chars): <input type="text" name="reason" size="40"></label>
+  <button type="submit">Set Status</button>
+</form>
+</fieldset>
+
+<fieldset>
+<legend>Attach Artifact</legend>
+<form method="POST" action="/workbench/session/{{.Session.ID}}/attach">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Kind:
+    <select name="kind">
+      {{range .AllKinds}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+  </label>
+  <label>File path (local): <input type="text" name="path" size="50" placeholder="/path/to/artifact.json"></label>
+  <button type="submit">Attach</button>
+</form>
+</fieldset>
+</div>
+
+{{define "statusBadge"}}{{if eq . "draft"}}<span class="badge draft">{{.}}</span>{{else if eq . "archived"}}<span class="badge archived">{{.}}</span>{{else if or (eq . "cutover_done") (eq . "apply_done")}}<span class="badge done">{{.}}</span>{{else if or (eq . "blocked") (eq . "failed")}}<span class="badge error">{{.}}</span>{{else}}<span class="badge active">{{.}}</span>{{end}}{{end}}
+</body>
+</html>

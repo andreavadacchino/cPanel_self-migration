@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/webui"
+	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
 )
 
 // runUICmd implements `cpanel-self-migration ui`: a LOCAL web workstation
@@ -71,7 +72,12 @@ func newUIServer(ctx context.Context, dir, listen string) (*http.Server, error) 
 	if err := webui.ValidateLoopback(listen); err != nil {
 		return nil, err
 	}
-	h, err := webui.New(webui.Options{Dir: dir, BaseContext: ctx})
+	opts := webui.Options{Dir: dir, BaseContext: ctx}
+	// Enable workbench routes if the migration store exists or can be created.
+	if store, err := workbench.NewStore(migrationHome()); err == nil {
+		opts.SessionStore = store
+	}
+	h, err := webui.New(opts)
 	if err != nil {
 		return nil, err
 	}

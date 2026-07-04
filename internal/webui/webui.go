@@ -42,6 +42,7 @@ import (
 
 	"github.com/tis24dev/cPanel_self-migration/internal/accountinventory"
 	"github.com/tis24dev/cPanel_self-migration/internal/config"
+	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
 	"gopkg.in/yaml.v3"
 )
 
@@ -98,14 +99,18 @@ type Options struct {
 	// (e.g. from a signal handler) to stop an in-flight run and kill its
 	// subprocess. Nil defaults to context.Background().
 	BaseContext context.Context
+	// SessionStore is the workbench session store. If non-nil, enables
+	// the /workbench/* routes for migration governance.
+	SessionStore *workbench.Store
 }
 
 type server struct {
-	dir   string
-	tpl   *template.Template
-	csrf  string
-	job   *jobManager
-	cfgMu sync.Mutex // serializes config writes (shared host.yaml target)
+	dir       string
+	tpl       *template.Template
+	csrf      string
+	job       *jobManager
+	cfgMu     sync.Mutex // serializes config writes (shared host.yaml target)
+	workbench *workbenchServer
 }
 
 // New returns the workstation handler for the given options.
@@ -137,6 +142,13 @@ func New(o Options) (http.Handler, error) {
 		tpl:  tpl,
 		csrf: hex.EncodeToString(tok),
 		job:  newJobManager(o.Dir, o.Runner, o.BaseContext),
+	}
+	if o.SessionStore != nil {
+		ws, err := newWorkbenchServer(o.SessionStore, s.csrf)
+		if err != nil {
+			return nil, err
+		}
+		s.workbench = ws
 	}
 	// No ServeMux on purpose: its path canonicalization would answer
 	// traversal-looking requests with a 307 redirect instead of a plain
@@ -180,6 +192,9 @@ func (s *server) route(w http.ResponseWriter, r *http.Request) {
 	case "/accept":
 		s.post(w, r, s.saveAccept)
 	default:
+		if s.workbench != nil && s.routeWorkbench(w, r) {
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
@@ -495,4 +510,55 @@ func (s *server) staleInputs(in accountinventory.ChecklistInputs) []staleEntry {
 	check("migration report", in.MigrationReport)
 	check("acceptances", in.Acceptances)
 	return out
+}
+
+// routeWorkbench handles /workbench/* routes. Returns true if it handled
+// the request (caller should return), false if the path is not a workbench route.
+func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
+	path := r.URL.Path
+
+	if path == "/workbench" || path == "/workbench/" {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return true
+		}
+		s.workbench.handleList(w, r)
+		return true
+	}
+
+	const sessionPrefix = "/workbench/session/"
+	if !strings.HasPrefix(path, sessionPrefix) {
+		return false
+	}
+	rest := path[len(sessionPrefix):]
+
+	// Extract session ID (first path segment)
+	var sessionID, action string
+	if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+		sessionID = rest[:idx]
+		action = rest[idx+1:]
+	} else {
+		sessionID = rest
+	}
+	if sessionID == "" {
+		http.NotFound(w, r)
+		return true
+	}
+
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		s.workbench.handleDetail(w, r, sessionID)
+	case action == "status":
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.workbench.handleSetStatus(w, r, sessionID)
+		})
+	case action == "attach":
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.workbench.handleAttach(w, r, sessionID)
+		})
+	default:
+		http.NotFound(w, r)
+	}
+	return true
 }
