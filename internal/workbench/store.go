@@ -27,9 +27,8 @@ var (
 // Store manages migration sessions on the local filesystem.
 // Sessions are stored as individual JSON files under root/<session-id>/session.json.
 // All writes are atomic (write-temp + fsync + rename). The mutex serializes
-// in-process access. Cross-process serialization is not implemented because
-// this is a single-operator CLI tool — each invocation is short-lived and
-// sequential. If Store is ever embedded in a long-running server, add flock.
+// in-process access; flock on a lock file serializes cross-process access
+// (safe for concurrent ui server + CLI invocations on the same store).
 type Store struct {
 	mu   sync.Mutex
 	root string
@@ -50,6 +49,11 @@ func NewStore(dir string) (*Store, error) {
 
 // Create initializes a new migration session and persists it.
 func (s *Store) Create(name, sourceProfile, destProfile string, now time.Time) (*Session, error) {
+	fl, err := s.lockFile()
+	if err != nil {
+		return nil, err
+	}
+	defer unlockFile(fl)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -152,6 +156,11 @@ func (s *Store) SetStatus(id string, to Status, force bool, reason string, now t
 		}
 	}
 
+	fl, flErr := s.lockFile()
+	if flErr != nil {
+		return nil, flErr
+	}
+	defer unlockFile(fl)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

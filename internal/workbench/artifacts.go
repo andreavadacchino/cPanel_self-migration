@@ -41,6 +41,11 @@ func (s *Store) AttachArtifact(sessionID string, kind ArtifactKind, srcPath stri
 		return nil, fmt.Errorf("artifact source %q is not a regular file", srcPath)
 	}
 
+	fl, flErr := s.lockFile()
+	if flErr != nil {
+		return nil, flErr
+	}
+	defer unlockFile(fl)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -267,12 +267,20 @@ func TestWorkbenchEscapingXSS(t *testing.T) {
 func TestWorkbenchPathTraversalInSessionID(t *testing.T) {
 	h, _, _ := newTestWorkbenchHandler(t)
 
-	req := httptest.NewRequest("GET", "/workbench/session/../../../etc/passwd", nil)
-	req.Host = "127.0.0.1:8422"
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
+	cases := []string{
+		"/workbench/session/../../../etc/passwd",
+		"/workbench/session/..",
+		"/workbench/session/.",
+		"/workbench/session/foo%2F..%2F..%2Fetc",
+	}
+	for _, path := range cases {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = "127.0.0.1:8422"
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
 
-	if w.Code != 404 {
-		t.Fatalf("status = %d, want 404 for traversal attempt", w.Code)
+		if w.Code != 404 {
+			t.Errorf("path %q: status = %d, want 404", path, w.Code)
+		}
 	}
 }
