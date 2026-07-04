@@ -1,4 +1,4 @@
-# Prompt di avvio — prossima sessione (cutover giorginisposi P2-P6)
+# Prompt di avvio — prossima sessione
 
 Copia-incolla da qui in giù.
 
@@ -7,52 +7,47 @@ Copia-incolla da qui in giù.
 Stai lavorando sul tool Go **cpanel-self-migration**, directory
 /Users/andreavadacchino/Desktop/pADV/cPanel_self-migration.
 
-Leggi PRIMA: CUTOVER_1_GIORGINISPOSI.md (il diario del cutover in corso),
-CUTOVER_RUNBOOK.md (runbook ripetibile con §4.1 Variante C).
+Leggi PRIMA: DEVELOPMENT_STATE.md, COMMAND.md (sezione `migration`).
 
-## Stato al 2026-07-03
+## Stato al 2026-07-04
 
-### Cutover #1 — IN CORSO, fermo a P1
+### Ultimo merge: feat/workbench-session-model
 
-| Fase | Stato |
-|------|-------|
-| P0 Preflight | COMPLETATO — peer standalone, SPF/DKIM verificati |
-| GATE 1 | APPROVATO — ordine operativo confermato |
-| P1 TTL lowering | **IN ATTESA** — utente deve editare 4 TTL via WHM su .193 |
-| P2-P6 | Non iniziati — partono 4h dopo l'edit TTL |
+PR merged: **Migration Session Model and Artifact Registry**.
 
-### Decisioni prese
+Introduce `internal/workbench`:
+- 14 statuses, 12 steps, transition matrix con force+reason
+- Artifact registry: 17 kind conosciuti, copia atomica + SHA256
+- Timeline eventi con tool_version
+- JSON file storage (atomic write-temp+fsync+rename), 0700/0600
+- Zero import sshx/cpanel/config (safety test)
+- `migration` CLI namespace (init/list/show/set-status/attach-artifact/archive)
+- Test completi: unit, permission, determinism, CLI dispatch, safety
 
-- **Variante C**: peer standalone, `synczone` per-account
-- **Primo account**: giorginisposi
-- **TTL**: opzione 1 (abbassare adesso, switch quando pronto dopo 4h)
+### Cutover #1 — giorginisposi
 
-### Check pre-switch già completati
+Fermo a P1 (TTL lowering su .193 da parte dell'utente).
+Vedi CUTOVER_1_GIORGINISPOSI.md per il diario del cutover.
 
-| Check | Risultato |
-|-------|-----------|
-| SPF su .78 | `ip4:38.224.109.78` (corretto) |
-| DKIM su .78 | chiave propria di .78 (piano replace → skipped_v1, corretto) |
-| Peer standalone | entrambi confermati (SOA 2026051601) |
-| CageFS .78 | disabilitato per giorginisposi |
+### Prossimo passo: PR 58 — Single Account Workbench UI
 
-### Azione utente richiesta per sbloccare P1
+La UI userà le migration sessions per costruire un dashboard con:
+- Overview (lista sessioni, status badge)
+- Preflight / Inventory / Checklist views
+- Apply Center (trigger da UI → CLI subprocess)
+- Verify / Cutover / Archive
 
-Editare su WHM (.193) → DNS Zone Manager → giorginisposi.it:
-A apex, CNAME www, MX, TXT/SPF → TTL da 14400 a 300.
-NON toccare NS/SOA. Dopo l'edit: serial SOA deve bumpare da 2026051601.
+Prerequisiti soddisfatti:
+- Modello dati: ✅ (Session struct, status enum, steps, artifacts)
+- CLI: ✅ (tutti i subcommand operativi)
+- Storage: ✅ (JSON file-based, testato)
+- Safety: ✅ (offline, no credentials)
 
-### Prossimi passi (dopo 4h dall'edit TTL)
-
-P2: sync contenuti finale (delta mail/web/db)
-P3: apply config binario + verify CLEAN + conferma SPF/DKIM
-P4: `dnscluster synczone giorginisposi.it` (LO SWITCH)
-P5: .193 attivo → delta maildir → sospensione
-P6: documentazione
+Pattern UI da seguire: `cmd/cpanel-self-migration/ui_cmd.go` + `internal/webui/`.
+La nuova UI può leggere le session via il package `workbench.Store`.
 
 ## Tool state
 
-PR #54 merged. 7 writer binary-proven. Pipeline CLI completa.
 Binario: `go build -o /tmp/cpanel-self-migration ./cmd/cpanel-self-migration/`
 Config: `configs/host.yaml` (src=.193, dest=.78)
 
@@ -66,6 +61,5 @@ Peer NS standalone verificato ATTIVAMENTE prima di write DNS.
 
 - Mai removeacct/killdns. Mai toccare ruoli peer o useclusteringdns.
 - Mai ripristinare sync (Variante C — standalone per tutta la campagna).
-- Zona produzione toccabile SOLO: TTL (P1) e synczone (P4).
 - Zone di TUTTI gli altri account INTOCCABILI.
 - Su .193: letture + delta sync + sospensione — nient'altro.

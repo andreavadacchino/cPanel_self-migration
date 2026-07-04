@@ -120,6 +120,21 @@ func TestDispatchCronRefusesUnknown(t *testing.T) {
 	}
 }
 
+// The `migration` namespace governs session management: an unknown or
+// missing subcommand exits 2 with the migration usage, never falling
+// through to the migration flow.
+func TestDispatchMigrationRefusesUnknown(t *testing.T) {
+	for _, args := range [][]string{{"migration", "bogus"}, {"migration"}} {
+		code, stderr := runDispatchChild(t, args...)
+		if code != 2 {
+			t.Fatalf("%v: exit code = %d, want 2; stderr:\n%s", args, code, stderr)
+		}
+		if !strings.Contains(stderr, "usage: cpanel-self-migration migration") {
+			t.Errorf("%v: stderr missing migration usage line:\n%s", args, stderr)
+		}
+	}
+}
+
 // The `email` namespace (PR 2B-1) has the same contract: an unknown or
 // missing subcommand exits 2 with the email usage, never falling through
 // to the migration flow.
