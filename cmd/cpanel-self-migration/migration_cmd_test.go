@@ -207,7 +207,7 @@ func TestMigrationArchive(t *testing.T) {
 
 	// Force to blocked, then archive
 	runMigrationChild(t, home, "set-status", sess.ID,
-		"--status", "blocked", "--force", "--reason", "test")
+		"--status", "blocked", "--force", "--reason", "external dependency blocks progress")
 	code, _, stderr := runMigrationChild(t, home, "archive", sess.ID)
 	if code != 0 {
 		t.Fatalf("archive from blocked: exit %d; stderr:\n%s", code, stderr)

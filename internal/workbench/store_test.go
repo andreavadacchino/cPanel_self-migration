@@ -219,9 +219,20 @@ func TestUpdateStatusForceRequiresReason(t *testing.T) {
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 	sess, _ := s.Create("test", "src", "dst", now)
 
+	// Empty reason
 	_, err := s.SetStatus(sess.ID, StatusCutoverDone, true, "", now)
 	if err == nil {
 		t.Fatal("expected error when force without reason")
+	}
+	// Too short reason
+	_, err = s.SetStatus(sess.ID, StatusCutoverDone, true, "short", now)
+	if err == nil {
+		t.Fatal("expected error when force with too-short reason")
+	}
+	// Whitespace-only reason
+	_, err = s.SetStatus(sess.ID, StatusCutoverDone, true, "         ", now)
+	if err == nil {
+		t.Fatal("expected error when force with whitespace-only reason")
 	}
 }
 
@@ -230,7 +241,7 @@ func TestArchiveSession(t *testing.T) {
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 	sess, _ := s.Create("test", "src", "dst", now)
 	// Move to a state that can reach archived: use force
-	s.SetStatus(sess.ID, StatusCutoverDone, true, "test", now)
+	s.SetStatus(sess.ID, StatusCutoverDone, true, "test override for archive", now)
 
 	updated, err := s.SetStatus(sess.ID, StatusArchived, false, "", now.Add(time.Minute))
 	if err != nil {

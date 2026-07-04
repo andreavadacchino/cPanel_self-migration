@@ -26,9 +26,16 @@ func (s *Store) AttachArtifact(sessionID string, kind ArtifactKind, srcPath stri
 		return nil, fmt.Errorf("invalid session id %q", sessionID)
 	}
 
-	info, err := os.Stat(srcPath)
+	// Open the source file BEFORE acquiring the lock to eliminate TOCTOU:
+	// we hold the fd throughout, so a swap after open cannot affect us.
+	srcFile, err := os.Open(srcPath)
 	if err != nil {
 		return nil, fmt.Errorf("artifact source: %w", err)
+	}
+	defer srcFile.Close()
+	info, err := srcFile.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("artifact source stat: %w", err)
 	}
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("artifact source %q is not a regular file", srcPath)
@@ -54,7 +61,7 @@ func (s *Store) AttachArtifact(sessionID string, kind ArtifactKind, srcPath stri
 	destName := fmt.Sprintf("%s_%s_%s%s", kind, now.UTC().Format("20060102_150405"), hex.EncodeToString(randBytes), ext)
 	destPath := filepath.Join(sess.ArtifactDir, destName)
 
-	hash, err := copyFileAtomic(srcPath, destPath)
+	hash, err := copyFromFD(srcFile, destPath)
 	if err != nil {
 		return nil, fmt.Errorf("copy artifact: %w", err)
 	}
@@ -81,40 +88,42 @@ func (s *Store) AttachArtifact(sessionID string, kind ArtifactKind, srcPath stri
 	return sess, nil
 }
 
-// copyFileAtomic copies src to dst atomically and returns the SHA256 hex digest.
-func copyFileAtomic(src, dst string) (string, error) {
-	in, err := os.Open(src)
+// copyFromFD copies from an already-opened source file descriptor to dst
+// atomically (write-temp + fsync + rename) and returns the SHA256 hex digest.
+// Using an fd eliminates the TOCTOU window between stat and open.
+func copyFromFD(in *os.File, dst string) (string, error) {
+	dir := filepath.Dir(dst)
+	tmp, err := os.CreateTemp(dir, "artifact-*.tmp")
 	if err != nil {
 		return "", err
 	}
-	defer in.Close()
-
-	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return "", err
-	}
+	tmpName := tmp.Name()
 
 	h := sha256.New()
-	w := io.MultiWriter(out, h)
+	w := io.MultiWriter(tmp, h)
 
 	if _, err := io.Copy(w, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
+		tmp.Close()
+		os.Remove(tmpName)
 		return "", err
 	}
-	if err := out.Sync(); err != nil {
-		out.Close()
-		os.Remove(tmp)
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
 		return "", err
 	}
-	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
 		return "", err
 	}
 
-	if err := os.Rename(tmp, dst); err != nil {
-		os.Remove(tmp)
+	if err := os.Rename(tmpName, dst); err != nil {
+		os.Remove(tmpName)
 		return "", err
 	}
 

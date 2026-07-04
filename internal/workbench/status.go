@@ -21,9 +21,12 @@ func init() {
 	}
 }
 
-// allowedTransitions defines the legal forward transitions. blocked and failed
-// are reachable from any active status (handled separately). archived is
-// reachable from cutover_done, blocked, and failed.
+// allowedTransitions defines the legal FORWARD transitions. The matrix is
+// intentionally strict (no backward jumps) — recovery scenarios (re-apply
+// after failed verification, unblock after fix) use --force with a mandatory
+// reason, which is recorded distinctly in the timeline as "forced_status_change".
+// blocked and failed are reachable from any active status (handled separately).
+// archived is reachable from cutover_done, blocked, and failed.
 var allowedTransitions = map[Status][]Status{
 	StatusDraft:                 {StatusPreflightRequired},
 	StatusPreflightRequired:     {StatusInventoryReady},

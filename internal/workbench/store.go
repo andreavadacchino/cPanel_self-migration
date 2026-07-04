@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,7 +17,10 @@ import (
 
 // Store manages migration sessions on the local filesystem.
 // Sessions are stored as individual JSON files under root/<session-id>/session.json.
-// All writes are atomic (write-temp + rename). The mutex serializes access.
+// All writes are atomic (write-temp + fsync + rename). The mutex serializes
+// in-process access. Cross-process serialization is not implemented because
+// this is a single-operator CLI tool — each invocation is short-lived and
+// sequential. If Store is ever embedded in a long-running server, add flock.
 type Store struct {
 	mu   sync.Mutex
 	root string
@@ -46,11 +50,14 @@ func (s *Store) Create(name, sourceProfile, destProfile string, now time.Time) (
 	}
 
 	sessDir := filepath.Join(s.root, id)
-	if err := os.MkdirAll(sessDir, 0700); err != nil {
+	if err := os.Mkdir(sessDir, 0700); err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("session id collision %q (retry)", id)
+		}
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 	artifactDir := filepath.Join(sessDir, "artifacts")
-	if err := os.MkdirAll(artifactDir, 0700); err != nil {
+	if err := os.Mkdir(artifactDir, 0700); err != nil {
 		return nil, fmt.Errorf("create artifact dir: %w", err)
 	}
 
@@ -127,8 +134,11 @@ func (s *Store) SetStatus(id string, to Status, force bool, reason string, now t
 	if !ValidStatus(to) {
 		return nil, fmt.Errorf("invalid target status %q", to)
 	}
-	if force && reason == "" {
-		return nil, fmt.Errorf("--force requires a non-empty reason")
+	if force {
+		trimmed := strings.TrimSpace(reason)
+		if len(trimmed) < 10 {
+			return nil, fmt.Errorf("--force requires a reason of at least 10 characters (got %d)", len(trimmed))
+		}
 	}
 
 	s.mu.Lock()
