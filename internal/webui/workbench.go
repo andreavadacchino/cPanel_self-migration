@@ -47,6 +47,9 @@ func newWorkbenchServer(store *workbench.Store, csrf string) (*workbenchServer, 
 				return ""
 			}
 		},
+		"list": func(args ...any) []any {
+			return args
+		},
 	}
 	tpl, err := template.New("").Funcs(funcMap).ParseFS(workbenchTemplatesFS,
 		"templates/workbench_list.html",

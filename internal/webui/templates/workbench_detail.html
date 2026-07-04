@@ -76,23 +76,40 @@
 </div>
 
 <div class="section">
-<h2>Apply Center</h2>
-<p style="color:#5b6575; font-size:.9rem">Commands are for copy-paste into the terminal. The UI never executes apply/cutover.</p>
+<h2>Execution Center</h2>
+<p style="color:#5b6575; font-size:.9rem">Read-only actions need one click. Write actions require typing the account name as confirmation. Rollback requires double confirmation.</p>
 
-<h3>DNS</h3>
-<pre>cpanel-self-migration dns apply \
-  --plan &lt;dns_plan artifact path&gt; \
-  --config configs/host.yaml</pre>
+<h3>Verify (read-only)</h3>
+<div style="display:flex; gap:.5rem; flex-wrap:wrap">
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "dns_verify" "DNS Verify")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "email_verify" "Email Verify")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_verify" "Cron Verify")}}
+</div>
 
-<h3>Email</h3>
-<pre>cpanel-self-migration email apply \
-  --plan &lt;email_plan artifact path&gt; \
-  --config configs/host.yaml</pre>
+<h3>Apply (write — requires confirmation)</h3>
+{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "dns_apply" "DNS Apply")}}
+{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "email_apply" "Email Apply")}}
+{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "cron_apply" "Cron Apply")}}
 
-<h3>Cron</h3>
-<pre>cpanel-self-migration cron apply \
-  --plan &lt;cron_plan artifact path&gt; \
-  --config configs/host.yaml</pre>
+<h3>Migrate Content (write — requires confirmation + scope)</h3>
+<fieldset>
+<legend>migrate content</legend>
+<form method="POST" action="/workbench/session/{{.Session.ID}}/exec">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="action" value="migrate_content">
+  <label><input type="checkbox" name="scope_mail" value="1"> Mail</label>
+  <label><input type="checkbox" name="scope_file" value="1"> Files</label>
+  <label><input type="checkbox" name="scope_db" value="1"> Database</label>
+  <label>Domain filter (optional): <input type="text" name="scope_domain" size="30" placeholder="leave empty for all"></label>
+  <label>Type <strong>{{.Session.Name}}</strong> to confirm: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label>
+  <button type="submit" class="danger">Execute Migration</button>
+</form>
+</fieldset>
+
+<h3>Rollback (write — requires DOUBLE confirmation)</h3>
+{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "dns_rollback" "DNS Rollback")}}
+{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "email_rollback" "Email Rollback")}}
+{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "cron_rollback" "Cron Rollback")}}
 </div>
 
 <div class="section">
@@ -149,5 +166,11 @@
 </div>
 
 {{define "statusBadge"}}{{if eq . "draft"}}<span class="badge draft">{{.}}</span>{{else if eq . "archived"}}<span class="badge archived">{{.}}</span>{{else if or (eq . "cutover_done") (eq . "apply_done")}}<span class="badge done">{{.}}</span>{{else if or (eq . "blocked") (eq . "failed")}}<span class="badge error">{{.}}</span>{{else}}<span class="badge active">{{.}}</span>{{end}}{{end}}
+
+{{define "execBtnReadOnly"}}{{$id := index . 0}}{{$csrf := index . 1}}{{$action := index . 2}}{{$label := index . 3}}<form method="POST" action="/workbench/session/{{$id}}/exec" style="display:inline"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><button type="submit">{{$label}}</button></form>{{end}}
+
+{{define "execFormWrite"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Type <strong>{{$name}}</strong> to confirm: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
+
+{{define "execFormRollback"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Type <strong>{{$name}}</strong> to confirm: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label><label>Type again for rollback: <input type="text" name="confirm_rollback" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
 </body>
 </html>
