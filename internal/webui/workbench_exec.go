@@ -343,14 +343,18 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	tail := &tailBuffer{limit: execTailLimit}
 	start := time.Now()
 	var execErr error
+	var tolerated []string // names of tolerant steps that failed but did not abort
 	if action.pipeline {
 		for _, st := range pipelineSteps(ws.dir) {
 			if err := ws.runner(ctx, tail, st.Name, st.Argv); err != nil {
 				// A tolerant step's failure is surfaced in the tail but does
 				// not abort the pipeline — the remaining steps still run (same
-				// graceful degradation as the dashboard jobManager).
+				// graceful degradation as the dashboard jobManager). Record it
+				// so the timeline reason reflects it (the workbench path has no
+				// per-step UI, unlike the /run dashboard's Failed marker).
 				if st.Tolerant {
 					fmt.Fprintf(tail, "step %s failed (tolerated, pipeline continues): %v\n", st.Name, err)
+					tolerated = append(tolerated, fmt.Sprintf("%s: %v", st.Name, err))
 					continue
 				}
 				execErr = err
@@ -389,6 +393,9 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 		action.name, duration.Truncate(time.Second), execErr == nil)
 	if execErr != nil {
 		reason += " err=" + execErr.Error()
+	}
+	if len(tolerated) > 0 {
+		reason += " tolerated=[" + strings.Join(tolerated, "; ") + "]"
 	}
 	if attachErr != nil {
 		reason += " attach_err=" + attachErr.Error()
