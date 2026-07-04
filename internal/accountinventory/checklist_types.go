@@ -121,6 +121,8 @@ type ChecklistSection struct {
 	ExpectedDifferences []ExpectedDifference `json:"expected_differences"`
 	ManualActionRefs    []string             `json:"manual_action_refs"`
 	Blockers            []string             `json:"blockers"`
+	BlockersApply       []string             `json:"blockers_apply"`
+	BlockersCutover     []string             `json:"blockers_cutover"`
 	PolicyFindingRefs   []string             `json:"policy_finding_refs"`
 	// AcceptedByOperator lists the ids of this section's actions that an
 	// operator acceptance matched (PR 7D).
@@ -207,6 +209,7 @@ type MigrationChecklist struct {
 	// it cannot yet prove the diff was computed FROM these inventories.
 	ChainVerified bool               `json:"chain_verified"`
 	OverallStatus string             `json:"overall_status"`
+	ApplyBlocked  bool               `json:"apply_blocked"`
 	Summary       ChecklistSummary   `json:"summary"`
 	Sections      []ChecklistSection `json:"sections"`
 	ManualActions []ManualAction     `json:"manual_actions"`

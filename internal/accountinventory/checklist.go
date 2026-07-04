@@ -31,6 +31,20 @@ var checklistSectionOrder = []string{
 	"quota_package", "server_level_config",
 }
 
+// blockerScopeCutover lists blocker-severity policy rules that gate ONLY
+// the cutover (DNS switch), NOT the pre-cutover config apply. Any blocker
+// rule NOT in this set defaults to "apply" scope (conservative).
+var blockerScopeCutover = map[string]bool{
+	"POL-DNS-NS-CHANGED":       true,
+	"POL-DNS-NS-REMOVED":       true,
+	"POL-DNS-MX-CHANGED":       true,
+	"POL-DNS-MX-REMOVED":       true,
+	"POL-MAILBOX-REMOVED":      true,
+	"POL-DB-REMOVED":           true,
+	"POL-SSL-REMOVED":          true,
+	"POL-CRON-ENABLED-REMOVED": true,
+}
+
 type checklistBuilder struct {
 	in       ChecklistInput
 	warnings []string
@@ -238,6 +252,8 @@ func newChecklistSection(name string) ChecklistSection {
 		ExpectedDifferences: []ExpectedDifference{},
 		ManualActionRefs:    []string{},
 		Blockers:            []string{},
+		BlockersApply:       []string{},
+		BlockersCutover:     []string{},
 		PolicyFindingRefs:   []string{},
 		AcceptedByOperator:  []string{},
 		PostCutoverChecks:   []string{},
@@ -304,6 +320,11 @@ func (b *checklistBuilder) buildInventoriedSection(name string) ChecklistSection
 				label = fmt.Sprintf("%s (%s)", f.ID, ref)
 			}
 			sec.Blockers = append(sec.Blockers, label)
+			if blockerScopeCutover[f.ID] {
+				sec.BlockersCutover = append(sec.BlockersCutover, label)
+			} else {
+				sec.BlockersApply = append(sec.BlockersApply, label)
+			}
 		case SeverityReview:
 			reviews++
 		}
@@ -893,6 +914,14 @@ func (b *checklistBuilder) summarize(c *MigrationChecklist) {
 		c.OverallStatus = OverallReadyWithManualNotes
 	default:
 		c.OverallStatus = OverallReadyToCutover
+	}
+
+	// ApplyBlocked: true only if there are apply-scope blockers.
+	for _, s := range c.Sections {
+		if len(s.BlockersApply) > 0 {
+			c.ApplyBlocked = true
+			break
+		}
 	}
 
 	// A PROVEN provenance mismatch means the artifacts were not derived

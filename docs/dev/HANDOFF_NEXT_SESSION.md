@@ -38,40 +38,36 @@ read-only), MA solo con conferma forte. Il safety test ora verifica:
 Fermo a P1 (TTL lowering su .193 da parte dell'utente).
 Vedi CUTOVER_1_GIORGINISPOSI.md.
 
-## Prossima sessione: DOGFOODING
+### PR #60 — MERGED (exec forms + dogfooding report)
 
-Obiettivo: migrazione di test completa di **giorginisposi** condotta
-INTERAMENTE dalla Workbench UI (connessioni → pipeline → acceptances →
-apply → verify → ready_for_cutover), sul dest sacrificale .78.
+Aggiunti form HTML per le 10 azioni exec nel workbench. Dogfooding #1
+completato: verdetto NEGATIVO — il ciclo NON è completabile solo dalla UI.
+6 gap strutturali documentate in DOGFOODING_1_REPORT.md.
 
-### Sequenza operativa
+## Prossima sessione: scelta
 
-1. `cpanel-self-migration ui --dir ./dogfood_giorginisposi`
-2. Browser: http://127.0.0.1:8422
-3. Configurare connessioni (form host.yaml) — source .193, dest .78
-4. `/workbench` → creare sessione `migration init --name giorginisposi ...`
-5. Eseguire pipeline read-only (inventory → diff → policy → checklist)
-6. Gestire blockers/acceptances dalla UI
-7. Eseguire `dns_apply`, `email_apply`, `cron_apply` dalla UI (con conferma)
-8. Eseguire i 3 verify dalla UI
-9. Verificare auto-transition a `ready_for_cutover`
-10. Cutover page: seguire runbook (FUORI dalla UI)
+Due opzioni (decidere all'inizio della sessione):
 
-### Cosa validare
+### Opzione A: Chiudere le gap UI (PR piccola)
 
-- [ ] Pipeline read-only completa senza errori
-- [ ] Artifact auto-allegati alla sessione
-- [ ] Conferma forte funziona (errore se nome sbagliato)
-- [ ] dns/email/cron apply riusciti con backup deterministici
-- [ ] Verify CLEAN → auto-transition funziona
-- [ ] Timeline registra tutto correttamente
-- [ ] Rollback funziona (testare su un singolo track)
+Colmare i 4 gap principali per rendere il ciclo UI-only:
+1. Form creazione sessione in `/workbench`
+2. Exec actions per plans (dns_plan, email_plan, cron_plan)
+3. Exec action "run_pipeline" (pipeline + artifact attach)
+4. Decoupling checklist BLOCKED da exec gate
 
-### Prerequisiti
+Poi dogfooding #2 end-to-end.
 
-- P1 (TTL lowering) completato dall'utente su .193
-- Account dest su .78 già esistente (da PR precedenti)
-- host.yaml con credenziali corrette
+### Opzione B: Cutover reale (modalità hybrid)
+
+Usare il tool com'è (UI governance + terminale exec) per completare il
+cutover di giorginisposi. Il tool è funzionalmente completo per un
+operatore che accetta il terminale per pipeline/plans.
+
+Prerequisiti per B:
+- P1 (TTL lowering) da completare dall'utente su WHM .193
+- 4h di attesa post-TTL
+- Eseguire il runbook Variante C (docs/dev/CUTOVER_RUNBOOK.md)
 
 ## Workflow
 

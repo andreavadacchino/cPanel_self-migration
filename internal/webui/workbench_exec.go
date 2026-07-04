@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
@@ -27,6 +26,8 @@ type actionDef struct {
 	writeOp   bool // requires strong confirmation
 	rollback  bool // requires DOUBLE confirmation
 	artifact  *artifactOutput
+	artifacts []artifactOutput // for multi-output actions (e.g. run_pipeline)
+	pipeline  bool             // if true, run as multi-step pipeline (like jobManager)
 	buildArgv func(sess *workbench.Session, r *http.Request, dir string) ([]string, error)
 }
 
@@ -42,6 +43,55 @@ type artifactOutput struct {
 // Multiple sessions in the store exist for archival/history — only ONE
 // should be active at a time (enforced by the exec slot + session status).
 var actionRegistry = map[string]actionDef{
+	"run_pipeline": {
+		name: "run pipeline", writeOp: false, pipeline: true,
+		artifacts: []artifactOutput{
+			{"inventory_source.json", workbench.ArtifactInventorySource},
+			{"inventory_destination.json", workbench.ArtifactInventoryDestination},
+			{"inventory_diff.json", workbench.ArtifactInventoryDiff},
+			{"policy_report.json", workbench.ArtifactPolicyReport},
+			{"migration_checklist.json", workbench.ArtifactMigrationChecklist},
+		},
+		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
+			return nil, nil // pipeline uses pipelineSteps(), not a single argv
+		},
+	},
+	"dns_plan": {
+		name: "dns plan", writeOp: false,
+		artifact: &artifactOutput{"dns_import_plan.json", workbench.ArtifactDNSPlan},
+		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
+			return []string{"inventory", "dns-plan",
+				"--source", filepath.Join(dir, "inventory_source.json"),
+				"--destination", filepath.Join(dir, "inventory_destination.json"),
+				"--output-json", filepath.Join(dir, "dns_import_plan.json"),
+				"--output-md", filepath.Join(dir, "dns_import_plan.md"),
+			}, nil
+		},
+	},
+	"email_plan": {
+		name: "email plan", writeOp: false,
+		artifact: &artifactOutput{"email_apply_plan.json", workbench.ArtifactEmailPlan},
+		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
+			return []string{"inventory", "email-plan",
+				"--source", filepath.Join(dir, "inventory_source.json"),
+				"--destination", filepath.Join(dir, "inventory_destination.json"),
+				"--output-json", filepath.Join(dir, "email_apply_plan.json"),
+				"--output-md", filepath.Join(dir, "email_apply_plan.md"),
+			}, nil
+		},
+	},
+	"cron_plan": {
+		name: "cron plan", writeOp: false,
+		artifact: &artifactOutput{"cron_apply_plan.json", workbench.ArtifactCronPlan},
+		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
+			return []string{"inventory", "cron-plan",
+				"--source", filepath.Join(dir, "inventory_source.json"),
+				"--destination", filepath.Join(dir, "inventory_destination.json"),
+				"--output-json", filepath.Join(dir, "cron_apply_plan.json"),
+				"--output-md", filepath.Join(dir, "cron_apply_plan.md"),
+			}, nil
+		},
+	},
 	"dns_verify": {
 		name: "dns verify", writeOp: false,
 		artifact: &artifactOutput{"dns_verify_report.json", workbench.ArtifactDNSVerifyReport},
@@ -194,39 +244,16 @@ var actionRegistry = map[string]actionDef{
 	},
 }
 
-// execSlot provides single-writer mutual exclusion for the exec launcher.
-// One slot for the whole process — by design, this tool handles one active
-// migration at a time. The slot serializes all exec requests regardless of
-// which session they target.
-type execSlot struct {
-	mu   sync.Mutex
-	busy bool
-}
-
-func (e *execSlot) tryReserve() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.busy {
-		return false
-	}
-	e.busy = true
-	return true
-}
-
-func (e *execSlot) release() {
-	e.mu.Lock()
-	e.busy = false
-	e.mu.Unlock()
-}
-
 // workbenchExecServer handles the /workbench/session/<id>/exec route.
+// It shares the jobManager's single-writer slot to prevent concurrent writes
+// to the artifact directory (same invariant as /run and /accept).
 type workbenchExecServer struct {
 	store  *workbench.Store
 	csrf   string
 	runner StepRunner
 	base   context.Context
-	slot   execSlot
-	dir    string // webui working dir (plans, reports, host.yaml)
+	job    *jobManager // shared single-writer slot with /run and /accept
+	dir    string      // webui working dir (plans, reports, host.yaml)
 }
 
 // validateStrongConfirmation checks that confirm_account matches the session
@@ -286,6 +313,11 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 				return
 			}
 		}
+		// Governance gate: apply blocked by policy?
+		if isApplyBlockedByChecklist(ws.dir) {
+			http.Error(w, "apply is blocked by policy (blocks_apply blockers present in checklist)", http.StatusForbidden)
+			return
+		}
 	}
 
 	// Build argv AFTER confirmation gate
@@ -295,12 +327,13 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Single-writer slot
-	if !ws.slot.tryReserve() {
+	// Single-writer slot (shared with /run and /accept to prevent concurrent
+	// writes to the same artifact directory)
+	if !ws.job.tryReserve() {
 		http.Error(w, "an execution is already in progress", http.StatusConflict)
 		return
 	}
-	defer ws.slot.release()
+	defer ws.job.release()
 
 	// Execute subprocess synchronously
 	ctx, cancel := context.WithTimeout(ws.base, execTimeout)
@@ -308,19 +341,49 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 
 	tail := &tailBuffer{limit: execTailLimit}
 	start := time.Now()
-	execErr := ws.runner(ctx, tail, action.name, argv)
+	var execErr error
+	if action.pipeline {
+		for _, st := range pipelineSteps(ws.dir) {
+			if err := ws.runner(ctx, tail, st.Name, st.Argv); err != nil {
+				execErr = err
+				break
+			}
+		}
+	} else {
+		execErr = ws.runner(ctx, tail, action.name, argv)
+	}
 	duration := time.Since(start)
+
+	now := time.Now()
+
+	// On success: attach artifact(s) BEFORE recording timeline (so the
+	// timeline entry reflects the final state including attached artifacts).
+	var attachErr error
+	if execErr == nil {
+		arts := action.artifacts
+		if action.artifact != nil {
+			arts = append(arts, *action.artifact)
+		}
+		for _, art := range arts {
+			artPath := filepath.Join(ws.dir, art.filename)
+			if _, statErr := os.Stat(artPath); statErr == nil {
+				if _, attErr := ws.store.AttachArtifact(sessionID, art.kind, artPath, now); attErr != nil {
+					attachErr = attErr
+					break
+				}
+			}
+		}
+	}
 
 	// Record execution in timeline via forced status change (same status,
 	// just appends to timeline). Re-read session to avoid TOCTOU clobber.
-	// NOTE: a narrow race remains (concurrent status change between Get and
-	// SetStatus) — acceptable for a single-operator loopback tool; a proper
-	// fix would need a dedicated "append timeline event" store method.
-	now := time.Now()
 	reason := fmt.Sprintf("exec: %s duration=%s ok=%v",
 		action.name, duration.Truncate(time.Second), execErr == nil)
 	if execErr != nil {
 		reason += " err=" + execErr.Error()
+	}
+	if attachErr != nil {
+		reason += " attach_err=" + attachErr.Error()
 	}
 	freshSess, getErr := ws.store.Get(sessionID)
 	if getErr != nil {
@@ -332,20 +395,14 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// On success: attach artifact and attempt auto-transition
-	if execErr == nil && action.artifact != nil {
-		artPath := filepath.Join(ws.dir, action.artifact.filename)
-		if _, statErr := os.Stat(artPath); statErr == nil {
-			if _, attErr := ws.store.AttachArtifact(sessionID, action.artifact.kind, artPath, now); attErr != nil {
-				http.Error(w, "execution succeeded but artifact attachment failed: "+attErr.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
+	if attachErr != nil {
+		http.Error(w, "execution succeeded but artifact attachment failed: "+attachErr.Error(), http.StatusInternalServerError)
+		return
+	}
 
-		// After verify actions, attempt auto-transition to ready_for_cutover
-		if isVerifyAction(actionName) {
-			tryAutoTransitionReadyForCutover(ws.store, sessionID, ws.dir)
-		}
+	// After verify actions, attempt auto-transition to ready_for_cutover
+	if execErr == nil && isVerifyAction(actionName) {
+		tryAutoTransitionReadyForCutover(ws.store, sessionID, ws.dir)
 	}
 
 	// Redirect back to session detail
@@ -355,6 +412,24 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 // isVerifyAction reports whether the action is a verify step.
 func isVerifyAction(name string) bool {
 	return name == "dns_verify" || name == "email_verify" || name == "cron_verify"
+}
+
+// isApplyBlockedByChecklist reads the checklist from disk and returns true
+// if apply_blocked is set (blocks_apply blockers present) OR if the
+// overall_status is NOT_READY (evidence unreliable — can't trust verdicts).
+func isApplyBlockedByChecklist(dir string) bool {
+	b, err := os.ReadFile(filepath.Join(dir, "migration_checklist.json")) // #nosec G304
+	if err != nil {
+		return false // no checklist = no gate (can't block what we can't read)
+	}
+	var cl struct {
+		ApplyBlocked  bool   `json:"apply_blocked"`
+		OverallStatus string `json:"overall_status"`
+	}
+	if err := json.Unmarshal(b, &cl); err != nil {
+		return false
+	}
+	return cl.ApplyBlocked || cl.OverallStatus == "NOT_READY"
 }
 
 // ---------------------------------------------------------------------------

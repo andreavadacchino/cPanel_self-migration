@@ -61,6 +61,24 @@ func newWorkbenchServer(store *workbench.Store, csrf string) (*workbenchServer, 
 	return &workbenchServer{store: store, tpl: tpl, csrf: csrf}, nil
 }
 
+func (ws *workbenchServer) handleCreate(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	source := strings.TrimSpace(r.FormValue("source_profile"))
+	dest := strings.TrimSpace(r.FormValue("destination_profile"))
+
+	if name == "" || source == "" || dest == "" {
+		http.Error(w, "name, source_profile and destination_profile are all required", http.StatusBadRequest)
+		return
+	}
+
+	sess, err := ws.store.Create(name, source, dest, time.Now())
+	if err != nil {
+		http.Error(w, "create session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/workbench/session/"+sess.ID, http.StatusSeeOther)
+}
+
 func (ws *workbenchServer) handleList(w http.ResponseWriter, r *http.Request) {
 	sessions, warnings, err := ws.store.List()
 	if err != nil {
