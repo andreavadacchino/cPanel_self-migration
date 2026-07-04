@@ -561,10 +561,10 @@ func TestExecRollbackWithDoubleConfirmation(t *testing.T) {
 	h, sessID, csrf, fr := newExecTestEnv(t)
 
 	form := url.Values{
-		"csrf":              {csrf},
-		"action":            {"dns_rollback"},
-		"confirm_account":   {"giorginisposi"},
-		"confirm_rollback":  {"giorginisposi"},
+		"csrf":             {csrf},
+		"action":           {"dns_rollback"},
+		"confirm_account":  {"giorginisposi"},
+		"confirm_rollback": {"giorginisposi"},
 	}
 	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sessID+"/exec", form)
 	if rr.Code == http.StatusForbidden {
@@ -577,8 +577,15 @@ func TestExecRollbackWithDoubleConfirmation(t *testing.T) {
 	}
 	argv := calls[0].argv
 	joined := strings.Join(argv, " ")
-	if !strings.Contains(joined, "--rollback") {
-		t.Errorf("rollback argv missing --rollback: got %v", argv)
+	// Must have --rollback, --output-json (distinct from input report), --yes-apply-writes
+	for _, must := range []string{"--rollback", "--output-json", "--yes-apply-writes", "dns_rollback_report.json"} {
+		if !strings.Contains(joined, must) {
+			t.Errorf("rollback argv missing %q: got %v", must, argv)
+		}
+	}
+	// Output file must be DIFFERENT from the input report
+	if strings.Count(joined, "dns_apply_report.json") != 1 {
+		t.Errorf("rollback output should NOT reuse input report filename; argv: %v", argv)
 	}
 }
 

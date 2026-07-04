@@ -153,36 +153,42 @@ var actionRegistry = map[string]actionDef{
 	},
 	"dns_rollback": {
 		name: "dns rollback", writeOp: true, rollback: true,
-		artifact: &artifactOutput{"dns_apply_report.json", workbench.ArtifactDNSApplyReport},
+		artifact: &artifactOutput{"dns_rollback_report.json", workbench.ArtifactDNSApplyReport},
 		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
 			return []string{"dns", "apply",
 				"--rollback", filepath.Join(dir, "dns_backup.json"),
 				"--report", filepath.Join(dir, "dns_apply_report.json"),
 				"--config", filepath.Join(dir, "host.yaml"),
 				"--yes-apply-writes",
+				"--output-json", filepath.Join(dir, "dns_rollback_report.json"),
+				"--output-md", filepath.Join(dir, "dns_rollback_report.md"),
 			}, nil
 		},
 	},
 	"email_rollback": {
 		name: "email rollback", writeOp: true, rollback: true,
-		artifact: &artifactOutput{"email_apply_report.json", workbench.ArtifactEmailApplyReport},
+		artifact: &artifactOutput{"email_rollback_report.json", workbench.ArtifactEmailApplyReport},
 		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
 			return []string{"email", "apply",
 				"--rollback", filepath.Join(dir, "email_backup.json"),
 				"--report", filepath.Join(dir, "email_apply_report.json"),
 				"--config", filepath.Join(dir, "host.yaml"),
 				"--yes-apply-writes",
+				"--output-json", filepath.Join(dir, "email_rollback_report.json"),
+				"--output-md", filepath.Join(dir, "email_rollback_report.md"),
 			}, nil
 		},
 	},
 	"cron_rollback": {
 		name: "cron rollback", writeOp: true, rollback: true,
-		artifact: &artifactOutput{"cron_apply_report.json", workbench.ArtifactCronApplyReport},
+		artifact: &artifactOutput{"cron_rollback_report.json", workbench.ArtifactCronApplyReport},
 		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
 			return []string{"cron", "apply",
 				"--rollback", filepath.Join(dir, "cron_backup.json"),
 				"--config", filepath.Join(dir, "host.yaml"),
 				"--yes-apply-writes",
+				"--output-json", filepath.Join(dir, "cron_rollback_report.json"),
+				"--output-md", filepath.Join(dir, "cron_rollback_report.md"),
 			}, nil
 		},
 	},
@@ -307,22 +313,33 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 
 	// Record execution in timeline via forced status change (same status,
 	// just appends to timeline). Re-read session to avoid TOCTOU clobber.
+	// NOTE: a narrow race remains (concurrent status change between Get and
+	// SetStatus) — acceptable for a single-operator loopback tool; a proper
+	// fix would need a dedicated "append timeline event" store method.
 	now := time.Now()
 	reason := fmt.Sprintf("exec: %s duration=%s ok=%v",
 		action.name, duration.Truncate(time.Second), execErr == nil)
 	if execErr != nil {
 		reason += " err=" + execErr.Error()
 	}
-	freshSess, _ := ws.store.Get(sessionID)
-	if freshSess != nil {
-		_, _ = ws.store.SetStatus(sessionID, freshSess.Status, true, reason, now)
+	freshSess, getErr := ws.store.Get(sessionID)
+	if getErr != nil {
+		http.Error(w, "session disappeared during execution: "+getErr.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, setErr := ws.store.SetStatus(sessionID, freshSess.Status, true, reason, now); setErr != nil {
+		http.Error(w, "failed to record execution in timeline: "+setErr.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	// On success: attach artifact and attempt auto-transition
 	if execErr == nil && action.artifact != nil {
 		artPath := filepath.Join(ws.dir, action.artifact.filename)
-		if _, err := os.Stat(artPath); err == nil {
-			_, _ = ws.store.AttachArtifact(sessionID, action.artifact.kind, artPath, now)
+		if _, statErr := os.Stat(artPath); statErr == nil {
+			if _, attErr := ws.store.AttachArtifact(sessionID, action.artifact.kind, artPath, now); attErr != nil {
+				http.Error(w, "execution succeeded but artifact attachment failed: "+attErr.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 
 		// After verify actions, attempt auto-transition to ready_for_cutover
