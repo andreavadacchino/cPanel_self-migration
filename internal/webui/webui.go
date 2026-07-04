@@ -111,6 +111,7 @@ type server struct {
 	job       *jobManager
 	cfgMu     sync.Mutex // serializes config writes (shared host.yaml target)
 	workbench *workbenchServer
+	wbExec    *workbenchExecServer
 }
 
 // New returns the workstation handler for the given options.
@@ -149,6 +150,17 @@ func New(o Options) (http.Handler, error) {
 			return nil, err
 		}
 		s.workbench = ws
+		base := o.BaseContext
+		if base == nil {
+			base = context.Background()
+		}
+		s.wbExec = &workbenchExecServer{
+			store:  o.SessionStore,
+			csrf:   s.csrf,
+			runner: s.job.runner,
+			base:   base,
+			dir:    o.Dir,
+		}
 	}
 	// No ServeMux on purpose: its path canonicalization would answer
 	// traversal-looking requests with a 307 redirect instead of a plain
@@ -556,6 +568,10 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 	case action == "attach":
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
 			s.workbench.handleAttach(w, r, sessionID)
+		})
+	case action == "exec":
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.wbExec.handleExec(w, r, sessionID)
 		})
 	default:
 		http.NotFound(w, r)
