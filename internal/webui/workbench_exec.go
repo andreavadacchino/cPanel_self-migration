@@ -346,6 +346,13 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	if action.pipeline {
 		for _, st := range pipelineSteps(ws.dir) {
 			if err := ws.runner(ctx, tail, st.Name, st.Argv); err != nil {
+				// A tolerant step's failure is surfaced in the tail but does
+				// not abort the pipeline — the remaining steps still run (same
+				// graceful degradation as the dashboard jobManager).
+				if st.Tolerant {
+					fmt.Fprintf(tail, "step %s failed (tolerated, pipeline continues): %v\n", st.Name, err)
+					continue
+				}
 				execErr = err
 				break
 			}

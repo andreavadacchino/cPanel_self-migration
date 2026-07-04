@@ -568,6 +568,31 @@ func TestExecRunPipeline(t *testing.T) {
 	}
 }
 
+// TestExecRunPipelineTolerantDNSPlanFailure pins the N4 tolerance on the
+// workbench entry point: a dns-plan failure must not abort run_pipeline — the
+// checklist step still runs so a partial checklist is produced.
+func TestExecRunPipelineTolerantDNSPlanFailure(t *testing.T) {
+	h, sessID, csrf, fr := newExecTestEnv(t)
+	fr.fail = "inventory dns-plan"
+
+	form := url.Values{
+		"csrf":   {csrf},
+		"action": {"run_pipeline"},
+	}
+	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sessID+"/exec", form)
+	if rr.Code >= 400 {
+		t.Fatalf("run_pipeline aborted on a tolerated dns-plan failure: %d %s", rr.Code, rr.Body.String())
+	}
+
+	calls := fr.recorded()
+	if len(calls) != 5 {
+		t.Fatalf("steps executed = %d, want 5 (dns-plan failure tolerated, pipeline continues)", len(calls))
+	}
+	if calls[4].name != "inventory checklist" {
+		t.Errorf("last step = %q, want the checklist to run despite the dns-plan failure", calls[4].name)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test: dns_plan action (read-only, no confirmation needed)
 // ---------------------------------------------------------------------------

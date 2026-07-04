@@ -29,6 +29,13 @@ const jobTimeout = 30 * time.Minute
 type step struct {
 	Name string
 	Argv []string
+	// Tolerant marks a step whose failure must NOT abort the pipeline: it is
+	// recorded (and shown as failed in the UI) but the remaining steps still
+	// run. Used for supplementary steps whose inputs may be legitimately
+	// unavailable without invalidating the rest of the run (e.g. dns-plan
+	// when a DNS section came back unavailable — a non-fatal inventory
+	// condition per collectDNS).
+	Tolerant bool
 }
 
 // stepResult is the display state of one executed step.
@@ -116,11 +123,15 @@ func (j *jobManager) execute(steps []step) {
 		j.status.Steps[idx].Done = true
 		if err != nil {
 			j.status.Steps[idx].Failed = true
-			j.status.State = "failed"
-			j.status.Err = err.Error()
-			j.busy = false
-			j.mu.Unlock()
-			return
+			// A tolerant step's failure is recorded but does not abort the
+			// pipeline — the remaining steps (notably the checklist) still run.
+			if !st.Tolerant {
+				j.status.State = "failed"
+				j.status.Err = err.Error()
+				j.busy = false
+				j.mu.Unlock()
+				return
+			}
 		}
 		j.mu.Unlock()
 	}
@@ -197,11 +208,17 @@ func pipelineSteps(dir string) []step {
 // It runs BEFORE checklistStep so the very first checklist already composes
 // the DNS import actions (dogfooding #2 finding N4: previously the checklist
 // was generated before any plan existed, so it under-reported the DNS
-// CONFIRM actions until a later regeneration picked the plan up). The two
-// inventories always exist here — the earlier diff/policy steps already
-// require both, so a source-only run has failed before reaching this point.
+// CONFIRM actions until a later regeneration picked the plan up).
+//
+// It is Tolerant: BuildDNSPlan refuses when a DNS section is unavailable
+// (dnsplan.go), but collectDNS treats an unfetchable zone as a non-fatal
+// warning — the inventory files are still written. Making this step abort the
+// pipeline would regress the previous guarantee that a checklist is always
+// produced; instead a dns-plan failure is shown in the UI and the checklist
+// still runs (it simply carries no DNS import actions, exactly as before this
+// change — recoverable later via the standalone dns_plan action).
 func dnsPlanStep(dir string) step {
-	return step{Name: "inventory dns-plan", Argv: []string{"inventory", "dns-plan",
+	return step{Name: "inventory dns-plan", Tolerant: true, Argv: []string{"inventory", "dns-plan",
 		"--source", filepath.Join(dir, "inventory_source.json"),
 		"--destination", filepath.Join(dir, "inventory_destination.json"),
 		"--output-json", filepath.Join(dir, "dns_import_plan.json"),

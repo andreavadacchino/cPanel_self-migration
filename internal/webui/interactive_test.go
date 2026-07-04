@@ -359,6 +359,31 @@ func TestRunFailureRecorded(t *testing.T) {
 	}
 }
 
+// TestRunTolerantDNSPlanFailureStillProducesChecklist pins the N4 tolerance:
+// dns-plan is supplementary, so its failure (e.g. a DNS section came back
+// unavailable — a non-fatal inventory condition) must NOT abort the pipeline.
+// The run still completes and the checklist step still executes.
+func TestRunTolerantDNSPlanFailureStillProducesChecklist(t *testing.T) {
+	dir := t.TempDir()
+	fr := &fakeRunner{fail: "inventory dns-plan"}
+	h := newTestHandler(t, dir, fr.run)
+	saveValidConfig(t, h)
+	csrf := fetchCSRF(t, h)
+
+	if rr := doReq(h, http.MethodPost, "/run", url.Values{"csrf": {csrf}}); rr.Code != http.StatusSeeOther {
+		t.Fatalf("run = %d", rr.Code)
+	}
+	waitJob(t, h, "Esecuzione completed")
+
+	calls := fr.recorded()
+	if len(calls) != 5 {
+		t.Fatalf("steps executed = %d, want 5 (dns-plan failure tolerated, pipeline continues)", len(calls))
+	}
+	if calls[4].name != "inventory checklist" {
+		t.Errorf("last step = %q, want the checklist to run despite the dns-plan failure", calls[4].name)
+	}
+}
+
 func TestRunRequiresConfig(t *testing.T) {
 	dir := t.TempDir()
 	fr := &fakeRunner{}
