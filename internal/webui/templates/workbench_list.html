@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -25,15 +25,15 @@
 </style>
 </head>
 <body>
-<nav><a href="/">← Dashboard</a></nav>
-<h1>Migration Sessions</h1>
+<nav><a href="/">← Cruscotto</a></nav>
+<h1>Sessioni di migrazione</h1>
 
 {{range .Warnings}}<p class="warn">⚠ {{.}}</p>{{end}}
 
 {{if .Sessions}}
 <table>
 <thead><tr>
-  <th>Name</th><th>Status</th><th>Step</th><th>Source</th><th>Dest</th><th>Artifacts</th><th>Updated</th>
+  <th>Nome</th><th>Stato</th><th>Passo</th><th>Sorgente</th><th>Destinazione</th><th>Artefatti</th><th>Aggiornata</th>
 </tr></thead>
 <tbody>
 {{range .Sessions}}
@@ -50,16 +50,16 @@
 </tbody>
 </table>
 {{else}}
-<p class="empty">No migration sessions yet.</p>
+<p class="empty">Nessuna sessione di migrazione.</p>
 {{end}}
 
-<h2>Create new migration</h2>
+<h2>Crea nuova migrazione</h2>
 <form method="POST" action="/workbench/create" style="display:grid; grid-template-columns:auto 1fr; gap:.3rem .8rem; max-width:30rem; align-items:center">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label for="cr_name">Name:</label> <input type="text" id="cr_name" name="name" required placeholder="account name">
-  <label for="cr_src">Source profile:</label> <input type="text" id="cr_src" name="source_profile" required placeholder="e.g. source193">
-  <label for="cr_dst">Dest profile:</label> <input type="text" id="cr_dst" name="destination_profile" required placeholder="e.g. dest78">
-  <div></div> <button type="submit">Create session</button>
+  <label for="cr_name">Nome:</label> <input type="text" id="cr_name" name="name" required placeholder="nome account">
+  <label for="cr_src">Profilo sorgente:</label> <input type="text" id="cr_src" name="source_profile" required placeholder="es. source193">
+  <label for="cr_dst">Profilo destinazione:</label> <input type="text" id="cr_dst" name="destination_profile" required placeholder="es. dest78">
+  <div></div> <button type="submit">Crea sessione</button>
 </form>
 
 {{define "statusBadge"}}{{if eq . "draft"}}<span class="badge draft">{{.}}</span>{{else if eq . "archived"}}<span class="badge archived">{{.}}</span>{{else if or (eq . "cutover_done") (eq . "apply_done")}}<span class="badge done">{{.}}</span>{{else if or (eq . "blocked") (eq . "failed")}}<span class="badge error">{{.}}</span>{{else}}<span class="badge active">{{.}}</span>{{end}}{{end}}

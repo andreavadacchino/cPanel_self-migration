@@ -552,14 +552,19 @@ func TestExecRunPipeline(t *testing.T) {
 	}
 
 	calls := fr.recorded()
-	if len(calls) < 4 {
-		t.Fatalf("run_pipeline should invoke 4 steps, got %d", len(calls))
+	if len(calls) < 5 {
+		t.Fatalf("run_pipeline should invoke 5 steps, got %d", len(calls))
 	}
 	if calls[0].name != "account inventory" {
 		t.Errorf("step 0 name = %q, want 'account inventory'", calls[0].name)
 	}
-	if calls[3].name != "inventory checklist" {
-		t.Errorf("step 3 name = %q, want 'inventory checklist'", calls[3].name)
+	// dns-plan runs before the checklist so the first checklist already
+	// carries the DNS import actions (dogfooding #2 N4).
+	if calls[3].name != "inventory dns-plan" {
+		t.Errorf("step 3 name = %q, want 'inventory dns-plan'", calls[3].name)
+	}
+	if calls[4].name != "inventory checklist" {
+		t.Errorf("step 4 name = %q, want 'inventory checklist'", calls[4].name)
 	}
 }
 

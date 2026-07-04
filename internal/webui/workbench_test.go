@@ -59,7 +59,7 @@ func TestWorkbenchListEmpty(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), "No migration sessions") {
+	if !strings.Contains(w.Body.String(), "Nessuna sessione di migrazione") {
 		t.Error("expected empty state message")
 	}
 }

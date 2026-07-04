@@ -188,8 +188,25 @@ func pipelineSteps(dir string) []step {
 		{Name: "inventory policy", Argv: []string{"inventory", "policy",
 			"--diff", diff,
 			"--output-json", policy, "--output-md", filepath.Join(dir, "policy_report.md")}},
+		dnsPlanStep(dir),
 		checklistStep(dir),
 	}
+}
+
+// dnsPlanStep builds the offline DNS import plan from the two inventories.
+// It runs BEFORE checklistStep so the very first checklist already composes
+// the DNS import actions (dogfooding #2 finding N4: previously the checklist
+// was generated before any plan existed, so it under-reported the DNS
+// CONFIRM actions until a later regeneration picked the plan up). The two
+// inventories always exist here — the earlier diff/policy steps already
+// require both, so a source-only run has failed before reaching this point.
+func dnsPlanStep(dir string) step {
+	return step{Name: "inventory dns-plan", Argv: []string{"inventory", "dns-plan",
+		"--source", filepath.Join(dir, "inventory_source.json"),
+		"--destination", filepath.Join(dir, "inventory_destination.json"),
+		"--output-json", filepath.Join(dir, "dns_import_plan.json"),
+		"--output-md", filepath.Join(dir, "dns_import_plan.md"),
+	}}
 }
 
 // checklistStep builds the (offline) checklist composition step for the run

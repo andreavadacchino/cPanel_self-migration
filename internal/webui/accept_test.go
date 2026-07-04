@@ -162,7 +162,7 @@ func TestAcceptConflictWhileJobRunning(t *testing.T) {
 		t.Errorf("accept while a job runs = %d, want 409", rr.Code)
 	}
 	close(fr.gate)
-	waitJob(t, h, "Run completed")
+	waitJob(t, h, "Esecuzione completed")
 }
 
 func TestAcceptRequiresCSRF(t *testing.T) {

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -27,6 +27,7 @@
   select, input[type=text] { font: inherit; padding: .25rem .4rem; border: 1px solid #c3ccd9; border-radius: .3rem; }
   button { font: inherit; font-weight: 600; padding: .4rem 1rem; border: 0; border-radius: .4rem; background: #1a56db; color: #fff; cursor: pointer; }
   button.danger { background: #dc2626; }
+  .warnbox { background: #fdf6b2; border: 1px solid #c27803; color: #633112; border-radius: .5rem; padding: .7rem 1rem; margin: .8rem 0; font-size: .9rem; }
   .meta { display: grid; grid-template-columns: auto 1fr; gap: .2rem 1rem; margin: .5rem 0; }
   .meta dt { color: #5b6575; font-size: .85rem; } .meta dd { margin: 0; }
   .timeline { font-size: .85rem; }
@@ -36,29 +37,29 @@
 </style>
 </head>
 <body>
-<nav><a href="/workbench">← Sessions</a> · <a href="/">Dashboard</a></nav>
+<nav><a href="/workbench">← Sessioni</a> · <a href="/">Cruscotto</a></nav>
 
 <h1>{{.Session.Name}} {{template "statusBadge" .Session.Status}}</h1>
 
 <div class="section">
-<h2>Overview</h2>
+<h2>Riepilogo</h2>
 <dl class="meta">
   <dt>ID</dt><dd><code>{{.Session.ID}}</code></dd>
-  <dt>Source</dt><dd>{{.Session.SourceProfile}}</dd>
-  <dt>Destination</dt><dd>{{.Session.DestinationProfile}}</dd>
-  <dt>Current Step</dt><dd><strong>{{.Session.CurrentStep}}</strong></dd>
-  <dt>Created</dt><dd>{{fmtTime .Session.CreatedAt}}</dd>
-  <dt>Updated</dt><dd>{{fmtTime .Session.UpdatedAt}}</dd>
-  <dt>Tool Version</dt><dd><code>{{.Session.ToolVersion}}</code></dd>
-  {{if .Session.LastError}}<dt>Last Error</dt><dd style="color:#9b1c1c">{{.Session.LastError}}</dd>{{end}}
+  <dt>Sorgente</dt><dd>{{.Session.SourceProfile}}</dd>
+  <dt>Destinazione</dt><dd>{{.Session.DestinationProfile}}</dd>
+  <dt>Passo corrente</dt><dd><strong>{{.Session.CurrentStep}}</strong></dd>
+  <dt>Creata</dt><dd>{{fmtTime .Session.CreatedAt}}</dd>
+  <dt>Aggiornata</dt><dd>{{fmtTime .Session.UpdatedAt}}</dd>
+  <dt>Versione tool</dt><dd><code>{{.Session.ToolVersion}}</code></dd>
+  {{if .Session.LastError}}<dt>Ultimo errore</dt><dd style="color:#9b1c1c">{{.Session.LastError}}</dd>{{end}}
 </dl>
 </div>
 
 <div class="section">
-<h2>Artifacts ({{len .Session.Artifacts}})</h2>
+<h2>Artefatti ({{len .Session.Artifacts}})</h2>
 {{if .Session.Artifacts}}
 <table>
-<thead><tr><th>Kind</th><th>SHA256</th><th>Attached</th><th>Path</th></tr></thead>
+<thead><tr><th>Tipo</th><th>SHA256</th><th>Allegato</th><th>Percorso</th></tr></thead>
 <tbody>
 {{range .Session.Artifacts}}
 <tr>
@@ -71,64 +72,72 @@
 </tbody>
 </table>
 {{else}}
-<p style="color:#7a8598">No artifacts attached yet.</p>
+<p style="color:#7a8598">Nessun artefatto ancora allegato.</p>
 {{end}}
 </div>
 
 <div class="section">
-<h2>Execution Center</h2>
-<p style="color:#5b6575; font-size:.9rem">Read-only actions need one click. Write actions require typing the account name as confirmation. Rollback requires double confirmation.</p>
+<h2>Centro di esecuzione</h2>
+<p style="color:#5b6575; font-size:.9rem">Le azioni in sola lettura richiedono un clic. Le azioni di scrittura richiedono di digitare il nome dell'account come conferma. Il rollback richiede la doppia conferma.</p>
 
-<h3>Pipeline (read-only, SSH to source+dest)</h3>
+<h3>Pipeline (sola lettura, SSH a sorgente+destinazione)</h3>
 <div style="display:flex; gap:.5rem; flex-wrap:wrap">
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "run_pipeline" "Run Pipeline")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "run_pipeline" "Esegui pipeline")}}
 </div>
 
-<h3>Generate Plans (read-only, offline)</h3>
+<h3>Genera piani (sola lettura, offline)</h3>
 <div style="display:flex; gap:.5rem; flex-wrap:wrap">
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "dns_plan" "DNS Plan")}}
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "email_plan" "Email Plan")}}
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_plan" "Cron Plan")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "dns_plan" "Piano DNS")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "email_plan" "Piano Email")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_plan" "Piano Cron")}}
 </div>
 
-<h3>Verify (read-only)</h3>
+<h3>Verifica (sola lettura)</h3>
 <div style="display:flex; gap:.5rem; flex-wrap:wrap">
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "dns_verify" "DNS Verify")}}
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "email_verify" "Email Verify")}}
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_verify" "Cron Verify")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "dns_verify" "Verifica DNS")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "email_verify" "Verifica Email")}}
+{{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_verify" "Verifica Cron")}}
 </div>
 
-<h3>Apply (write — requires confirmation)</h3>
-{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "dns_apply" "DNS Apply")}}
-{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "email_apply" "Email Apply")}}
-{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "cron_apply" "Cron Apply")}}
+<h3>Apply (scrittura — richiede conferma)</h3>
+<div class="warnbox">
+  &#9888; <strong>Prima di «Apply DNS»</strong>: verifica che il peer del cluster DNS
+  sulla <strong>destinazione</strong> sia in modalità <strong>standalone</strong>.
+  Se il cluster è in sync, le modifiche alla zona vengono propagate ai nameserver
+  di <strong>produzione</strong>. Questa pre-condizione va verificata FUORI dalla UI
+  (WHM/root sulla destinazione, oppure <code>dig</code> ai NS pubblici), perché il
+  tool opera a livello utente e non può leggere lo stato del cluster.
+</div>
+{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "dns_apply" "Apply DNS")}}
+{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "email_apply" "Apply Email")}}
+{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "cron_apply" "Apply Cron")}}
 
-<h3>Migrate Content (write — requires confirmation + scope)</h3>
+<h3>Migra contenuti (scrittura — richiede conferma + ambito)</h3>
 <fieldset>
-<legend>migrate content</legend>
+<legend>migra contenuti</legend>
 <form method="POST" action="/workbench/session/{{.Session.ID}}/exec">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="hidden" name="action" value="migrate_content">
-  <label><input type="checkbox" name="scope_mail" value="1"> Mail</label>
-  <label><input type="checkbox" name="scope_file" value="1"> Files</label>
+  <label><input type="checkbox" name="scope_mail" value="1"> Posta</label>
+  <label><input type="checkbox" name="scope_file" value="1"> File</label>
   <label><input type="checkbox" name="scope_db" value="1"> Database</label>
-  <label>Domain filter (optional): <input type="text" name="scope_domain" size="30" placeholder="leave empty for all"></label>
-  <label>Type <strong>{{.Session.Name}}</strong> to confirm: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label>
-  <button type="submit" class="danger">Execute Migration</button>
+  <label>Filtro dominio (opzionale): <input type="text" name="scope_domain" size="30" placeholder="vuoto = tutti"></label>
+  <label>Digita <strong>{{.Session.Name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label>
+  <button type="submit" class="danger">Esegui migrazione</button>
 </form>
 </fieldset>
 
-<h3>Rollback (write — requires DOUBLE confirmation)</h3>
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "dns_rollback" "DNS Rollback")}}
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "email_rollback" "Email Rollback")}}
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "cron_rollback" "Cron Rollback")}}
+<h3>Rollback (scrittura — richiede DOPPIA conferma)</h3>
+{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "dns_rollback" "Rollback DNS")}}
+{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "email_rollback" "Rollback Email")}}
+{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "cron_rollback" "Rollback Cron")}}
 </div>
 
 <div class="section">
-<h2>Timeline ({{len .Session.Timeline}} events)</h2>
+<h2>Cronologia ({{len .Session.Timeline}} eventi)</h2>
 {{if .Session.Timeline}}
 <table class="timeline">
-<thead><tr><th>Time</th><th>Action</th><th>Details</th></tr></thead>
+<thead><tr><th>Ora</th><th>Azione</th><th>Dettagli</th></tr></thead>
 <tbody>
 {{range .Session.Timeline}}
 <tr>
@@ -140,7 +149,7 @@
 </tbody>
 </table>
 {{else}}
-<p style="color:#7a8598">No events yet.</p>
+<p style="color:#7a8598">Nessun evento.</p>
 {{end}}
 </div>
 
@@ -148,31 +157,31 @@
 <h2>Governance</h2>
 
 <fieldset>
-<legend>Transition Status</legend>
+<legend>Cambia stato</legend>
 <form method="POST" action="/workbench/session/{{.Session.ID}}/status">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label>New status:
+  <label>Nuovo stato:
     <select name="status">
       {{range .AllStatuses}}<option value="{{.}}">{{.}}</option>{{end}}
     </select>
   </label>
-  <label><input type="checkbox" name="force" value="1"> Force (bypass transition matrix)</label>
-  <label>Reason (required if forced, ≥10 chars): <input type="text" name="reason" size="40"></label>
-  <button type="submit">Set Status</button>
+  <label><input type="checkbox" name="force" value="1"> Forza (ignora la matrice delle transizioni)</label>
+  <label>Motivo (obbligatorio se forzato, ≥10 caratteri): <input type="text" name="reason" size="40"></label>
+  <button type="submit">Imposta stato</button>
 </form>
 </fieldset>
 
 <fieldset>
-<legend>Attach Artifact</legend>
+<legend>Allega artefatto</legend>
 <form method="POST" action="/workbench/session/{{.Session.ID}}/attach">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label>Kind:
+  <label>Tipo:
     <select name="kind">
       {{range .AllKinds}}<option value="{{.}}">{{.}}</option>{{end}}
     </select>
   </label>
-  <label>File path (local): <input type="text" name="path" size="50" placeholder="/path/to/artifact.json"></label>
-  <button type="submit">Attach</button>
+  <label>Percorso file (locale): <input type="text" name="path" size="50" placeholder="/percorso/artefatto.json"></label>
+  <button type="submit">Allega</button>
 </form>
 </fieldset>
 </div>
@@ -181,8 +190,8 @@
 
 {{define "execBtnReadOnly"}}{{$id := index . 0}}{{$csrf := index . 1}}{{$action := index . 2}}{{$label := index . 3}}<form method="POST" action="/workbench/session/{{$id}}/exec" style="display:inline"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><button type="submit">{{$label}}</button></form>{{end}}
 
-{{define "execFormWrite"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Type <strong>{{$name}}</strong> to confirm: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
+{{define "execFormWrite"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Digita <strong>{{$name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
 
-{{define "execFormRollback"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Type <strong>{{$name}}</strong> to confirm: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label><label>Type again for rollback: <input type="text" name="confirm_rollback" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
+{{define "execFormRollback"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Digita <strong>{{$name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label><label>Digita di nuovo per il rollback: <input type="text" name="confirm_rollback" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
 </body>
 </html>

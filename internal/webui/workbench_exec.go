@@ -50,6 +50,7 @@ var actionRegistry = map[string]actionDef{
 			{"inventory_destination.json", workbench.ArtifactInventoryDestination},
 			{"inventory_diff.json", workbench.ArtifactInventoryDiff},
 			{"policy_report.json", workbench.ArtifactPolicyReport},
+			{"dns_import_plan.json", workbench.ArtifactDNSPlan},
 			{"migration_checklist.json", workbench.ArtifactMigrationChecklist},
 		},
 		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {

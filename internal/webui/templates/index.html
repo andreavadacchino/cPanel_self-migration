@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{if or .JobRunning .MonitorLive}}<meta http-equiv="refresh" content="2">{{end}}
-<title>cpanel-self-migration — dashboard</title>
+<title>cpanel-self-migration — cruscotto</title>
 <style>
   :root { color-scheme: light; }
   body { font: 15px/1.5 -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #1a2233; }
@@ -42,45 +42,45 @@
 </style>
 </head>
 <body>
-<h1>cpanel-self-migration — migration dashboard</h1>
-<p class="muted">Artifact directory: <code>{{.Dir}}</code> — the page re-reads the artifacts on every refresh.</p>
+<h1>cpanel-self-migration — cruscotto migrazione</h1>
+<p class="muted">Cartella artefatti: <code>{{.Dir}}</code> — la pagina rilegge gli artefatti a ogni aggiornamento.</p>
 
-<h2>Server connections</h2>
+<h2>Connessioni ai server</h2>
 <form method="post" action="/config">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <div class="cols">
     <fieldset>
-      <legend>Source (read-only)</legend>
+      <legend>Sorgente (sola lettura)</legend>
       <label>IP<br><input type="text" name="src_ip" value="{{.Cfg.SrcIP}}" required></label>
-      <label>Port<br><input type="text" name="src_port" value="{{if .Cfg.SrcPort}}{{.Cfg.SrcPort}}{{else}}22{{end}}" size="5"></label><br>
-      <label>SSH user<br><input type="text" name="src_user" value="{{.Cfg.SrcUser}}" required></label>
-      <label>SSH password<br><input type="password" name="src_pass" placeholder="{{if .Cfg.SrcHasPass}}(saved — leave blank to keep){{end}}"></label>
+      <label>Porta<br><input type="text" name="src_port" value="{{if .Cfg.SrcPort}}{{.Cfg.SrcPort}}{{else}}22{{end}}" size="5"></label><br>
+      <label>Utente SSH<br><input type="text" name="src_user" value="{{.Cfg.SrcUser}}" required></label>
+      <label>Password SSH<br><input type="password" name="src_pass" placeholder="{{if .Cfg.SrcHasPass}}(salvata — lascia vuoto per mantenerla){{end}}"></label>
     </fieldset>
     <fieldset>
-      <legend>Destination (receives writes on apply)</legend>
+      <legend>Destinazione (riceve le scritture in fase di apply)</legend>
       <label>IP<br><input type="text" name="dest_ip" value="{{.Cfg.DestIP}}"></label>
-      <label>Port<br><input type="text" name="dest_port" value="{{if .Cfg.DestPort}}{{.Cfg.DestPort}}{{else}}22{{end}}" size="5"></label><br>
-      <label>SSH user<br><input type="text" name="dest_user" value="{{.Cfg.DestUser}}"></label>
-      <label>SSH password<br><input type="password" name="dest_pass" placeholder="{{if .Cfg.DestHasPass}}(saved — leave blank to keep){{end}}"></label>
+      <label>Porta<br><input type="text" name="dest_port" value="{{if .Cfg.DestPort}}{{.Cfg.DestPort}}{{else}}22{{end}}" size="5"></label><br>
+      <label>Utente SSH<br><input type="text" name="dest_user" value="{{.Cfg.DestUser}}"></label>
+      <label>Password SSH<br><input type="password" name="dest_pass" placeholder="{{if .Cfg.DestHasPass}}(salvata — lascia vuoto per mantenerla){{end}}"></label>
     </fieldset>
   </div>
-  <button type="submit">Save connections</button>
-  <span class="muted">Saved to <code>host.yaml</code> in the artifact directory (0600, local only). For source-only analysis leave ALL four destination fields blank (port included).</span>
+  <button type="submit">Salva connessioni</button>
+  <span class="muted">Salvate in <code>host.yaml</code> nella cartella artefatti (0600, solo in locale). Per un'analisi solo-sorgente lascia vuoti TUTTI e quattro i campi della destinazione (porta inclusa).</span>
 </form>
 
-<h2>Analysis run</h2>
+<h2>Esecuzione analisi</h2>
 <form method="post" action="/run">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <button type="submit" {{if .JobRunning}}disabled{{end}}>Run read-only analysis</button>
-  <span class="muted">inventory (SSH, read-only) &rarr; diff &rarr; policy &rarr; checklist — the migration itself stays a terminal command.</span>
+  <button type="submit" {{if .JobRunning}}disabled{{end}}>Esegui analisi in sola lettura</button>
+  <span class="muted">inventario (SSH, sola lettura) &rarr; diff &rarr; policy &rarr; checklist — la migrazione vera e propria resta un comando da terminale.</span>
 </form>
 
 {{if ne .Job.State "idle"}}
 <div class="status {{.Job.State}}">
-  <strong>Run {{.Job.State}}</strong>{{if .Job.StartedAt}} — started {{.Job.StartedAt}}{{end}}{{if .Job.Step}} — current step: {{.Job.Step}}{{end}}{{if .Job.Err}} — {{.Job.Err}}{{end}}
+  <strong>Esecuzione {{.Job.State}}</strong>{{if .Job.StartedAt}} — avviata {{.Job.StartedAt}}{{end}}{{if .Job.Step}} — passo corrente: {{.Job.Step}}{{end}}{{if .Job.Err}} — {{.Job.Err}}{{end}}
   {{range .Job.Steps}}
     <details{{if .Failed}} open{{end}}>
-      <summary>{{.Name}} — {{if .Failed}}FAILED{{else if .Done}}ok{{else}}running…{{end}}</summary>
+      <summary>{{.Name}} — {{if .Failed}}FALLITO{{else if .Done}}ok{{else}}in corso…{{end}}</summary>
       {{if .Output}}<pre class="tail">{{.Output}}</pre>{{end}}
     </details>
   {{end}}
@@ -88,16 +88,16 @@
 {{end}}
 
 {{if .Monitor}}
-<h2>Run monitor</h2>
+<h2>Monitor esecuzione</h2>
 <div class="status {{if eq .Monitor.State "failed"}}failed{{else if .Monitor.Stalled}}stalled{{else if .Monitor.Live}}running{{else}}completed{{end}}">
-  <strong>{{if .Monitor.IsApply}}APPLY{{else}}Run{{end}} {{.Monitor.State}}{{if .Monitor.Stalled}} — stalled: no events for over 10 minutes, the process may have been interrupted{{end}}</strong>
-  — {{.Monitor.RunID}} — started {{.Monitor.StartedAt}}, last event {{.Monitor.LastEventAt}}
-  <span class="muted">(read from events.jsonl — the migration itself runs in the terminal)</span>
-  {{if .Monitor.Truncated}}<div class="muted">events.jsonl is large — only the most recent part was read.</div>{{end}}
+  <strong>{{if .Monitor.IsApply}}APPLY{{else}}Analisi{{end}} {{.Monitor.State}}{{if .Monitor.Stalled}} — bloccata: nessun evento da oltre 10 minuti, il processo potrebbe essere stato interrotto{{end}}</strong>
+  — {{.Monitor.RunID}} — avviata {{.Monitor.StartedAt}}, ultimo evento {{.Monitor.LastEventAt}}
+  <span class="muted">(letto da events.jsonl — la migrazione stessa gira nel terminale)</span>
+  {{if .Monitor.Truncated}}<div class="muted">events.jsonl è grande — è stata letta solo la parte più recente.</div>{{end}}
   {{if .Monitor.ParseNote}}<div class="muted">{{.Monitor.ParseNote}}</div>{{end}}
   {{if .Monitor.Phases}}
   <table>
-    <tr><th>Phase</th><th>State</th><th>Detail</th></tr>
+    <tr><th>Fase</th><th>Stato</th><th>Dettaglio</th></tr>
     {{range .Monitor.Phases}}<tr><td>{{.Phase}}</td><td>{{.State}}</td><td>{{.Summary}}</td></tr>{{end}}
   </table>
   {{end}}
@@ -106,17 +106,17 @@
   {{end}}
 </div>
 {{else}}
-<p class="muted">No events.jsonl in this directory — start the migration with <code>--json-events</code> to monitor it here.</p>
+<p class="muted">Nessun events.jsonl in questa cartella — avvia la migrazione con <code>--json-events</code> per monitorarla qui.</p>
 {{end}}
 
 {{if .Stale}}
 <div class="banner stale">
-  <strong>STALE — do not trust this page.</strong>
-  The checklist was generated from inputs that no longer match what is on disk:
+  <strong>OBSOLETO — non fidarti di questa pagina.</strong>
+  Il checklist è stato generato da input che non corrispondono più a ciò che è su disco:
   <ul>
   {{range .Stale}}<li>{{.Name}} — <code>{{.File}}</code>: {{.Reason}}</li>{{end}}
   </ul>
-  Re-run the pipeline (diff → policy → checklist) and reload.
+  Riesegui la pipeline (diff → policy → checklist) e ricarica.
 </div>
 {{end}}
 
@@ -124,25 +124,25 @@
 
 {{if .Checklist}}
   {{with .Checklist}}
-  <h2>Verdict:
+  <h2>Verdetto:
     {{if or (eq .OverallStatus "READY_TO_CUTOVER") (eq .OverallStatus "READY_WITH_MANUAL_NOTES")}}<span class="verdict ok">{{.OverallStatus}}</span>
     {{else if eq .OverallStatus "BLOCKED"}}<span class="verdict bad">{{.OverallStatus}}</span>
     {{else}}<span class="verdict warn">{{.OverallStatus}}</span>{{end}}
   </h2>
-  <p>Account <strong>{{.Account}}</strong> — generated {{.GeneratedAt}} —
-    chain verified: {{if .ChainVerified}}yes{{else}}<strong>no</strong>{{end}} —
-    {{.Summary.ManualActions}} manual action(s), {{.Summary.Accepted}} accepted, {{.Summary.Blocked}} blocked section(s)</p>
+  <p>Account <strong>{{.Account}}</strong> — generato {{.GeneratedAt}} —
+    catena verificata: {{if .ChainVerified}}sì{{else}}<strong>no</strong>{{end}} —
+    {{.Summary.ManualActions}} azione/i manuale/i, {{.Summary.Accepted}} accettate, {{.Summary.Blocked}} sezione/i bloccata/e</p>
 
   {{range .Warnings}}<p class="warning">&#9888; {{.}}</p>{{end}}
 
-  <h2>Sections</h2>
+  <h2>Sezioni</h2>
   <table>
-    <tr><th>Section</th><th>Status</th><th>Migrated by tool</th><th>Evidence</th><th>Blockers</th><th>Actions</th><th>Accepted</th></tr>
+    <tr><th>Sezione</th><th>Stato</th><th>Migrata dal tool</th><th>Evidenza</th><th>Blocker</th><th>Azioni</th><th>Accettate</th></tr>
     {{range .Sections}}
     <tr>
       <td><code>{{.Section}}</code></td>
       <td>{{.Status}}</td>
-      <td>{{if .MigratedByTool}}yes{{else}}<span class="muted">no</span>{{end}}</td>
+      <td>{{if .MigratedByTool}}sì{{else}}<span class="muted">no</span>{{end}}</td>
       <td>{{.MigrationEvidence}}</td>
       <td>{{len .Blockers}}</td>
       <td>{{len .ManualActionRefs}}</td>
@@ -152,28 +152,28 @@
   </table>
 
   {{if .ManualActions}}
-  <h2>Manual actions</h2>
-  <p class="muted">Acceptable, non-blocking-once-accepted items can be accepted here; a lost active cron job or an external MX must be resolved, not accepted.</p>
+  <h2>Azioni manuali</h2>
+  <p class="muted">Gli elementi accettabili (non più bloccanti una volta accettati) si accettano qui; un cron job attivo perso o un MX esterno vanno risolti, non accettati.</p>
   <table>
-    <tr><th>ID</th><th>Blocking</th><th>Section</th><th>Type</th><th>Action</th><th>Accept</th></tr>
+    <tr><th>ID</th><th>Bloccante</th><th>Sezione</th><th>Tipo</th><th>Azione</th><th>Accetta</th></tr>
     {{range .ManualActions}}
     <tr>
       <td class="mono">{{.ID}}<br><span class="muted mono">{{.Key}}</span></td>
-      <td>{{if .Accepted}}<span class="accepted">accepted by {{.AcceptedBy}}</span>{{else if .BlockingCutover}}<span class="yes">yes</span>{{else}}no{{end}}</td>
+      <td>{{if .Accepted}}<span class="accepted">accettata da {{.AcceptedBy}}</span>{{else if .BlockingCutover}}<span class="yes">sì</span>{{else}}no{{end}}</td>
       <td><code>{{.Section}}</code></td>
       <td class="mono">{{.Type}}</td>
-      <td>{{.Title}} — {{.OperatorAction}}{{if .AcceptedReason}}<br><span class="muted">note: {{.AcceptedReason}}</span>{{end}}</td>
+      <td>{{.Title}} — {{.OperatorAction}}{{if .AcceptedReason}}<br><span class="muted">nota: {{.AcceptedReason}}</span>{{end}}</td>
       <td>
         {{if .Accepted}}<span class="accepted">✓ {{.AcceptedAt}}</span>
         {{else if .Acceptable}}
           <form method="post" action="/accept" class="acceptform">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
             <input type="hidden" name="action_key" value="{{.Key}}">
-            <input type="text" name="operator" placeholder="your name" size="8" required>
-            <input type="text" name="reason" placeholder="reason" size="18" required>
-            <button type="submit">Accept</button>
+            <input type="text" name="operator" placeholder="il tuo nome" size="8" required>
+            <input type="text" name="reason" placeholder="motivo" size="18" required>
+            <button type="submit">Accetta</button>
           </form>
-        {{else}}<span class="muted">must resolve</span>{{end}}
+        {{else}}<span class="muted">da risolvere</span>{{end}}
       </td>
     </tr>
     {{end}}
@@ -182,19 +182,19 @@
   {{end}}
 {{else if not .ChecklistErr}}
   <div class="banner warn">
-    No <code>migration_checklist.json</code> found in this directory.
-    Generate it first:
+    Nessun <code>migration_checklist.json</code> trovato in questa cartella.
+    Generalo prima:
     <pre>cpanel-self-migration inventory checklist --source … --destination … --diff … --policy …</pre>
   </div>
 {{end}}
 
-<h2>Artifacts</h2>
+<h2>Artefatti</h2>
 <table>
-  <tr><th>File</th><th>State</th></tr>
+  <tr><th>File</th><th>Stato</th></tr>
   {{range .Artifacts}}
   <tr>
     <td><code>{{.Name}}</code></td>
-    <td>{{if .Present}}present — {{.ModTime}}, {{.Size}} bytes{{else}}<span class="absent">absent</span>{{end}}</td>
+    <td>{{if .Present}}presente — {{.ModTime}}, {{.Size}} byte{{else}}<span class="absent">assente</span>{{end}}</td>
   </tr>
   {{end}}
 </table>

@@ -296,11 +296,11 @@ func TestRunPipelineHappyPath(t *testing.T) {
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("POST /run = %d (%s), want 303", rr.Code, rr.Body.String())
 	}
-	waitJob(t, h, "Run completed")
+	waitJob(t, h, "Esecuzione completed")
 
 	calls := fr.recorded()
-	if len(calls) != 4 {
-		t.Fatalf("steps = %d (%v), want 4 (inventory, diff, policy, checklist)", len(calls), calls)
+	if len(calls) != 5 {
+		t.Fatalf("steps = %d (%v), want 5 (inventory, diff, policy, dns-plan, checklist)", len(calls), calls)
 	}
 	joined := make([]string, len(calls))
 	for i, c := range calls {
@@ -313,8 +313,13 @@ func TestRunPipelineHappyPath(t *testing.T) {
 	if !strings.Contains(joined[1], "inventory diff") || !strings.Contains(joined[2], "inventory policy") {
 		t.Errorf("steps 2-3 argv = %q / %q", joined[1], joined[2])
 	}
-	if !strings.Contains(joined[3], "inventory checklist") || !strings.Contains(joined[3], filepath.Join(dir, "policy_report.json")) {
-		t.Errorf("step 4 argv = %q, want the checklist composition", joined[3])
+	// dns-plan MUST run before the checklist so the checklist composes the
+	// DNS import actions on the very first pipeline run (dogfooding #2 N4).
+	if !strings.Contains(joined[3], "inventory dns-plan") || !strings.Contains(joined[3], filepath.Join(dir, "dns_import_plan.json")) {
+		t.Errorf("step 4 argv = %q, want the dns-plan before the checklist", joined[3])
+	}
+	if !strings.Contains(joined[4], "inventory checklist") || !strings.Contains(joined[4], filepath.Join(dir, "policy_report.json")) {
+		t.Errorf("step 5 argv = %q, want the checklist composition", joined[4])
 	}
 }
 
@@ -332,7 +337,7 @@ func TestRunConflictWhileRunning(t *testing.T) {
 		t.Errorf("second run while busy = %d, want 409", rr.Code)
 	}
 	close(fr.gate)
-	waitJob(t, h, "Run completed")
+	waitJob(t, h, "Esecuzione completed")
 }
 
 func TestRunFailureRecorded(t *testing.T) {
@@ -345,7 +350,7 @@ func TestRunFailureRecorded(t *testing.T) {
 	if rr := doReq(h, http.MethodPost, "/run", url.Values{"csrf": {csrf}}); rr.Code != http.StatusSeeOther {
 		t.Fatalf("run = %d", rr.Code)
 	}
-	body := waitJob(t, h, "Run failed")
+	body := waitJob(t, h, "Esecuzione failed")
 	if !strings.Contains(body, "inventory diff") {
 		t.Error("the failed step must be named on the dashboard")
 	}
@@ -454,7 +459,7 @@ func TestRunPanicRecovered(t *testing.T) {
 	if rr := doReq(h, http.MethodPost, "/run", url.Values{"csrf": {csrf}}); rr.Code != http.StatusSeeOther {
 		t.Fatalf("run = %d", rr.Code)
 	}
-	body := waitJob(t, h, "Run failed")
+	body := waitJob(t, h, "Esecuzione failed")
 	if !strings.Contains(body, "internal error") {
 		t.Errorf("a recovered panic must be shown as an internal error:\n%s", body)
 	}
@@ -469,7 +474,7 @@ func waitIdleOrFailed(t *testing.T, h http.Handler) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(doReq(h, http.MethodGet, "/", nil).Body.String(), "Run failed") {
+		if strings.Contains(doReq(h, http.MethodGet, "/", nil).Body.String(), "Esecuzione failed") {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -494,7 +499,7 @@ func TestRunCancelledByBaseContext(t *testing.T) {
 	}
 
 	cancel() // simulate Ctrl-C on the ui process
-	body := waitJob(t, h, "Run failed")
+	body := waitJob(t, h, "Esecuzione failed")
 	if !strings.Contains(body, "context canceled") && !strings.Contains(body, "cancel") {
 		t.Errorf("a cancelled run must end failed with the cancellation cause:\n%s", body)
 	}
