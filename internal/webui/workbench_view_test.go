@@ -322,6 +322,53 @@ func TestOverallLabelITTranslatesAll(t *testing.T) {
 	}
 }
 
+// TestStepLabelITTotal: every operational step has a non-raw Italian label.
+func TestStepLabelITTotal(t *testing.T) {
+	for _, s := range workbench.AllSteps {
+		l := stepLabelIT(s)
+		if l == "" || l == string(s) {
+			t.Errorf("step %q: label %q is empty or raw enum", s, l)
+		}
+	}
+}
+
+// TestCoverageNoteIT: known area → Italian note (not the raw English); an
+// unmapped area falls back to the raw note.
+func TestCoverageNoteIT(t *testing.T) {
+	if got := coverageNoteIT("quota_package", "WHM territory"); got == "WHM territory" || got == "" {
+		t.Errorf("quota_package note not translated: %q", got)
+	}
+	if got := coverageNoteIT("unknown_area_xyz", "raw fallback"); got != "raw fallback" {
+		t.Errorf("unknown area should fall back to raw note, got %q", got)
+	}
+}
+
+// TestCoverageNotesNoEnglishLeak: for the real registry, every root_only/
+// not_collected row must carry an Italian (translated) note.
+func TestCoverageNotesNoEnglishLeak(t *testing.T) {
+	f := artifactFacts{Checklist: &accountinventory.MigrationChecklist{
+		CoverageManifest: accountinventory.CoverageAreas(),
+	}}
+	for _, r := range buildCoverage(f) {
+		if r.Glyph == "⚪" && r.Note != "" {
+			if _, ok := coverageNotesIT[reverseAreaLookup(r.Area)]; !ok {
+				t.Errorf("area %q note has no Italian translation: %q", r.Area, r.Note)
+			}
+		}
+	}
+}
+
+// reverseAreaLookup maps an Italian area label back to its raw area key (test
+// helper — buildCoverage translates the label, so we recover the key).
+func reverseAreaLookup(label string) string {
+	for k, v := range areaLabelsIT {
+		if v == label {
+			return k
+		}
+	}
+	return label
+}
+
 func mustWrite(t *testing.T, path string, b []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, b, 0o600); err != nil {

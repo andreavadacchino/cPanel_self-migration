@@ -105,8 +105,11 @@ func TestMigrazioneCoverageGlyphs(t *testing.T) {
 	if !strings.Contains(body, "✅") || !strings.Contains(body, "🟡") || !strings.Contains(body, "⚪") {
 		t.Errorf("migrazione must show all three glyphs; body:\n%s", body)
 	}
-	if !strings.Contains(body, "WHM territory") {
-		t.Error("root_only note must be shown")
+	if !strings.Contains(body, "competenza WHM") {
+		t.Error("root_only note must be shown in Italian")
+	}
+	if strings.Contains(body, "WHM territory") {
+		t.Error("English coverage note leaked into the Italian table")
 	}
 }
 
@@ -256,6 +259,24 @@ func TestReadyForCutoverSessionRenders(t *testing.T) {
 		if strings.Contains(body, "template error") {
 			t.Errorf("ready_for_cutover GET %q: template error", seg)
 		}
+	}
+}
+
+// TestListShowsItalianBadge locks the shared statusBadge define: the sessions
+// list must render the Italian status label (not the raw enum), proving the
+// merged ParseFS set resolves the single (list Status Label) define.
+func TestListShowsItalianBadge(t *testing.T) {
+	h, store, _ := newTestWorkbenchHandler(t)
+	store.Create("locktest", "src", "dst", time.Now())
+	code, body := getBody(t, h, "/workbench")
+	if code != 200 {
+		t.Fatalf("list = %d", code)
+	}
+	if !strings.Contains(body, "Bozza") {
+		t.Error("list must render the Italian status label 'Bozza' for a draft session")
+	}
+	if strings.Contains(body, ">draft<") {
+		t.Error("raw status enum leaked into the sessions list badge")
 	}
 }
 

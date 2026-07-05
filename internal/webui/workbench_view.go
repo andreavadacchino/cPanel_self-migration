@@ -408,7 +408,7 @@ func buildCoverage(f artifactFacts) []coverageRow {
 				rows = append(rows, coverageRow{sectionLabelIT(ca.Area), "✅", "Automatico", ""})
 			}
 		case accountinventory.CoverageRootOnly, accountinventory.CoverageNotCollected:
-			rows = append(rows, coverageRow{sectionLabelIT(ca.Area), "⚪", "Non gestito", ca.Note})
+			rows = append(rows, coverageRow{sectionLabelIT(ca.Area), "⚪", "Non gestito", coverageNoteIT(ca.Area, ca.Note)})
 		}
 	}
 	return rows
@@ -542,6 +542,69 @@ func statusLabelIT(s workbench.Status) string {
 	default:
 		return string(s)
 	}
+}
+
+// stepLabelIT translates an operational Step to its Italian UI label.
+func stepLabelIT(s workbench.Step) string {
+	switch s {
+	case workbench.StepSetup:
+		return "Configurazione"
+	case workbench.StepPreflight:
+		return "Preflight"
+	case workbench.StepInventory:
+		return "Inventario"
+	case workbench.StepDiffPolicyChecklist:
+		return "Analisi e verifica"
+	case workbench.StepPlanning:
+		return "Pianificazione"
+	case workbench.StepApplyCore:
+		return "Applicazione contenuti"
+	case workbench.StepApplyEmail:
+		return "Applicazione email"
+	case workbench.StepApplyDNS:
+		return "Applicazione DNS"
+	case workbench.StepApplyCron:
+		return "Applicazione cron"
+	case workbench.StepVerify:
+		return "Verifica"
+	case workbench.StepCutover:
+		return "Cutover"
+	case workbench.StepArchive:
+		return "Archiviazione"
+	default:
+		return string(s)
+	}
+}
+
+// coverageNotesIT translates the coverage-manifest notes (English, from
+// coverage.go) to Italian for the "Cosa verrà migrato" table. Keyed by area;
+// an unmapped area falls back to the raw note (visible, not a crash).
+var coverageNotesIT = map[string]string{
+	"quota_package":        "assegnazione pacchetto, quote e limiti di banda sono di competenza WHM",
+	"server_level_config":  "handler PHP, web server, firewall e cron di sistema non sono visibili con accesso a livello account",
+	"api_tokens":           "i NOMI dei token API sono elencabili a livello utente; i segreti non sono mai recuperabili — materiale da dossier storico",
+	"boxtrapper":           "stato di attivazione e configurazione di BoxTrapper",
+	"contact_info":         "indirizzi di contatto dell'account e preferenze di notifica",
+	"directory_privacy":    "directory protette da password (~/.htpasswds) — le password di protezione sono a rischio nel trasferimento",
+	"domain_aliases":       "domini parcheggiati/alias come campo dedicato — oggi inclusi nell'elenco domini",
+	"git_repositories":     "repository git registrati in cPanel (le working tree viaggiano col trasferimento della home, le registrazioni no)",
+	"hotlink_protection":   "configurazione della protezione hotlink",
+	"leech_protection":     "configurazione della protezione leech",
+	"mailbox_quota_limits": "LIMITI di quota per casella — l'uso è raccolto, il limite configurato no",
+	"mailing_lists":        "mailing list Mailman (gli elenchi membri sono root-only e non migrabili a livello utente)",
+	"mime_handlers":        "tipi MIME personalizzati e handler Apache",
+	"passenger_apps":       "applicazioni Passenger/Node/Python registrate — i file viaggiano col trasferimento, le registrazioni no",
+	"spamassassin":         "stato di attivazione e user_prefs di SpamAssassin (~/.spamassassin è fuori dalla copia del docroot)",
+	"ssh_keys":             "METADATI delle chiavi SSH (solo nomi/fingerprint — le chiavi private non sono mai raccolte)",
+	"team_users":           "account utente Team di cPanel (le loro password non sono migrabili)",
+	"webdisk_accounts":     "account WebDisk (le password andrebbero rigenerate sulla destinazione)",
+}
+
+func coverageNoteIT(area, raw string) string {
+	if n, ok := coverageNotesIT[area]; ok {
+		return n
+	}
+	return raw
 }
 
 // overallLabelIT translates a checklist OverallStatus to Italian.

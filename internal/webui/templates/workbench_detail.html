@@ -80,7 +80,7 @@
 {{template "wbHead" .}}
 {{template "wbNav" .}}
 
-<h1>{{.Session.Name}} {{template "statusBadge" .Session.Status}} <span class="muted">{{.StatusLabel}}</span></h1>
+<h1>{{.Session.Name}} {{template "statusBadge" (list .Session.Status .StatusLabel)}}</h1>
 
 {{template "nextActionBox" .}}
 
@@ -96,7 +96,7 @@
 <dl class="meta">
   <dt>Sorgente</dt><dd>{{.Session.SourceProfile}}</dd>
   <dt>Destinazione</dt><dd>{{.Session.DestinationProfile}}</dd>
-  <dt>Passo corrente</dt><dd><strong>{{.Session.CurrentStep}}</strong></dd>
+  <dt>Passo corrente</dt><dd><strong>{{stepLabel .Session.CurrentStep}}</strong></dd>
   <dt>Aggiornata</dt><dd>{{fmtTime .Session.UpdatedAt}}</dd>
   {{if .Session.LastError}}<dt>Ultimo errore</dt><dd style="color:#9b1c1c">{{.Session.LastError}}</dd>{{end}}
 </dl>
@@ -111,7 +111,7 @@
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Nuovo stato:
     <select name="status">
-      {{range .AllStatuses}}<option value="{{.}}">{{.}}</option>{{end}}
+      {{range .AllStatuses}}<option value="{{.}}">{{statusLabel .}}</option>{{end}}
     </select>
   </label>
   <label><input type="checkbox" name="force" value="1"> Forza (ignora la matrice delle transizioni)</label>
@@ -131,7 +131,7 @@
 <tr>
   <td class="mono">{{fmtTime .Timestamp}}</td>
   <td>{{.Action}}</td>
-  <td>{{if .FromStatus}}{{.FromStatus}} → {{.ToStatus}}{{end}}{{if .Reason}} — {{.Reason}}{{end}}</td>
+  <td>{{if .FromStatus}}{{statusLabel .FromStatus}} → {{statusLabel .ToStatus}}{{end}}{{if .Reason}} — {{.Reason}}{{end}}</td>
 </tr>
 {{end}}
 </tbody>
@@ -171,7 +171,9 @@
 
 {{template "wbFooter" .}}
 
-{{define "statusBadge"}}{{if eq . "draft"}}<span class="badge draft">{{.}}</span>{{else if eq . "archived"}}<span class="badge archived">{{.}}</span>{{else if or (eq . "cutover_done") (eq . "apply_done")}}<span class="badge done">{{.}}</span>{{else if or (eq . "blocked") (eq . "failed")}}<span class="badge error">{{.}}</span>{{else}}<span class="badge active">{{.}}</span>{{end}}{{end}}
+{{/* statusBadge takes (list Status LabelIT): coloured pill with the Italian
+     label — never the raw enum. */}}
+{{define "statusBadge"}}{{$s := index . 0}}{{$l := index . 1}}{{if eq $s "draft"}}<span class="badge draft">{{$l}}</span>{{else if eq $s "archived"}}<span class="badge archived">{{$l}}</span>{{else if or (eq $s "cutover_done") (eq $s "apply_done")}}<span class="badge done">{{$l}}</span>{{else if or (eq $s "blocked") (eq $s "failed")}}<span class="badge error">{{$l}}</span>{{else}}<span class="badge active">{{$l}}</span>{{end}}{{end}}
 
 {{define "wbFooter"}}</body>
 </html>{{end}}
