@@ -25,6 +25,14 @@ const acceptTimeout = 2 * time.Minute
 // serialized under cfgMu and refused (409) while a full analysis job runs,
 // since both write migration_checklist.json.
 func (s *server) saveAccept(w http.ResponseWriter, r *http.Request) {
+	s.saveAcceptTo(w, r, "/")
+}
+
+// saveAcceptTo is saveAccept parameterized on the post-success redirect target:
+// the dashboard uses "/", the workbench Conferme screen its own path. Only the
+// redirect differs — the acceptance logic (validate, upsert acceptances.json,
+// regenerate the checklist) is byte-identical for both callers.
+func (s *server) saveAcceptTo(w http.ResponseWriter, r *http.Request, redirectURL string) {
 	key := strings.TrimSpace(r.FormValue("action_key"))
 	reason := strings.TrimSpace(r.FormValue("reason"))
 	operator := strings.TrimSpace(r.FormValue("operator"))
@@ -101,7 +109,7 @@ func (s *server) saveAccept(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "acceptance saved but checklist regeneration failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 }
 
 // findAction returns the manual action with the given stable key.

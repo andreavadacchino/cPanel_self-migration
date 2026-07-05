@@ -145,7 +145,7 @@ func New(o Options) (http.Handler, error) {
 		job:  newJobManager(o.Dir, o.Runner, o.BaseContext),
 	}
 	if o.SessionStore != nil {
-		ws, err := newWorkbenchServer(o.SessionStore, s.csrf)
+		ws, err := newWorkbenchServer(o.SessionStore, o.Dir, s.csrf)
 		if err != nil {
 			return nil, err
 		}
@@ -569,6 +569,10 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 	switch {
 	case action == "" && r.Method == http.MethodGet:
 		s.workbench.handleDetail(w, r, sessionID)
+	// Guided-path sub-views (GET only): additive, non-breaking. A POST to any
+	// of these falls through to default:404 rather than a GET handler.
+	case isScreenSegment(action) && r.Method == http.MethodGet:
+		s.workbench.handleScreen(w, r, sessionID, action)
 	case action == "status":
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
 			s.workbench.handleSetStatus(w, r, sessionID)
@@ -581,8 +585,25 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
 			s.wbExec.handleExec(w, r, sessionID)
 		})
+	case action == "accept":
+		// Register an operator acceptance from the Conferme screen, then return
+		// to that screen (the dashboard /accept still returns to "/").
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.saveAcceptTo(w, r, "/workbench/session/"+sessionID+"/"+screenConferme)
+		})
 	default:
 		http.NotFound(w, r)
 	}
 	return true
+}
+
+// isScreenSegment reports whether seg is one of the guided-path sub-view
+// segments (excludes the empty base/Panoramica segment).
+func isScreenSegment(seg string) bool {
+	switch seg {
+	case screenPreflight, screenInventario, screenMigrazione,
+		screenConferme, screenApplica, screenChiusura:
+		return true
+	}
+	return false
 }
