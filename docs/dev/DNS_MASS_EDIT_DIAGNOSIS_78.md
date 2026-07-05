@@ -8,10 +8,23 @@ via SSH). Nessun accesso root disponibile in sessione (host.yaml ha solo l'utent
 
 ## Esito in una riga
 
-Trovato un bug **reale, confermato, riproducibile al 100%** — la corruzione
-`+`→spazio nei valori scritti via UAPI — che **NON è** (dimostrabilmente) l'errore
-`status=0 "The request failed"` osservato nel dogfooding #2. Quest'ultimo **non è
-riproducibile** con nessuna variante e resta non spiegato senza il log root.
+**DUE bug reali distinti, entrambi confermati e fixati.**
+
+1. **N1 vero** (`status=0 "The request failed (Error ID)"`): `mass_edit_zone`
+   **RIFIUTA `dname="@"`** per l'apex e fallisce l'INTERO batch atomico. Il tool
+   mandava `@` per il replace SPF apex (`dnsCanonToRelative`) → ogni apply con un
+   record apex falliva. **Riprodotto con un singolo add** (`dname="@"` → status=0;
+   `dname="<zone>."` → status=1) e **risolto**: apex → FQDN. Re-run reale post-fix:
+   `3 applied, 0 failed`, `dns verify` CLEAN.
+2. **Corruzione `+`→spazio** (co-bug, PR #63): cpsrvd form-decoda i valori UAPI →
+   ogni DKIM/SPF con `+` scritto corrotto con `status=1` (silenzioso). Fixato in
+   `encodeUAPIArgValue`.
+
+> NOTA DI ONESTÀ: una prima conclusione intermedia ("status=0 non riproducibile /
+> probabile transiente") era **SBAGLIATA** — derivava dal non aver testato il caso
+> apex `@` (le riproduzioni throwaway usavano nomi di sottodominio, non l'apex).
+> Il re-run reale post-fix-encoding ha riprodotto N1 deterministicamente
+> (Error ID xkdxqa), e la bisezione ha isolato `dname="@"` come trigger esatto.
 
 ## Causa radice CONFERMATA — corruzione `+`→spazio (byte-verificata)
 
@@ -55,15 +68,23 @@ né il multi-segmento, né più remove. È sufficiente `mass_edit_zone add-0={..
   corretto (doc `edit`/`parse_zone`); il multi-segmento è UN solo `line_index`.
 - **Oversize char-string / TTL mismatch**: non riprodotti.
 
-## `status=0 "The request failed"` (N1 originale) — NON riprodotto
+## `status=0 "The request failed"` (N1 vero) — RIPRODOTTO e RISOLTO
 
-Con valori reali, TTL reali (300/3600/14400), forma reale del batch (2 replace
-same-name + 1 add), e col code path esatto del tool: **sempre `status=1`** (corrotto
-ma "riuscito"). Gli Error ID del dogfooding (m7sumx, qnrpvb) cambiavano ad ogni
-tentativo → errori server freschi. Ipotesi residua: transiente/ambientale di quel
-giorno (CageFS ri-attivo, cpapi2 instabile). **Serve l'Error ID nel log WHM root**
-(`/usr/local/cpanel/logs/error_log`) per chiuderlo con certezza — non ottenibile a
-livello utente.
+Le riproduzioni throwaway con **nomi di sottodominio** (`_diagn1_*`) passavano
+sempre (status=1), perché **non toccavano l'apex**. Il re-run del `dns apply`
+**reale** (che include il replace SPF sull'apex `giorginisposi.it.`) ha riprodotto
+N1 deterministicamente: `status=0 "The request failed (Error ID: xkdxqa)"`, atomico
+su tutti e 3 gli op.
+
+Bisezione a livello utente, un singolo add:
+
+| dname inviato | esito |
+|--|--|
+| `@` (shorthand apex, ciò che mandava il tool) | ❌ `status=0 The request failed (Error ID: w3htz9)` |
+| `giorginisposi.it.` (FQDN) | ✅ `status=1`, atterra sull'apex |
+
+→ `mass_edit_zone` **non accetta `@`**; vuole il nome zona fully-qualified. Un solo
+record apex nel batch avvelena l'intero apply atomico. **Nessun log root necessario.**
 
 ## Raccomandazione di fix — TOOL-SIDE (implementata)
 
@@ -78,8 +99,13 @@ diverso, non testato empiricamente, e nessun valore con `+` vi transita oggi
 (fetchzone read, setmxcheck su domini). Da rivalutare se un domani cpapi2 dovesse
 scrivere valori con `+`/`%`.
 
-## Passo successivo
+## Fix N1 (implementato) + esito
 
-Re-run del `dns apply` reale dal build fixato sulla sessione dogfooding
-`mig_20260704_1a4eaa2cc7d7` → se store DKIM/SPF corretti + verify clean ⇒ dogfooding
-completabile; se `status=0` ricompare ⇒ escalation per il log root.
+`dnsCanonToRelative` (`cmd/cpanel-self-migration/dns_apply_cmd.go`): apex → FQDN
+(`zone.`) invece di `@`. Test `TestDNSCanonToRelativeApexUsesFQDN`.
+
+Re-run reale post-fix (entrambi i fix: apex + encoding) sul piano dogfooding:
+**`3 applied, 0 failed`**, `dns verify` **CLEAN**. Stato memorizzato verificato:
+DKIM/SPF = valori SOURCE con `+` intatti, `_v2smoke` presente. Standalone
+confermato prima+dopo (A pubblico `194.76.118.193` invariato, serial pubblico
+`2026070300` non avanzato). **Dogfooding #2 sbloccato lato N1.**

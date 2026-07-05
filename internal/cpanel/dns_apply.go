@@ -17,8 +17,10 @@ import (
 // Byte-verified in PR6D_PRE_CAPTURES.md.
 
 // MassEditAddRecord is one record to add via mass_edit_zone. Fields
-// match the cPanel API: dname (relative for non-apex), ttl, record_type,
-// data (array of strings, e.g. TXT segments).
+// match the cPanel API: dname (relative for sub-domains, the FQDN zone name
+// with trailing dot for the apex — mass_edit_zone REJECTS "@"; see
+// dnsCanonToRelative), ttl, record_type, data (array of strings, e.g. TXT
+// segments).
 type MassEditAddRecord struct {
 	DName      string   `json:"dname"`
 	TTL        int      `json:"ttl"`
