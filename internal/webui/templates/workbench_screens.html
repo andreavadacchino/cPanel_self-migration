@@ -68,9 +68,9 @@
 {{if .Confirms}}
 {{range .Confirms}}
 <fieldset>
-<legend>{{.Title}}{{if .BlockingCutover}} <span class="badge error">impedisce il cutover</span>{{end}}</legend>
+<legend>{{manualTitleIT .}}{{if .BlockingCutover}} <span class="badge error">impedisce il cutover</span>{{end}}</legend>
 {{if .Detail}}<p><strong>Perché serve:</strong> {{.Detail}}</p>{{end}}
-<p><strong>Come procedere:</strong> {{.OperatorAction}}</p>
+<p><strong>Come procedere:</strong> {{manualActionIT .}}</p>
 <p class="muted">Sezione: <code>{{.Section}}</code> · Tipo: <code>{{.Type}}</code></p>
 {{if .Accepted}}
   <p style="color:#03543f">✓ Confermata da <strong>{{.AcceptedBy}}</strong> il {{.AcceptedAt}}{{if .AcceptedReason}} — {{.AcceptedReason}}{{end}}</p>
@@ -180,7 +180,7 @@
 {{end}}
 {{if .Cutover.PendingConfirmations}}
 <h3>Conferme operatore mancanti</h3>
-<ul>{{range .Cutover.PendingConfirmations}}<li>{{.Title}} — <span class="muted">{{.OperatorAction}}</span></li>{{end}}</ul>
+<ul>{{range .Cutover.PendingConfirmations}}<li>{{manualTitleIT .}} — <span class="muted">{{manualActionIT .}}</span></li>{{end}}</ul>
 {{end}}
 {{if not .Facts.Checklist}}<p class="warnbox">Nessuna verifica migrazione: esegui prima l'analisi.</p>{{end}}
 {{end}}
