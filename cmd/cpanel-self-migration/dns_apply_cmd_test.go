@@ -990,3 +990,25 @@ func TestDNSApplyCmdNoSOAExitsError(t *testing.T) {
 		t.Fatalf("no-SOA zone: exit code = %d, want 1 (serial extraction error)", code)
 	}
 }
+
+// TestDNSCanonToRelativeApexUsesFQDN pins the apex dname form for
+// mass_edit_zone. cPanel's mass_edit_zone REJECTS "@" as the apex shorthand:
+// it fails the WHOLE atomic batch with status=0 "The request failed (Error ID
+// ...)". This was the real N1 dogfooding failure (the apex SPF replace). The
+// apex must be sent as the fully-qualified zone name (trailing dot); non-apex
+// names stay relative. Reproduced byte-for-byte on a live host: add dname="@"
+// -> status=0; add dname="giorginisposi.it." -> status=1.
+func TestDNSCanonToRelativeApexUsesFQDN(t *testing.T) {
+	cases := []struct{ canonical, zone, want string }{
+		{"giorginisposi.it.", "giorginisposi.it", "giorginisposi.it."},                     // apex -> FQDN, NOT "@"
+		{"GIORGINISPOSI.IT.", "giorginisposi.it", "giorginisposi.it."},                     // case-insensitive apex
+		{"default._domainkey.giorginisposi.it.", "giorginisposi.it", "default._domainkey"}, // subdomain -> relative
+		{"_v2smoke.giorginisposi.it.", "giorginisposi.it", "_v2smoke"},                     // subdomain -> relative
+		{"other.example.com.", "giorginisposi.it", "other.example.com."},                   // unrelated -> unchanged
+	}
+	for _, c := range cases {
+		if got := dnsCanonToRelative(c.canonical, c.zone); got != c.want {
+			t.Errorf("dnsCanonToRelative(%q,%q) = %q, want %q", c.canonical, c.zone, got, c.want)
+		}
+	}
+}

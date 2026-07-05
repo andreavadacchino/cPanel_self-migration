@@ -129,14 +129,20 @@ func printDNSApplyDryRun(plan accountinventory.DNSPlan) {
 	fmt.Println("to apply: re-run with --yes-apply-writes")
 }
 
-// dnsCanonToRelative converts a canonical name (absolute FQDN with
-// trailing dot) to the relative form mass_edit_zone expects: "@" for
-// the apex, otherwise strip the ".zone." suffix.
+// dnsCanonToRelative converts a canonical name (absolute FQDN with trailing
+// dot) to the dname form mass_edit_zone expects: the fully-qualified zone name
+// for the apex, otherwise the ".zone." suffix stripped.
+//
+// The apex MUST be the FQDN, NOT "@": mass_edit_zone REJECTS "@" as the apex
+// shorthand and fails the WHOLE atomic batch with status=0 "The request failed
+// (Error ID ...)". This was the real N1 dogfooding failure — the apex SPF
+// replace poisoned an otherwise-valid batch. Reproduced byte-for-byte on a live
+// host: add dname="@" -> status=0; add dname="<zone>." -> status=1.
 func dnsCanonToRelative(canonical, zone string) string {
 	zDot := strings.ToLower(zone) + "."
 	c := strings.ToLower(canonical)
 	if c == zDot {
-		return "@"
+		return zDot // apex -> FQDN (mass_edit_zone rejects "@")
 	}
 	suffix := "." + zDot
 	if strings.HasSuffix(c, suffix) {
