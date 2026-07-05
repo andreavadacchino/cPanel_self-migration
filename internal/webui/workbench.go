@@ -12,7 +12,7 @@ import (
 	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
 )
 
-//go:embed templates/workbench_list.html templates/workbench_detail.html templates/workbench_screens.html
+//go:embed templates/workbench_list.html templates/workbench_detail.html templates/workbench_screens.html templates/_theme.html
 var workbenchTemplatesFS embed.FS
 
 type workbenchServer struct {
@@ -60,6 +60,7 @@ func newWorkbenchServer(store *workbench.Store, dir, csrf string) (*workbenchSer
 		"templates/workbench_list.html",
 		"templates/workbench_detail.html",
 		"templates/workbench_screens.html",
+		"templates/_theme.html",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("parse workbench templates: %w", err)

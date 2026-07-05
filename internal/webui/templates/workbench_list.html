@@ -3,37 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>cpanel-self-migration — workbench</title>
-<style>
-  :root { color-scheme: light; }
-  body { font: 15px/1.5 -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #1a2233; }
-  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; }
-  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
-  table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; }
-  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #e3e8f0; vertical-align: top; }
-  th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: #5b6575; }
-  a { color: #1a56db; text-decoration: none; } a:hover { text-decoration: underline; }
-  .badge { display: inline-block; padding: .1rem .5rem; border-radius: .3rem; font-size: .8rem; font-weight: 600; }
-  .badge.draft { background: #e3e8f0; color: #374151; }
-  .badge.active { background: #dbeafe; color: #1e40af; }
-  .badge.done { background: #def7ec; color: #03543f; }
-  .badge.error { background: #fde8e8; color: #9b1c1c; }
-  .badge.archived { background: #f3f4f6; color: #6b7280; }
-  .empty { color: #7a8598; font-style: italic; padding: 2rem; text-align: center; }
-  .warn { color: #92400e; font-size: .85rem; margin: .5rem 0; }
-  nav { margin-bottom: 1.5rem; font-size: .9rem; }
-</style>
+<title>Sessioni di migrazione — Migrazione cPanel</title>
+{{template "themeCSS" .}}
 </head>
 <body>
-<nav><a href="/">← Cruscotto</a></nav>
+{{template "appHeader" .}}
+<div class="container">
 <h1>Sessioni di migrazione</h1>
+<p class="muted">Ogni sessione è la migrazione guidata di un account, dalla configurazione fino alla chiusura. Apri una sessione per seguire il percorso passo-passo.</p>
 
 {{range .Warnings}}<p class="warn">⚠ {{.}}</p>{{end}}
 
 {{if .Sessions}}
+<div class="tablewrap">
 <table>
 <thead><tr>
-  <th>Nome</th><th>Stato</th><th>Passo</th><th>Sorgente</th><th>Destinazione</th><th>Artefatti</th><th>Aggiornata</th>
+  <th>Account</th><th>Stato</th><th>Passo</th><th>Sorgente</th><th>Destinazione</th><th>Report</th><th>Aggiornata</th>
 </tr></thead>
 <tbody>
 {{range .Sessions}}
@@ -49,20 +34,25 @@
 {{end}}
 </tbody>
 </table>
+</div>
 {{else}}
-<p class="empty">Nessuna sessione di migrazione.</p>
+<p class="empty">Nessuna sessione di migrazione. Creane una qui sotto per iniziare.</p>
 {{end}}
 
-<h2>Crea nuova migrazione</h2>
-<form method="POST" action="/workbench/create" style="display:grid; grid-template-columns:auto 1fr; gap:.3rem .8rem; max-width:30rem; align-items:center">
+<div class="card">
+<h2 style="margin-top:.2rem">Crea nuova migrazione</h2>
+<p class="muted">Un profilo è un nome di connessione salvato (host.yaml). Sorgente = server di partenza (sola lettura); destinazione = server che riceve.</p>
+<form method="POST" action="/workbench/create" style="display:grid; grid-template-columns:auto 1fr; gap:.6rem .8rem; max-width:32rem; align-items:center">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label for="cr_name">Nome:</label> <input type="text" id="cr_name" name="name" required placeholder="nome account">
-  <label for="cr_src">Profilo sorgente:</label> <input type="text" id="cr_src" name="source_profile" required placeholder="es. source193">
-  <label for="cr_dst">Profilo destinazione:</label> <input type="text" id="cr_dst" name="destination_profile" required placeholder="es. dest78">
-  <div></div> <button type="submit">Crea sessione</button>
+  <label for="cr_name" style="margin:0">Nome account:</label> <input type="text" id="cr_name" name="name" required placeholder="es. giorginisposi">
+  <label for="cr_src" style="margin:0">Profilo sorgente:</label> <input type="text" id="cr_src" name="source_profile" required placeholder="es. source193">
+  <label for="cr_dst" style="margin:0">Profilo destinazione:</label> <input type="text" id="cr_dst" name="destination_profile" required placeholder="es. dest78">
+  <div></div> <div><button type="submit">Crea sessione</button></div>
 </form>
+</div>
 
 {{/* statusBadge is defined once in workbench_detail.html (signature: list
      Status LabelIT) and shared across templates via the merged ParseFS set. */}}
+</div>
 </body>
 </html>
