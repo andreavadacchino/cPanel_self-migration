@@ -162,7 +162,7 @@
       <td>{{if .Accepted}}<span class="accepted">accettata da {{.AcceptedBy}}</span>{{else if .BlockingCutover}}<span class="yes">sì</span>{{else}}no{{end}}</td>
       <td><code>{{.Section}}</code></td>
       <td class="mono">{{.Type}}</td>
-      <td>{{.Title}} — {{.OperatorAction}}{{if .AcceptedReason}}<br><span class="muted">nota: {{.AcceptedReason}}</span>{{end}}</td>
+      <td>{{manualTitleIT .}} — {{manualActionIT .}}{{if .AcceptedReason}}<br><span class="muted">nota: {{.AcceptedReason}}</span>{{end}}</td>
       <td>
         {{if .Accepted}}<span class="accepted">✓ {{.AcceptedAt}}</span>
         {{else if .Acceptable}}

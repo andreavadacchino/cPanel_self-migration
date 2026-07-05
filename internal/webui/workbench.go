@@ -51,8 +51,10 @@ func newWorkbenchServer(store *workbench.Store, dir, csrf string) (*workbenchSer
 		"list": func(args ...any) []any {
 			return args
 		},
-		"statusLabel": statusLabelIT,
-		"stepLabel":   stepLabelIT,
+		"statusLabel":    statusLabelIT,
+		"stepLabel":      stepLabelIT,
+		"manualTitleIT":  manualTitleIT,
+		"manualActionIT": manualActionIT,
 	}
 	tpl, err := template.New("").Funcs(funcMap).ParseFS(workbenchTemplatesFS,
 		"templates/workbench_list.html",
