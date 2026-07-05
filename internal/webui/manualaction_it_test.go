@@ -3,6 +3,7 @@ package webui
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -221,5 +222,50 @@ func TestManualITAnchorsPresentInEngineSource(t *testing.T) {
 		if !strings.Contains(s, a) {
 			t.Errorf("engine source no longer contains anchor %q — reword drifted; update manualaction_it.go", a)
 		}
+	}
+}
+
+// Drift guard (ADD, not reword): the recreate-noun set is interpolated into
+// both the T3 title and the O3 operator, so a new noun added to the engine's
+// map would fall back to raw English SILENTLY. Extract the engine noun map and
+// assert every noun is translatable in both the title-noun map and the
+// operator map.
+func TestManualITNounSetCoveredBothWays(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	src, err := os.ReadFile(filepath.Join(root, "internal", "accountinventory", "checklist.go"))
+	if err != nil {
+		t.Fatalf("read checklist.go: %v", err)
+	}
+	s := string(src)
+	// Isolate the `noun := map[string]string{ ... }` block in evalRecreateSection.
+	start := strings.Index(s, "noun := map[string]string{")
+	if start < 0 {
+		t.Fatal("noun map not found in checklist.go — evalRecreateSection changed shape; revisit the noun translators")
+	}
+	end := strings.IndexByte(s[start:], '}')
+	if end < 0 {
+		t.Fatal("noun map block not terminated")
+	}
+	block := s[start : start+end]
+	// Values are the nouns: `"section": "noun"`.
+	re := regexp.MustCompile(`"[^"]*":\s*"([^"]*)"`)
+	nouns := re.FindAllStringSubmatch(block, -1)
+	if len(nouns) == 0 {
+		t.Fatal("no nouns parsed from the engine map")
+	}
+	for _, m := range nouns {
+		noun := m[1]
+		if _, ok := manualTitleNounIT[noun]; !ok {
+			t.Errorf("engine noun %q missing from manualTitleNounIT — new noun added, T3 title falls back to English", noun)
+		}
+		op := "Recreate the " + noun + " on the destination or confirm it is obsolete."
+		if got := manualActionIT(act("", "", op)); got == op {
+			t.Errorf("engine noun %q: O3 operator %q not translated (falls back to raw)", noun, op)
+		}
+	}
+	// And no stale extra entries in the title-noun map.
+	if len(manualTitleNounIT) != len(nouns) {
+		t.Errorf("manualTitleNounIT has %d nouns, engine has %d — sets drifted", len(manualTitleNounIT), len(nouns))
 	}
 }

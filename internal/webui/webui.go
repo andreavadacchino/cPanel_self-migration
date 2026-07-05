@@ -123,9 +123,11 @@ func New(o Options) (http.Handler, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("webui: %s is not a directory", o.Dir)
 	}
-	// New("index.html") so the root template name matches the parsed file
-	// and s.tpl.Execute renders it; Funcs registers the Italian localisers
-	// used by the manual-actions table.
+	// .Funcs must be attached before ParseFS, so the template is built with
+	// New(...).Funcs(...).ParseFS(...). The explicit name "index.html" keeps
+	// the root template name equal to the parsed file so s.tpl.Execute still
+	// renders it (New("") would leave an empty root → blank page). Funcs
+	// registers the Italian localisers used by the manual-actions table.
 	tpl, err := template.New("index.html").Funcs(template.FuncMap{
 		"manualTitleIT":  manualTitleIT,
 		"manualActionIT": manualActionIT,
