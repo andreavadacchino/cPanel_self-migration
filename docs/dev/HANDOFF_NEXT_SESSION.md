@@ -47,9 +47,13 @@ Quadro attuale: **tool completo, UI product-grade, sessione reale a
    Orbit le scritture fatte sul sacrificale .78 in queste settimane, **quando il
    TOTP torna disponibile**.
 
-Limite noto (dichiarato in #66, PR futura eventuale): i contenuti delle azioni
-manuali (Title/Detail/OperatorAction) restano in inglese — stringhe del motore
-checklist, come #61. Localizzarli è un intervento a livello motore, non di UX.
+~~Limite noto: i contenuti delle azioni manuali restano in inglese.~~
+**CHIUSO in #67 (merged):** Title/OperatorAction ora tradotti in IT a livello di
+presentazione (`manualTitleIT`/`manualActionIT`, pattern `statusLabelIT`), NON
+alla sorgente (le chiavi acceptance `AK-*` sono `sha256` su title/detail →
+intoccabili; la UI ri-renderizza l'artifact congelato, quindi la sessione reale
+è già in IT). Restano volutamente grezzi: `Detail` (diff di valori tecnici) e
+`Type`. La UI è ora **interamente in italiano**. Dettaglio: `MANUAL_ACTIONS_IT_DESIGN.md`.
 
 ### Friction residue (da chiudere, in ordine di priorità)
 
@@ -77,8 +81,10 @@ checklist, come #61. Localizzarli è un intervento a livello motore, non di UX.
 
 `index.html`/`workbench_list.html`/`workbench_detail.html` tradotti in #62; il
 redesign #66 ha completato la traduzione della chrome del workbench (status/step/
-overall/coverage note, 33 aree) e aggiunto le 6 nuove schermate. Unico residuo
-EN: i contenuti dinamici delle azioni manuali (motore checklist), fuori scope UX.
+overall/coverage note, 33 aree) e aggiunto le 6 nuove schermate; **#67 ha tradotto
+i contenuti delle azioni manuali (Title/OperatorAction)** a livello presentazione.
+**Nessun residuo EN nella UI** (restano grezzi solo i dati tecnici: Detail=diff
+valori, Type, code POL-*/AK-*).
 
 ## Workflow (promemoria)
 
