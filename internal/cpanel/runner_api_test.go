@@ -90,6 +90,45 @@ func TestRunUAPIPropagatesSSHError(t *testing.T) {
 	}
 }
 
+// TestEncodeUAPIArgValue pins the encoder that makes a value survive cpsrvd's
+// form-url-decoding of uapi CLI arguments (it decodes '+' -> space and
+// '%XX' -> byte). Only '%' and '+' are rewritten; everything else is verbatim,
+// so any value without those two bytes is unchanged (no regression for existing
+// calls). Empirically verified on a live cPanel: a raw '+' in a TXT/DKIM value
+// is stored as a space; '%2B' is stored as '+'.
+func TestEncodeUAPIArgValue(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", ""},
+		{"plain", "plain"},                 // no special bytes -> unchanged
+		{"cpsm_x", "cpsm_x"},               // token name -> unchanged
+		{"a+b", "a%2Bb"},                   // '+' -> %2B (else server stores a space)
+		{"50%off", "50%25off"},             // '%' -> %25 (else server may decode %XX)
+		{"a+b%c", "a%2Bb%25c"},             // '%' encoded first, then '+'
+		{"x&y a/b k=v", "x&y a/b k=v"},     // &, space, /, = all preserved verbatim
+		{"v=DKIM1; p=AB+CD/EF==", "v=DKIM1; p=AB%2BCD/EF=="}, // only '+' touched
+	}
+	for _, c := range cases {
+		if got := encodeUAPIArgValue(c.in); got != c.want {
+			t.Errorf("encodeUAPIArgValue(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestUAPIArgValuePlusEncoded is the integration guard: the value a caller
+// hands to RunUAPI must reach the env pre-encoded, so the '+' in a DKIM/base64
+// TXT payload is not silently turned into a space by the server.
+func TestUAPIArgValuePlusEncoded(t *testing.T) {
+	f := &fakeRunner{out: uapiOK(`{"new_serial":"1"}`)}
+	dkim := `{"dname":"default._domainkey","record_type":"TXT","data":["v=DKIM1; p=MIIB+A/z=="]}`
+	_, _ = RunUAPI[json.RawMessage](bg, f, "DNS", "mass_edit_zone", map[string]string{"add-0": dkim})
+	if f.env["ARG_0"] != encodeUAPIArgValue(dkim) {
+		t.Errorf("ARG_0 = %q, want the +/%%-encoded form %q", f.env["ARG_0"], encodeUAPIArgValue(dkim))
+	}
+	if strings.Contains(f.env["ARG_0"], "+A/") {
+		t.Errorf("raw '+' reached the env (would be stored as a space): %q", f.env["ARG_0"])
+	}
+}
+
 func TestParseUAPIStatusAndJSONErrors(t *testing.T) {
 	// status != 1 -> error including the reported messages.
 	if _, err := parseUAPI[json.RawMessage]("M", "f", uapiFail("boom")); err == nil || !strings.Contains(err.Error(), "boom") {

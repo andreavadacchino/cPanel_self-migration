@@ -64,11 +64,34 @@ func uapiArgsScript(module, fn string, args map[string]string) (string, map[stri
 	sort.Strings(keys)
 	for i, k := range keys {
 		ev := fmt.Sprintf("ARG_%d", i)
-		env[ev] = args[k]
+		env[ev] = encodeUAPIArgValue(args[k])
 		// uapi key=value with the value taken from $ARG_i (quoted).
 		fmt.Fprintf(&b, " %s=\"$%s\"", k, ev)
 	}
 	return b.String(), env
+}
+
+// encodeUAPIArgValue percent-encodes a uapi argument VALUE so it survives
+// cpsrvd's form-url-decoding of `uapi` CLI parameters. cpsrvd decodes the value
+// it receives: '+' becomes a space and '%XX' becomes the decoded byte. A raw '+'
+// in a TXT/DKIM payload (base64 keys are full of '+'), an SPF qualifier
+// (`+a +mx`), or a plus-tagged email would otherwise be SILENTLY stored as a
+// space, corrupting the record while the API still reports success.
+//
+// Only '%' and '+' are rewritten (in that order, so a literal '%' is not
+// mistaken for the escape we just introduced). Every other byte — including
+// space, '&', '/', '=' which cpsrvd leaves untouched — passes through verbatim,
+// so any value that contains neither '%' nor '+' is byte-identical to before
+// this encoding existed and no currently-working call changes behavior.
+// Verified byte-for-byte on a live cPanel: raw '+' -> stored space; '%2B' ->
+// stored '+'; '%25' -> stored '%'.
+func encodeUAPIArgValue(v string) string {
+	if !strings.ContainsAny(v, "%+") {
+		return v
+	}
+	v = strings.ReplaceAll(v, "%", "%25")
+	v = strings.ReplaceAll(v, "+", "%2B")
+	return v
 }
 
 // RunUAPI executes a UAPI call on the host and unmarshals result.data into T.
@@ -121,8 +144,18 @@ func runUAPIExec[T any](ctx context.Context, c Runner, module, fn string, args m
 
 // api2ArgsScript builds a tiny bash snippet that invokes `cpapi2` with the
 // given module/function and arg keys, analogous to uapiArgsScript but for the
-// legacy cPanel API2 CLI. Used for read-only API2 calls that have no UAPI
-// equivalent (e.g. ZoneEdit::fetchzone_records on cPanel < v136).
+// legacy cPanel API2 CLI. Used for API2 calls that have no UAPI equivalent:
+// ZoneEdit::fetchzone_records (read, cPanel < v136) and Email::setmxcheck (a
+// DESTRUCTIVE routing write).
+//
+// NOTE: unlike uapiArgsScript, this does NOT apply encodeUAPIArgValue. Whether
+// cpsrvd form-url-decodes cpapi2 CLI values (the '+'->space / '%XX'->byte
+// corruption fixed for uapi) has NOT been verified empirically for the cpapi2
+// path, and every value passed here today is either an enum (local|remote|auto|
+// secondary) or a domain name — none can contain '+' or '%', so there is no
+// active corruption to fix. If a future api2 caller passes a free-form value,
+// verify the cpapi2 decode behavior on a live host and extend the encoding
+// here. See docs/dev/DNS_MASS_EDIT_DIAGNOSIS_78.md.
 func api2ArgsScript(module, fn string, args map[string]string) (string, map[string]string) {
 	env := map[string]string{}
 	var b strings.Builder
