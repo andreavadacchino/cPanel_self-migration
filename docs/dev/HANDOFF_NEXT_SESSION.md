@@ -86,6 +86,13 @@ i contenuti delle azioni manuali (Title/OperatorAction)** a livello presentazion
 **Nessun residuo EN nella UI** (restano grezzi solo i dati tecnici: Detail=diff
 valori, Type, code POL-*/AK-*).
 
+**#68 — UI moderna (design system condiviso):** `templates/_theme.html` (`themeCSS`
++ `appHeader`) parsato in entrambi i set → look professionale sobrio coerente su
+dashboard, lista sessioni e le 7 schermate. `/` è ora una **landing** (hero + CTA
+al percorso guidato); la modalità avanzata (pipeline) resta sotto. Solo
+presentazione (4 righe Go: embed+ParseFS), zero regressioni, id/campi/glifi/
+traduzioni preservati. Per restilizzare basta editare `themeCSS`.
+
 ## Workflow (promemoria)
 
 - Solo push a fork (`git push fork`); PR con `gh pr create --repo andreavadacchino/cPanel_self-migration`
