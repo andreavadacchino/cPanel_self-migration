@@ -46,7 +46,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed templates/index.html
+//go:embed templates/index.html templates/_theme.html
 var templatesFS embed.FS
 
 // knownArtifacts is the fixed set of pipeline artifacts the dashboard
@@ -131,7 +131,7 @@ func New(o Options) (http.Handler, error) {
 	tpl, err := template.New("index.html").Funcs(template.FuncMap{
 		"manualTitleIT":  manualTitleIT,
 		"manualActionIT": manualActionIT,
-	}).ParseFS(templatesFS, "templates/index.html")
+	}).ParseFS(templatesFS, "templates/index.html", "templates/_theme.html")
 	if err != nil {
 		return nil, fmt.Errorf("webui: parse templates: %w", err)
 	}

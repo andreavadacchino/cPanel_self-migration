@@ -4,59 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Session.Name}} — {{.Screen}}</title>
-<style>
-  :root { color-scheme: light; }
-  body { font: 15px/1.5 -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #1a2233; }
-  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #e3e8f0; padding-bottom: .3rem; }
-  h3 { font-size: .95rem; margin-top: 1.2rem; }
-  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85em; }
-  pre { background: #f8fafc; border: 1px solid #e3e8f0; border-radius: .4rem; padding: .8rem; overflow-x: auto; font-size: .82rem; }
-  table { border-collapse: collapse; width: 100%; margin: .5rem 0 1rem; }
-  th, td { text-align: left; padding: .35rem .6rem; border-bottom: 1px solid #e3e8f0; vertical-align: top; }
-  th { font-size: .8rem; text-transform: uppercase; letter-spacing: .03em; color: #5b6575; }
-  a { color: #1a56db; text-decoration: none; } a:hover { text-decoration: underline; }
-  .badge { display: inline-block; padding: .1rem .5rem; border-radius: .3rem; font-size: .8rem; font-weight: 600; }
-  .badge.draft { background: #e3e8f0; color: #374151; }
-  .badge.active { background: #dbeafe; color: #1e40af; }
-  .badge.done { background: #def7ec; color: #03543f; }
-  .badge.error { background: #fde8e8; color: #9b1c1c; }
-  .badge.archived { background: #f3f4f6; color: #6b7280; }
-  fieldset { border: 1px solid #e3e8f0; border-radius: .5rem; margin: 1rem 0; padding: .8rem 1rem; }
-  legend { font-weight: 600; padding: 0 .4rem; }
-  label { display: block; margin: .3rem 0; font-size: .9rem; }
-  select, input[type=text] { font: inherit; padding: .25rem .4rem; border: 1px solid #c3ccd9; border-radius: .3rem; }
-  button { font: inherit; font-weight: 600; padding: .4rem 1rem; border: 0; border-radius: .4rem; background: #1a56db; color: #fff; cursor: pointer; }
-  button.danger { background: #dc2626; }
-  button:disabled { background: #9aa4b2; cursor: not-allowed; }
-  .warnbox { background: #fdf6b2; border: 1px solid #c27803; color: #633112; border-radius: .5rem; padding: .7rem 1rem; margin: .8rem 0; font-size: .9rem; }
-  .meta { display: grid; grid-template-columns: auto 1fr; gap: .2rem 1rem; margin: .5rem 0; }
-  .meta dt { color: #5b6575; font-size: .85rem; } .meta dd { margin: 0; }
-  .timeline { font-size: .85rem; }
-  .timeline td:first-child { white-space: nowrap; }
-  .wbnav { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 1.2rem; padding: .3rem 0; border-bottom: 2px solid #e3e8f0; font-size: .9rem; }
-  .wbnav a { padding: .35rem .7rem; border-radius: .4rem .4rem 0 0; color: #5b6575; }
-  .wbnav a.active { background: #1a56db; color: #fff; font-weight: 600; }
-  .nextbox { background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid #1a56db; border-radius: .5rem; padding: .8rem 1rem; margin: 1rem 0; }
-  .nextbox .lead { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: #1e40af; font-weight: 700; }
-  .nextbox .act { font-size: 1.05rem; font-weight: 600; margin: .2rem 0; }
-  .sema { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; list-style: none; padding: 0; }
-  .sema li { display: flex; align-items: center; gap: .4rem; font-size: .9rem; }
-  .dot { width: .8rem; height: .8rem; border-radius: 50%; display: inline-block; }
-  .dot.ok, .dot.done { background: #0e9f6e; }
-  .dot.partial { background: #c27803; }
-  .dot.ready { background: #1a56db; }
-  .dot.todo { background: #c3ccd9; }
-  .dangerzone { border: 2px solid #dc2626; background: #fef2f2; border-radius: .5rem; padding: .8rem 1rem; margin: 1rem 0; }
-  .dangerzone h3 { color: #9b1c1c; margin-top: 0; }
-  .verdict-yes { background: #def7ec; border: 1px solid #0e9f6e; color: #03543f; border-radius: .5rem; padding: 1rem; font-size: 1.1rem; font-weight: 600; }
-  .verdict-no { background: #fde8e8; border: 1px solid #dc2626; color: #9b1c1c; border-radius: .5rem; padding: 1rem; font-size: 1.1rem; font-weight: 600; }
-  .muted { color: #7a8598; }
-  nav.crumbs { margin-bottom: 1rem; font-size: .9rem; }
-  .section { margin: 1.5rem 0; }
-</style>
+{{template "themeCSS" .}}
 </head>
 <body>
-<nav class="crumbs"><a href="/workbench">← Sessioni</a> · <a href="/">Cruscotto</a></nav>
+{{template "appHeader" "workbench"}}
+<div class="container">
+<nav class="crumbs"><a href="/workbench">← Tutte le sessioni</a></nav>
 {{end}}
 
 {{define "wbNav"}}<div class="wbnav">
@@ -175,10 +128,11 @@
      label — never the raw enum. */}}
 {{define "statusBadge"}}{{$s := index . 0}}{{$l := index . 1}}{{if eq $s "draft"}}<span class="badge draft">{{$l}}</span>{{else if eq $s "archived"}}<span class="badge archived">{{$l}}</span>{{else if or (eq $s "cutover_done") (eq $s "apply_done")}}<span class="badge done">{{$l}}</span>{{else if or (eq $s "blocked") (eq $s "failed")}}<span class="badge error">{{$l}}</span>{{else}}<span class="badge active">{{$l}}</span>{{end}}{{end}}
 
-{{define "wbFooter"}}</body>
+{{define "wbFooter"}}</div>
+</body>
 </html>{{end}}
 
-{{define "execBtnReadOnly"}}{{$id := index . 0}}{{$csrf := index . 1}}{{$action := index . 2}}{{$label := index . 3}}<form method="POST" action="/workbench/session/{{$id}}/exec" style="display:inline"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><button type="submit">{{$label}}</button></form>{{end}}
+{{define "execBtnReadOnly"}}{{$id := index . 0}}{{$csrf := index . 1}}{{$action := index . 2}}{{$label := index . 3}}<form method="POST" action="/workbench/session/{{$id}}/exec" style="display:inline"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><button type="submit" class="btn-secondary">{{$label}}</button></form>{{end}}
 
 {{define "execFormWrite"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Digita <strong>{{$name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
 
