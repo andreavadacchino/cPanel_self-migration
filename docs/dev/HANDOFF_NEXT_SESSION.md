@@ -28,14 +28,28 @@ Sessione dogfooding #2: `mig_20260704_1a4eaa2cc7d7`, ora a **`ready_for_cutover`
 NON archiviata, **nessun cutover eseguito**, nessun TTL toccato. Zona produzione
 intatta (A giorginisposi.it pubblico = .193).
 
-### Prossimo passo
+### Prossimo passo — aggiornato 2026-07-05 (post #66)
 
-Proposta **UX guidata** (valutata: adottare con 5 correzioni — la PR parte DOPO
-questo verdetto): "dove sei / cosa manca / cosa rischi / cosa fare dopo" sopra la
-governance esistente (#57/#59/#61), traduzione IT solo lato UI con enum motore
-intatti, schermata covered/not_collected/root_only (coverage.go), DNS danger zone
-che evolve il warning N2 (#62) in un check/attestazione della pre-condizione
-standalone. Niente feature-di-motore mascherate da UX; nessuno scoring inventato.
+**UX guidata: FATTA e merged (PR #66).** Workbench redesign in 7 schermate
+(Panoramica/Preflight/Fotografia/Cosa verrà migrato/Conferme/Applica/Chiusura),
+SOLO presentazione, enum motore intatti. Validata con walk in browser reale
+(dogfooding #3, `DOGFOODING_3_UX_WALK.md`): guida corretta per stato, DNS danger
+zone che blocca l'apply senza attestazione, Chiusura senza falso SÌ su status
+forzato, sessione reale `mig_20260704` che rende il NO motivato corretto.
+
+Quadro attuale: **tool completo, UI product-grade, sessione reale a
+`ready_for_cutover`.** Restano in agenda solo:
+
+1. **Finestra di cutover** (decisione utente): data campagna, orario, ruolo sync
+   DNS (variante A/B/C), ordine account — vedi `CUTOVER_RUNBOOK.md` §7. Il tool
+   non le può prendere; sono le 5 voci mostrate nella schermata Chiusura.
+2. **Nota amministrativa mai chiusa**: registrare via `create_intervention` su
+   Orbit le scritture fatte sul sacrificale .78 in queste settimane, **quando il
+   TOTP torna disponibile**.
+
+Limite noto (dichiarato in #66, PR futura eventuale): i contenuti delle azioni
+manuali (Title/Detail/OperatorAction) restano in inglese — stringhe del motore
+checklist, come #61. Localizzarli è un intervento a livello motore, non di UX.
 
 ### Friction residue (da chiudere, in ordine di priorità)
 
@@ -59,14 +73,12 @@ standalone. Niente feature-di-motore mascherate da UX; nessuno scoring inventato
 4. **N3 [MEDIUM/design]** — l'exec non avanza mai lo status; per l'auto-transition
    serve percorrere a mano la scala governance a `verification_required`.
 
-### PR in coda (richiesta utente 2026-07-04): traduzione webui in italiano
+### Traduzione webui in italiano — COMPLETATA (#62 + #66)
 
-L'utente ha chiesto **"tradurre tutto in italiano"** = webui (dashboard +
-workbench) **e** deliverable, con timing "dopo il dogfooding". Deliverable già
-in IT. Da fare: tradurre i template `internal/webui/templates/index.html`,
-`workbench_list.html`, `workbench_detail.html` (label, bottoni, messaggi) da EN
-a IT. Fork-only, `--repo` esplicito, TDD, go-reviewer multi-giro fino APPROVE
-PULITO, Docker LINUX_ALL_GREEN eseguito, gate nel body prima del merge, handoff.
+`index.html`/`workbench_list.html`/`workbench_detail.html` tradotti in #62; il
+redesign #66 ha completato la traduzione della chrome del workbench (status/step/
+overall/coverage note, 33 aree) e aggiunto le 6 nuove schermate. Unico residuo
+EN: i contenuti dinamici delle azioni manuali (motore checklist), fuori scope UX.
 
 ## Workflow (promemoria)
 
