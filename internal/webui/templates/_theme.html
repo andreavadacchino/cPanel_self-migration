@@ -187,12 +187,13 @@
   fieldset legend{color:var(--text-strong);}
 </style>{{end}}
 
-{{/* appHeader — shared top bar with brand + primary navigation. Ignores the
-     page data; the same header renders on every surface. */}}
+{{/* appHeader — shared top bar with brand + primary navigation. The passed
+     value is the active nav key ("dashboard" | "workbench") so the current
+     section is highlighted (nav-state-active). */}}
 {{define "appHeader"}}<header class="appbar"><div class="appbar-in">
   <a class="brand" href="/"><span class="mark">cP</span> Migrazione cPanel</a>
   <nav class="appnav">
-    <a href="/">Cruscotto</a>
-    <a href="/workbench">Sessioni guidate</a>
+    <a href="/"{{if eq . "dashboard"}} class="active"{{end}}>Cruscotto</a>
+    <a href="/workbench"{{if eq . "workbench"}} class="active"{{end}}>Sessioni guidate</a>
   </nav>
 </div></header>{{end}}
