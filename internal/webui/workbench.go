@@ -12,16 +12,17 @@ import (
 	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
 )
 
-//go:embed templates/workbench_list.html templates/workbench_detail.html
+//go:embed templates/workbench_list.html templates/workbench_detail.html templates/workbench_screens.html
 var workbenchTemplatesFS embed.FS
 
 type workbenchServer struct {
 	store *workbench.Store
 	tpl   *template.Template
 	csrf  string
+	dir   string // shared artifact dir (== server.dir): read-only artifact reads
 }
 
-func newWorkbenchServer(store *workbench.Store, csrf string) (*workbenchServer, error) {
+func newWorkbenchServer(store *workbench.Store, dir, csrf string) (*workbenchServer, error) {
 	funcMap := template.FuncMap{
 		"fmtTime": func(t time.Time) string {
 			if t.IsZero() {
@@ -50,15 +51,18 @@ func newWorkbenchServer(store *workbench.Store, csrf string) (*workbenchServer, 
 		"list": func(args ...any) []any {
 			return args
 		},
+		"statusLabel": statusLabelIT,
+		"stepLabel":   stepLabelIT,
 	}
 	tpl, err := template.New("").Funcs(funcMap).ParseFS(workbenchTemplatesFS,
 		"templates/workbench_list.html",
 		"templates/workbench_detail.html",
+		"templates/workbench_screens.html",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("parse workbench templates: %w", err)
 	}
-	return &workbenchServer{store: store, tpl: tpl, csrf: csrf}, nil
+	return &workbenchServer{store: store, tpl: tpl, csrf: csrf, dir: dir}, nil
 }
 
 func (ws *workbenchServer) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +100,30 @@ func (ws *workbenchServer) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleDetail renders the Panoramica (screen 1) — the base detail route.
 func (ws *workbenchServer) handleDetail(w http.ResponseWriter, r *http.Request, sessionID string) {
+	ws.handleScreen(w, r, sessionID, screenPanoramica)
+}
+
+// screenTemplates maps a screen segment to its top-level template name.
+var screenTemplates = map[string]string{
+	screenPanoramica: "workbench_detail.html",
+	screenPreflight:  "screen_preflight",
+	screenInventario: "screen_inventario",
+	screenMigrazione: "screen_migrazione",
+	screenConferme:   "screen_conferme",
+	screenApplica:    "screen_applica",
+	screenChiusura:   "screen_chiusura",
+}
+
+// handleScreen builds the read-only view-model from the shared artifact dir and
+// renders the guided-path screen. Unknown screen → 404.
+func (ws *workbenchServer) handleScreen(w http.ResponseWriter, r *http.Request, sessionID, screen string) {
+	tplName, ok := screenTemplates[screen]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
 	sess, err := ws.store.Get(sessionID)
 	if err != nil {
 		if errors.Is(err, workbench.ErrSessionNotFound) || errors.Is(err, workbench.ErrInvalidSessionID) {
@@ -106,14 +133,9 @@ func (ws *workbenchServer) handleDetail(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "internal error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	data := struct {
-		Session     *workbench.Session
-		CSRF        string
-		AllStatuses []workbench.Status
-		AllKinds    []workbench.ArtifactKind
-	}{sess, ws.csrf, workbench.AllStatuses, workbench.AllArtifactKinds}
+	view := buildWorkbenchView(ws.dir, ws.csrf, screen, sess)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := ws.tpl.ExecuteTemplate(w, "workbench_detail.html", data); err != nil {
+	if err := ws.tpl.ExecuteTemplate(w, tplName, view); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 	}
 }

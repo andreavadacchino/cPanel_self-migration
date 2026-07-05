@@ -683,4 +683,3 @@ func TestExecRollbackWithDoubleConfirmation(t *testing.T) {
 		t.Errorf("rollback output should NOT reuse input report filename; argv: %v", argv)
 	}
 }
-

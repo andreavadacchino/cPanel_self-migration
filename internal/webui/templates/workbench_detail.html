@@ -1,9 +1,9 @@
-<!doctype html>
+{{define "wbHead"}}<!doctype html>
 <html lang="it">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Session.Name}} — workbench</title>
+<title>{{.Session.Name}} — {{.Screen}}</title>
 <style>
   :root { color-scheme: light; }
   body { font: 15px/1.5 -apple-system, "Segoe UI", sans-serif; margin: 2rem auto; max-width: 72rem; padding: 0 1rem; color: #1a2233; }
@@ -27,110 +27,98 @@
   select, input[type=text] { font: inherit; padding: .25rem .4rem; border: 1px solid #c3ccd9; border-radius: .3rem; }
   button { font: inherit; font-weight: 600; padding: .4rem 1rem; border: 0; border-radius: .4rem; background: #1a56db; color: #fff; cursor: pointer; }
   button.danger { background: #dc2626; }
+  button:disabled { background: #9aa4b2; cursor: not-allowed; }
   .warnbox { background: #fdf6b2; border: 1px solid #c27803; color: #633112; border-radius: .5rem; padding: .7rem 1rem; margin: .8rem 0; font-size: .9rem; }
   .meta { display: grid; grid-template-columns: auto 1fr; gap: .2rem 1rem; margin: .5rem 0; }
   .meta dt { color: #5b6575; font-size: .85rem; } .meta dd { margin: 0; }
   .timeline { font-size: .85rem; }
   .timeline td:first-child { white-space: nowrap; }
-  nav { margin-bottom: 1.5rem; font-size: .9rem; }
+  .wbnav { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 1.2rem; padding: .3rem 0; border-bottom: 2px solid #e3e8f0; font-size: .9rem; }
+  .wbnav a { padding: .35rem .7rem; border-radius: .4rem .4rem 0 0; color: #5b6575; }
+  .wbnav a.active { background: #1a56db; color: #fff; font-weight: 600; }
+  .nextbox { background: #eff6ff; border: 1px solid #bfdbfe; border-left: 4px solid #1a56db; border-radius: .5rem; padding: .8rem 1rem; margin: 1rem 0; }
+  .nextbox .lead { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: #1e40af; font-weight: 700; }
+  .nextbox .act { font-size: 1.05rem; font-weight: 600; margin: .2rem 0; }
+  .sema { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; list-style: none; padding: 0; }
+  .sema li { display: flex; align-items: center; gap: .4rem; font-size: .9rem; }
+  .dot { width: .8rem; height: .8rem; border-radius: 50%; display: inline-block; }
+  .dot.ok, .dot.done { background: #0e9f6e; }
+  .dot.partial { background: #c27803; }
+  .dot.ready { background: #1a56db; }
+  .dot.todo { background: #c3ccd9; }
+  .dangerzone { border: 2px solid #dc2626; background: #fef2f2; border-radius: .5rem; padding: .8rem 1rem; margin: 1rem 0; }
+  .dangerzone h3 { color: #9b1c1c; margin-top: 0; }
+  .verdict-yes { background: #def7ec; border: 1px solid #0e9f6e; color: #03543f; border-radius: .5rem; padding: 1rem; font-size: 1.1rem; font-weight: 600; }
+  .verdict-no { background: #fde8e8; border: 1px solid #dc2626; color: #9b1c1c; border-radius: .5rem; padding: 1rem; font-size: 1.1rem; font-weight: 600; }
+  .muted { color: #7a8598; }
+  nav.crumbs { margin-bottom: 1rem; font-size: .9rem; }
   .section { margin: 1.5rem 0; }
 </style>
 </head>
 <body>
-<nav><a href="/workbench">← Sessioni</a> · <a href="/">Cruscotto</a></nav>
+<nav class="crumbs"><a href="/workbench">← Sessioni</a> · <a href="/">Cruscotto</a></nav>
+{{end}}
 
-<h1>{{.Session.Name}} {{template "statusBadge" .Session.Status}}</h1>
+{{define "wbNav"}}<div class="wbnav">
+  <a href="/workbench/session/{{.Session.ID}}"{{if eq .Screen ""}} class="active"{{end}}>Panoramica</a>
+  <a href="/workbench/session/{{.Session.ID}}/preflight"{{if eq .Screen "preflight"}} class="active"{{end}}>Preflight</a>
+  <a href="/workbench/session/{{.Session.ID}}/inventario"{{if eq .Screen "inventario"}} class="active"{{end}}>Fotografia account</a>
+  <a href="/workbench/session/{{.Session.ID}}/migrazione"{{if eq .Screen "migrazione"}} class="active"{{end}}>Cosa verrà migrato</a>
+  <a href="/workbench/session/{{.Session.ID}}/conferme"{{if eq .Screen "conferme"}} class="active"{{end}}>Conferme operatore</a>
+  <a href="/workbench/session/{{.Session.ID}}/applica"{{if eq .Screen "applica"}} class="active"{{end}}>Applica e verifica</a>
+  <a href="/workbench/session/{{.Session.ID}}/chiusura"{{if eq .Screen "chiusura"}} class="active"{{end}}>Chiusura</a>
+</div>{{end}}
+
+{{define "nextActionBox"}}<div class="nextbox">
+  <div class="lead">Prossima azione consigliata</div>
+  <div class="act">{{.Next.Text}}</div>
+  {{if .Next.Detail}}<div class="muted">{{.Next.Detail}}</div>{{end}}
+  {{if ne .Next.Screen ""}}<a href="/workbench/session/{{.Session.ID}}/{{.Next.Screen}}">Vai →</a>{{end}}
+</div>{{end}}
+
+{{/* Panoramica (screen 1) — base detail route */}}
+{{template "wbHead" .}}
+{{template "wbNav" .}}
+
+<h1>{{.Session.Name}} {{template "statusBadge" (list .Session.Status .StatusLabel)}}</h1>
+
+{{template "nextActionBox" .}}
+
+<div class="section">
+<h2>Stato per fase</h2>
+<ul class="sema">
+{{range .Phases}}<li><span class="dot {{.State}}"></span>{{.Label}}</li>{{end}}
+</ul>
+</div>
 
 <div class="section">
 <h2>Riepilogo</h2>
 <dl class="meta">
-  <dt>ID</dt><dd><code>{{.Session.ID}}</code></dd>
   <dt>Sorgente</dt><dd>{{.Session.SourceProfile}}</dd>
   <dt>Destinazione</dt><dd>{{.Session.DestinationProfile}}</dd>
-  <dt>Passo corrente</dt><dd><strong>{{.Session.CurrentStep}}</strong></dd>
-  <dt>Creata</dt><dd>{{fmtTime .Session.CreatedAt}}</dd>
+  <dt>Passo corrente</dt><dd><strong>{{stepLabel .Session.CurrentStep}}</strong></dd>
   <dt>Aggiornata</dt><dd>{{fmtTime .Session.UpdatedAt}}</dd>
-  <dt>Versione tool</dt><dd><code>{{.Session.ToolVersion}}</code></dd>
   {{if .Session.LastError}}<dt>Ultimo errore</dt><dd style="color:#9b1c1c">{{.Session.LastError}}</dd>{{end}}
 </dl>
 </div>
 
 <div class="section">
-<h2>Artefatti ({{len .Session.Artifacts}})</h2>
-{{if .Session.Artifacts}}
-<table>
-<thead><tr><th>Tipo</th><th>SHA256</th><th>Allegato</th><th>Percorso</th></tr></thead>
-<tbody>
-{{range .Session.Artifacts}}
-<tr>
-  <td><code>{{.Kind}}</code></td>
-  <td><code>{{shortSHA .SHA256}}</code></td>
-  <td class="mono">{{fmtTime .AttachedAt}}</td>
-  <td class="mono" style="font-size:.75em; max-width:20rem; overflow:hidden; text-overflow:ellipsis">{{.Path}}</td>
-</tr>
-{{end}}
-</tbody>
-</table>
-{{else}}
-<p style="color:#7a8598">Nessun artefatto ancora allegato.</p>
-{{end}}
-</div>
-
-<div class="section">
-<h2>Centro di esecuzione</h2>
-<p style="color:#5b6575; font-size:.9rem">Le azioni in sola lettura richiedono un clic. Le azioni di scrittura richiedono di digitare il nome dell'account come conferma. Il rollback richiede la doppia conferma.</p>
-
-<h3>Pipeline (sola lettura, SSH a sorgente+destinazione)</h3>
-<div style="display:flex; gap:.5rem; flex-wrap:wrap">
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "run_pipeline" "Esegui pipeline")}}
-</div>
-
-<h3>Genera piani (sola lettura, offline)</h3>
-<div style="display:flex; gap:.5rem; flex-wrap:wrap">
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "dns_plan" "Piano DNS")}}
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "email_plan" "Piano Email")}}
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_plan" "Piano Cron")}}
-</div>
-
-<h3>Verifica (sola lettura)</h3>
-<div style="display:flex; gap:.5rem; flex-wrap:wrap">
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "dns_verify" "Verifica DNS")}}
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "email_verify" "Verifica Email")}}
-{{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_verify" "Verifica Cron")}}
-</div>
-
-<h3>Apply (scrittura — richiede conferma)</h3>
-<div class="warnbox">
-  &#9888; <strong>Prima di «Apply DNS»</strong>: verifica che il peer del cluster DNS
-  sulla <strong>destinazione</strong> sia in modalità <strong>standalone</strong>.
-  Se il cluster è in sync, le modifiche alla zona vengono propagate ai nameserver
-  di <strong>produzione</strong>. Questa pre-condizione va verificata FUORI dalla UI
-  (WHM/root sulla destinazione, oppure <code>dig</code> ai NS pubblici), perché il
-  tool opera a livello utente e non può leggere lo stato del cluster.
-</div>
-{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "dns_apply" "Apply DNS")}}
-{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "email_apply" "Apply Email")}}
-{{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "cron_apply" "Apply Cron")}}
-
-<h3>Migra contenuti (scrittura — richiede conferma + ambito)</h3>
+<h2>Governance</h2>
+<p class="muted">Lo stato di governance è un'attestazione umana: alcune fasi non lo avanzano da sole. Cambialo qui quando hai completato il passo.</p>
 <fieldset>
-<legend>migra contenuti</legend>
-<form method="POST" action="/workbench/session/{{.Session.ID}}/exec">
+<legend>Cambia stato</legend>
+<form method="POST" action="/workbench/session/{{.Session.ID}}/status">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <input type="hidden" name="action" value="migrate_content">
-  <label><input type="checkbox" name="scope_mail" value="1"> Posta</label>
-  <label><input type="checkbox" name="scope_file" value="1"> File</label>
-  <label><input type="checkbox" name="scope_db" value="1"> Database</label>
-  <label>Filtro dominio (opzionale): <input type="text" name="scope_domain" size="30" placeholder="vuoto = tutti"></label>
-  <label>Digita <strong>{{.Session.Name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label>
-  <button type="submit" class="danger">Esegui migrazione</button>
+  <label>Nuovo stato:
+    <select name="status">
+      {{range .AllStatuses}}<option value="{{.}}">{{statusLabel .}}</option>{{end}}
+    </select>
+  </label>
+  <label><input type="checkbox" name="force" value="1"> Forza (ignora la matrice delle transizioni)</label>
+  <label>Motivo (obbligatorio se forzato, ≥10 caratteri): <input type="text" name="reason" size="40"></label>
+  <button type="submit">Imposta stato</button>
 </form>
 </fieldset>
-
-<h3>Rollback (scrittura — richiede DOPPIA conferma)</h3>
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "dns_rollback" "Rollback DNS")}}
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "email_rollback" "Rollback Email")}}
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "cron_rollback" "Rollback Cron")}}
 </div>
 
 <div class="section">
@@ -143,36 +131,31 @@
 <tr>
   <td class="mono">{{fmtTime .Timestamp}}</td>
   <td>{{.Action}}</td>
-  <td>{{if .FromStatus}}{{.FromStatus}} → {{.ToStatus}}{{end}}{{if .Reason}} — {{.Reason}}{{end}}</td>
+  <td>{{if .FromStatus}}{{statusLabel .FromStatus}} → {{statusLabel .ToStatus}}{{end}}{{if .Reason}} — {{.Reason}}{{end}}</td>
 </tr>
 {{end}}
 </tbody>
 </table>
 {{else}}
-<p style="color:#7a8598">Nessun evento.</p>
+<p class="muted">Nessun evento.</p>
 {{end}}
 </div>
 
-<div class="section">
-<h2>Governance</h2>
-
+<details class="section">
+<summary><strong>Dettagli tecnici</strong> — report allegati e allega manuale</summary>
+<h3>Report ({{len .Session.Artifacts}})</h3>
+{{if .Session.Artifacts}}
+<table>
+<thead><tr><th>Tipo</th><th>SHA256</th><th>Allegato</th></tr></thead>
+<tbody>
+{{range .Session.Artifacts}}
+<tr><td><code>{{.Kind}}</code></td><td><code>{{shortSHA .SHA256}}</code></td><td class="mono">{{fmtTime .AttachedAt}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p class="muted">Nessun report ancora allegato.</p>{{end}}
 <fieldset>
-<legend>Cambia stato</legend>
-<form method="POST" action="/workbench/session/{{.Session.ID}}/status">
-  <input type="hidden" name="csrf" value="{{.CSRF}}">
-  <label>Nuovo stato:
-    <select name="status">
-      {{range .AllStatuses}}<option value="{{.}}">{{.}}</option>{{end}}
-    </select>
-  </label>
-  <label><input type="checkbox" name="force" value="1"> Forza (ignora la matrice delle transizioni)</label>
-  <label>Motivo (obbligatorio se forzato, ≥10 caratteri): <input type="text" name="reason" size="40"></label>
-  <button type="submit">Imposta stato</button>
-</form>
-</fieldset>
-
-<fieldset>
-<legend>Allega artefatto</legend>
+<legend>Allega report</legend>
 <form method="POST" action="/workbench/session/{{.Session.ID}}/attach">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label>Tipo:
@@ -180,18 +163,23 @@
       {{range .AllKinds}}<option value="{{.}}">{{.}}</option>{{end}}
     </select>
   </label>
-  <label>Percorso file (locale): <input type="text" name="path" size="50" placeholder="/percorso/artefatto.json"></label>
+  <label>Percorso file (locale): <input type="text" name="path" size="50" placeholder="/percorso/report.json"></label>
   <button type="submit">Allega</button>
 </form>
 </fieldset>
-</div>
+</details>
 
-{{define "statusBadge"}}{{if eq . "draft"}}<span class="badge draft">{{.}}</span>{{else if eq . "archived"}}<span class="badge archived">{{.}}</span>{{else if or (eq . "cutover_done") (eq . "apply_done")}}<span class="badge done">{{.}}</span>{{else if or (eq . "blocked") (eq . "failed")}}<span class="badge error">{{.}}</span>{{else}}<span class="badge active">{{.}}</span>{{end}}{{end}}
+{{template "wbFooter" .}}
+
+{{/* statusBadge takes (list Status LabelIT): coloured pill with the Italian
+     label — never the raw enum. */}}
+{{define "statusBadge"}}{{$s := index . 0}}{{$l := index . 1}}{{if eq $s "draft"}}<span class="badge draft">{{$l}}</span>{{else if eq $s "archived"}}<span class="badge archived">{{$l}}</span>{{else if or (eq $s "cutover_done") (eq $s "apply_done")}}<span class="badge done">{{$l}}</span>{{else if or (eq $s "blocked") (eq $s "failed")}}<span class="badge error">{{$l}}</span>{{else}}<span class="badge active">{{$l}}</span>{{end}}{{end}}
+
+{{define "wbFooter"}}</body>
+</html>{{end}}
 
 {{define "execBtnReadOnly"}}{{$id := index . 0}}{{$csrf := index . 1}}{{$action := index . 2}}{{$label := index . 3}}<form method="POST" action="/workbench/session/{{$id}}/exec" style="display:inline"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><button type="submit">{{$label}}</button></form>{{end}}
 
 {{define "execFormWrite"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Digita <strong>{{$name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
 
-{{define "execFormRollback"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Digita <strong>{{$name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label><label>Digita di nuovo per il rollback: <input type="text" name="confirm_rollback" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
-</body>
-</html>
+{{define "execFormRollback"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Digita <strong>{{$name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label><label>Digita di nuovo per annullare le modifiche: <input type="text" name="confirm_rollback" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}

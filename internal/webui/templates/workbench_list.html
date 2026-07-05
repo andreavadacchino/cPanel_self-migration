@@ -39,8 +39,8 @@
 {{range .Sessions}}
 <tr>
   <td><a href="/workbench/session/{{.ID}}"><strong>{{.Name}}</strong></a><br><code class="mono">{{.ID}}</code></td>
-  <td>{{template "statusBadge" .Status}}</td>
-  <td>{{.CurrentStep}}</td>
+  <td>{{template "statusBadge" (list .Status (statusLabel .Status))}}</td>
+  <td>{{stepLabel .CurrentStep}}</td>
   <td>{{.SourceProfile}}</td>
   <td>{{.DestinationProfile}}</td>
   <td>{{len .Artifacts}}</td>
@@ -62,6 +62,7 @@
   <div></div> <button type="submit">Crea sessione</button>
 </form>
 
-{{define "statusBadge"}}{{if eq . "draft"}}<span class="badge draft">{{.}}</span>{{else if eq . "archived"}}<span class="badge archived">{{.}}</span>{{else if or (eq . "cutover_done") (eq . "apply_done")}}<span class="badge done">{{.}}</span>{{else if or (eq . "blocked") (eq . "failed")}}<span class="badge error">{{.}}</span>{{else}}<span class="badge active">{{.}}</span>{{end}}{{end}}
+{{/* statusBadge is defined once in workbench_detail.html (signature: list
+     Status LabelIT) and shared across templates via the merged ParseFS set. */}}
 </body>
 </html>

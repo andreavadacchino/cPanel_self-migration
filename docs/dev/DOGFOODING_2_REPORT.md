@@ -10,7 +10,38 @@ build, lancio `ui`, diagnosi bug). Sessione workbench `mig_20260704_1a4eaa2cc7d7
 
 ---
 
-## VERDETTO
+## VERDETTO — AGGIORNATO 2026-07-05 (post-fix N1)
+
+> **Un operatore può migrare un account cPanel SOLO con la UI: SÌ** (per il ciclo
+> di scrittura DNS/Email/Cron fino a `ready_for_cutover`), **con una riserva
+> documentata (N2)**: la pre-condizione «peer del cluster DNS standalone» è
+> esposta solo come **warning** pre-apply, non come check automatico.
+
+Il blocco N1 (`dns apply` falliva) è **risolto alla radice** e verificato
+end-to-end **dalla UI con click reali**:
+
+- **N1 causa radice**: `mass_edit_zone` rifiuta `dname="@"` per l'apex → fix
+  `dnsCanonToRelative` apex→FQDN (PR #64, merged). Co-bug encoding `+`→spazio
+  (PR #63, merged). Vedi `DNS_MASS_EDIT_DIAGNOSIS_78.md`.
+- **`dns apply` reale** (build fixato): `3 applied, 0 failed`; DKIM/SPF SOURCE coi
+  `+` intatti; `_v2smoke` presente; standalone confermato (A pubblico invariato,
+  serial pubblico non propagato).
+- **Walk di governance dalla UI** (2026-07-05, click reali, MAI `--force`):
+  `preflight_required` → inventory_ready → checklist_ready → ready_for_apply →
+  apply_in_progress → apply_done → `verification_required`, poi **Verifica DNS**
+  (lettura) → `dns_verify_report` fresco **CLEAN** → **auto-transition a
+  `ready_for_cutover` scattata da sola** (nessun bug: rule #5 rispettata). La
+  sessione `mig_20260704_1a4eaa2cc7d7` è ora a **`ready_for_cutover`** (nessun
+  cutover eseguito, nessun TTL toccato, zona produzione intatta).
+
+**Riserva residua N2** (non bloccante, documentata): la verifica «cluster peer
+standalone» è mitigata da un **warning** nella UI (PR #62), ma resta out-of-band
+(dig/WHM). **N3** (walk di governance manuale) resta by-design. La UX guidata che
+copre entrambe è il prossimo passo (proposta valutata separatamente).
+
+---
+
+## VERDETTO ORIGINALE (2026-07-04, storico — SUPERATO da N1 fix)
 
 > **Un operatore può migrare un account cPanel SOLO con la UI: NO.**
 

@@ -6,18 +6,36 @@ Stai lavorando sul tool Go **cpanel-self-migration**, directory
 Leggi PRIMA: docs/dev/DOGFOODING_2_REPORT.md, docs/dev/DEVELOPMENT_STATE.md,
 docs/dev/PR61_BLOCKER_SCOPING.md.
 
-## Stato al 2026-07-04 (fine giornata) — dopo Dogfooding #2
+## Stato al 2026-07-05 — Dogfooding #2 SBLOCCATO (N1 risolto)
 
-### Verdetto #2: **UI-only completabile = NO** (ma NO "operativo", non strutturale)
+### Verdetto #2 aggiornato: **UI-only completabile = SÌ** (con riserva N2 documentata)
 
-Le **6 friction del #1 sono tutte chiuse** e verificate con click reali nel
-browser (create, pipeline+auto-attach, plans, acceptances, apply con blocker
-presente). Il ciclo UI-only funziona end-to-end **fino al `dns apply`**, dove si
-ferma. Dettaglio completo in `DOGFOODING_2_REPORT.md`.
+Il blocco N1 è **risolto alla radice** e il ciclo UI-only è stato completato fino
+a `ready_for_cutover` **dalla UI con click reali**. Dettaglio in
+`DOGFOODING_2_REPORT.md` (sezione VERDETTO AGGIORNATO 2026-07-05) e
+`DNS_MASS_EDIT_DIAGNOSIS_78.md`.
 
-Sessione dogfooding #2: `mig_20260704_1a4eaa2cc7d7`, a `preflight_required`,
-NON archiviata, NON arrivata a ready_for_cutover. Zona produzione intatta
-(A giorginisposi.it pubblico = .193).
+- **N1 causa radice**: `mass_edit_zone` rifiuta `dname="@"` per l'apex → fix
+  `dnsCanonToRelative` apex→FQDN (**PR #64, merged**). Co-bug encoding `+`→spazio
+  (**PR #63, merged**). Entrambi in `main`.
+- **`dns apply` reale post-fix**: `3 applied, 0 failed`, `dns verify` CLEAN,
+  DKIM/SPF SOURCE coi `+` intatti.
+- **Walk governance UI** (2026-07-05, click reali, MAI `--force`): 6 hop
+  `preflight_required`→…→`verification_required`, poi Verifica DNS (lettura) →
+  **auto-transition a `ready_for_cutover` scattata da sola** (rule #5 ok).
+
+Sessione dogfooding #2: `mig_20260704_1a4eaa2cc7d7`, ora a **`ready_for_cutover`**,
+NON archiviata, **nessun cutover eseguito**, nessun TTL toccato. Zona produzione
+intatta (A giorginisposi.it pubblico = .193).
+
+### Prossimo passo
+
+Proposta **UX guidata** (valutata: adottare con 5 correzioni — la PR parte DOPO
+questo verdetto): "dove sei / cosa manca / cosa rischi / cosa fare dopo" sopra la
+governance esistente (#57/#59/#61), traduzione IT solo lato UI con enum motore
+intatti, schermata covered/not_collected/root_only (coverage.go), DNS danger zone
+che evolve il warning N2 (#62) in un check/attestazione della pre-condizione
+standalone. Niente feature-di-motore mascherate da UX; nessuno scoring inventato.
 
 ### Friction residue (da chiudere, in ordine di priorità)
 
