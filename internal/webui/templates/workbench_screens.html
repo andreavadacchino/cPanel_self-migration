@@ -101,37 +101,57 @@
 {{template "nextActionBox" .}}
 <p class="muted">Ogni applicazione crea un <strong>backup automatico</strong> prima di scrivere ed è atomica (nessuna applicazione parziale). Le scritture richiedono di digitare il nome dell'account; annullare le modifiche richiede la doppia conferma.</p>
 
+{{if .Scope.HasSetup}}<p class="muted">Questa migrazione applica solo le aree selezionate nel wizard iniziale. Le aree non selezionate risultano «non incluse».</p>{{end}}
+
 <h2>Contenuti (posta, file, database)</h2>
+{{if .Scope.ShowMigrateContent}}
+{{if .Scope.HasSetup}}<ul class="sema">
+  <li><span class="dot {{if .Scope.IncludeFiles}}ok{{else}}todo{{end}}"></span>File sito — {{if .Scope.IncludeFiles}}incluso{{else}}non incluso{{end}}</li>
+  <li><span class="dot {{if .Scope.IncludeDatabases}}ok{{else}}todo{{end}}"></span>Database — {{if .Scope.IncludeDatabases}}incluso{{else}}non incluso{{end}}</li>
+  <li><span class="dot {{if .Scope.IncludeEmailContent}}ok{{else}}todo{{end}}"></span>Email / Maildir — {{if .Scope.IncludeEmailContent}}incluso{{else}}non incluso{{end}}</li>
+</ul>{{end}}
 <fieldset>
 <legend>Migra contenuti</legend>
 <form method="POST" action="/workbench/session/{{.Session.ID}}/exec">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="hidden" name="action" value="migrate_content">
-  <label><input type="checkbox" name="scope_mail" value="1"> Posta</label>
-  <label><input type="checkbox" name="scope_file" value="1"> File</label>
-  <label><input type="checkbox" name="scope_db" value="1"> Database</label>
+  {{if .Scope.IncludeEmailContent}}<label><input type="checkbox" name="scope_mail" value="1"> Posta</label>{{end}}
+  {{if .Scope.IncludeFiles}}<label><input type="checkbox" name="scope_file" value="1"> File</label>{{end}}
+  {{if .Scope.IncludeDatabases}}<label><input type="checkbox" name="scope_db" value="1"> Database</label>{{end}}
   <label>Filtro dominio (opzionale): <input type="text" name="scope_domain" size="30" placeholder="vuoto = tutti"></label>
   <label>Digita <strong>{{.Session.Name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label>
   <button type="submit" class="danger">Esegui migrazione</button>
 </form>
 </fieldset>
+{{else}}
+<div class="warnbox">Migrazione contenuti non inclusa in questa migrazione (né file, né database, né email sono stati selezionati nel wizard).</div>
+{{end}}
 
-<h2>Email {{template "areaStatus" .Facts.Email}}</h2>
+<h2>Configurazioni email {{if .Scope.IncludeEmailConfig}}{{template "areaStatus" .Facts.Email}}{{end}}</h2>
+{{if .Scope.IncludeEmailConfig}}
 <div style="display:flex; gap:.5rem; flex-wrap:wrap">
 {{template "execBtnReadOnly" (list .Session.ID .CSRF "email_plan" "Mostra piano")}}
 {{template "execBtnReadOnly" (list .Session.ID .CSRF "email_verify" "Verifica risultato")}}
 </div>
 {{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "email_apply" "Applica Email")}}
 {{if .Facts.Email.BackupPresent}}{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "email_rollback" "Annulla modifiche Email")}}{{end}}
+{{else}}
+<div class="warnbox">Configurazioni email — non incluse in questa migrazione.</div>
+{{end}}
 
-<h2>Cron {{template "areaStatus" .Facts.Cron}}</h2>
+<h2>Cron {{if .Scope.IncludeCron}}{{template "areaStatus" .Facts.Cron}}{{end}}</h2>
+{{if .Scope.IncludeCron}}
 <div style="display:flex; gap:.5rem; flex-wrap:wrap">
 {{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_plan" "Mostra piano")}}
 {{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_verify" "Verifica risultato")}}
 </div>
 {{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "cron_apply" "Applica Cron")}}
 {{if .Facts.Cron.BackupPresent}}{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "cron_rollback" "Annulla modifiche Cron")}}{{end}}
+{{else}}
+<div class="warnbox">Cron — non incluso in questa migrazione.</div>
+{{end}}
 
+{{if .Scope.IncludeDNS}}
 <div class="dangerzone">
 <h3>&#9888; DNS — Danger Zone {{template "areaStatus" .Facts.DNS}}</h3>
 <div class="warnbox">
@@ -158,6 +178,10 @@
 </fieldset>
 {{if .Facts.DNS.BackupPresent}}{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "dns_rollback" "Annulla modifiche DNS")}}{{end}}
 </div>
+{{else}}
+<h2>DNS</h2>
+<div class="warnbox">DNS non incluso in questa migrazione.<br>Puoi creare una nuova migrazione o modificare la definizione se vuoi gestire il DNS.</div>
+{{end}}
 
 {{template "wbFooter" .}}
 {{end}}

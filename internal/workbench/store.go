@@ -17,10 +17,10 @@ import (
 )
 
 var (
-	ErrSessionNotFound    = errors.New("session not found")
-	ErrInvalidSessionID   = errors.New("invalid session id")
-	ErrInvalidStatus      = errors.New("invalid status")
-	ErrTransitionDenied   = errors.New("transition not allowed")
+	ErrSessionNotFound     = errors.New("session not found")
+	ErrInvalidSessionID    = errors.New("invalid session id")
+	ErrInvalidStatus       = errors.New("invalid status")
+	ErrTransitionDenied    = errors.New("transition not allowed")
 	ErrUnknownArtifactKind = errors.New("unknown artifact kind")
 )
 
@@ -49,6 +49,14 @@ func NewStore(dir string) (*Store, error) {
 
 // Create initializes a new migration session and persists it.
 func (s *Store) Create(name, sourceProfile, destProfile string, now time.Time) (*Session, error) {
+	return s.CreateWithSetup(name, sourceProfile, destProfile, nil, now)
+}
+
+// CreateWithSetup initializes a new migration session, optionally attaching the
+// non-secret wizard metadata (setup may be nil, in which case it behaves
+// exactly like Create). The setup carries no credentials — those live only in
+// host.yaml — so nothing secret is ever written to session.json.
+func (s *Store) CreateWithSetup(name, sourceProfile, destProfile string, setup *SetupMeta, now time.Time) (*Session, error) {
 	fl, err := s.lockFile()
 	if err != nil {
 		return nil, err
@@ -88,6 +96,7 @@ func (s *Store) Create(name, sourceProfile, destProfile string, now time.Time) (
 		Artifacts:          []ArtifactEntry{},
 		Timeline:           []TimelineEvent{},
 		ToolVersion:        version.String(),
+		Setup:              setup,
 	}
 
 	if err := s.writeSession(id, sess); err != nil {

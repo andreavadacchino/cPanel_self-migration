@@ -12,6 +12,8 @@
 <h1>Sessioni di migrazione</h1>
 <p class="muted">Ogni sessione è la migrazione guidata di un account, dalla configurazione fino alla chiusura. Apri una sessione per seguire il percorso passo-passo.</p>
 
+<p><a class="btn" href="/workbench/new">+ Nuova migrazione guidata</a></p>
+
 {{range .Warnings}}<p class="warn">⚠ {{.}}</p>{{end}}
 
 {{if .Sessions}}
@@ -41,7 +43,10 @@
 
 <div class="card">
 <h2 style="margin-top:.2rem">Crea nuova migrazione</h2>
-<p class="muted">Un profilo è un nome di connessione salvato (host.yaml). Sorgente = server di partenza (sola lettura); destinazione = server che riceve.</p>
+<p class="muted">Il percorso consigliato è la <a href="/workbench/new">nuova migrazione guidata</a>: ti chiede sorgente, destinazione, account e cosa migrare, poi ti porta al controllo preliminare.</p>
+<details>
+<summary>Creazione rapida (avanzata)</summary>
+<p class="muted">Crea una sessione minimale indicando solo un nome e due profili di connessione (host.yaml). Sorgente = server di partenza (sola lettura); destinazione = server che riceve.</p>
 <form method="POST" action="/workbench/create" style="display:grid; grid-template-columns:auto 1fr; gap:.6rem .8rem; max-width:32rem; align-items:center">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <label for="cr_name" style="margin:0">Nome account:</label> <input type="text" id="cr_name" name="name" required placeholder="es. giorginisposi">
@@ -49,6 +54,7 @@
   <label for="cr_dst" style="margin:0">Profilo destinazione:</label> <input type="text" id="cr_dst" name="destination_profile" required placeholder="es. dest78">
   <div></div> <div><button type="submit">Crea sessione</button></div>
 </form>
+</details>
 </div>
 
 {{/* statusBadge is defined once in workbench_detail.html (signature: list

@@ -43,6 +43,34 @@
 
 {{template "nextActionBox" .}}
 
+{{if and .Session.Setup (not .Facts.HostYAMLPresent)}}
+<div class="warnbox">
+  <strong>Configurazione tecnica richiesta prima del preflight.</strong>
+  Le credenziali (password SSH) non sono ancora impostate: completa il file <code>host.yaml</code> nella directory di lavoro. Puoi configurarle dalla <a href="/">pagina delle connessioni</a>.
+</div>
+{{end}}
+
+{{with .Session.Setup}}
+<div class="section">
+<h2>Definizione della migrazione</h2>
+<dl class="meta">
+  {{if .PrimaryDomain}}<dt>Dominio principale</dt><dd>{{.PrimaryDomain}}</dd>{{end}}
+  <dt>Server sorgente</dt><dd>{{.Source.Account}}<span class="muted">@</span>{{.Source.Host}}{{if .Source.Port}}<span class="muted">:{{.Source.Port}}</span>{{end}}</dd>
+  <dt>Server destinazione</dt><dd>{{.Destination.Account}}<span class="muted">@</span>{{.Destination.Host}}{{if .Destination.Port}}<span class="muted">:{{.Destination.Port}}</span>{{end}}</dd>
+  <dt>Contenuti da migrare</dt><dd>
+    {{$c := .Content}}
+    {{if $c.Files}}<span class="badge">File del sito</span> {{end}}
+    {{if $c.Databases}}<span class="badge">Database</span> {{end}}
+    {{if $c.Email}}<span class="badge">Email</span> {{end}}
+    {{if $c.EmailConfig}}<span class="badge">Config. email</span> {{end}}
+    {{if $c.Cron}}<span class="badge">Cron</span> {{end}}
+    {{if $c.DNS}}<span class="badge error">DNS (delicato)</span>{{else}}<span class="muted">— DNS non incluso</span>{{end}}
+  </dd>
+  {{if .Notes}}<dt>Note</dt><dd>{{.Notes}}</dd>{{end}}
+</dl>
+</div>
+{{end}}
+
 <div class="section">
 <h2>Stato per fase</h2>
 <ul class="sema">
