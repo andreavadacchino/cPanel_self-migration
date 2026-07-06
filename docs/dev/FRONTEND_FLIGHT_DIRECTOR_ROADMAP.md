@@ -180,24 +180,45 @@ Long migrations may outlive the browser session. The laptop may sleep. The brows
 
 Therefore the UI must be able to rehydrate state from persistent sources before reconnecting to any live stream.
 
+**What already exists (do not rebuild).** Completed-state rehydration is already
+implemented: `internal/webui/workbench_view.go` (`readArtifactFacts`) reconstructs
+host.yaml presence, inventories, plans, and apply/verify reports (including
+`clean`) from disk on every GET. The read-only refresh already survives (dogfooding
+#3). PR 69 must **reuse** this, not reimplement it.
+
+**What is genuinely missing: the in-flight job.** Today an exec (e.g.
+`migrate_content`) runs synchronously inside the HTTP request with an in-memory
+tail buffer and no persisted progress (`internal/webui/workbench_exec.go`,
+`internal/webui/job.go`). If the browser refreshes or the laptop sleeps the write
+subprocess keeps running (its context descends from the ui process, not the
+request), but it is **unreattachable**: no job identity, no persisted progress, and
+a retry hits an opaque `409 "an execution is already in progress"`. This — not
+artifact rehydration — is the real work of PR 69.
+
 Canonical rehydration sources:
 
 - session.json
 - timeline entries
-- events.jsonl
+- events.jsonl *(emitted today only by `migrate_content` via `--json-events`; see §7)*
 - report.json
 - *_apply_report.json
 - *_verify_report.json
+- *_backup.json *(dns/email/cron — required to know whether Rollback can be offered, §11)*
+- *_rollback_report.json
 - artifact registry
 - migration_checklist.json
+- **job.json (run journal) — NEW artifact, see §12/§16**: the persisted identity and
+  progress of the in-flight/last exec, so a refresh reconstructs "migrate_content
+  running since HH:MM, phase X" and the 409 becomes a readable state instead of an
+  opaque conflict.
 
 Expected flow:
 
 1. User opens or refreshes the page.
-2. UI reconstructs the current state from persisted session/artifacts/timeline.
-3. If a job is active, UI attaches to the live stream.
+2. UI reconstructs the current state from persisted session/artifacts/timeline (`readArtifactFacts`) **and the job journal**.
+3. If a job is active, UI shows it from `job.json` first, then attaches to the live stream.
 4. If live stream fails, UI remains usable with last known state.
-5. Refreshing the page never loses the migration context.
+5. Refreshing the page never loses the migration context, and an already-running exec is always surfaced (never an opaque 409).
 
 SSE should be used as a live transport, not as the source of truth.
 
@@ -223,6 +244,20 @@ Prefer:
 - live log tail
 
 Avoid claiming exact percentages unless the denominator is reliable.
+
+**Granularity reality (decide before PR 70).** Item-level progress exists today
+only for content migration: `migrate_content` emits `events.jsonl` via
+`--json-events`. DNS, email, cron and the analysis pipeline produce only final
+reports — no per-item stream. So the honest options are:
+
+- **(A)** extend `--json-events` to the other phases, so all phases have an
+  item-level stream and `events.jsonl` stays the single source of truth; or
+- **(B)** accept coarse **phase-level** progress for DNS/email/cron/pipeline,
+  driven by the job journal (§6), and reserve item-level only for content.
+
+Whichever is chosen, the UI must never render item-level precision for a phase
+that only has phase-level truth (that would be exactly the fake precision this
+section forbids).
 
 Example UI copy:
 
@@ -301,6 +336,18 @@ Recommended rule:
 - DNS must always be a separate phase with explicit warning, backup, verify-after, and operator confirmation.
 - Cutover must be separate from DNS apply.
 
+Minimum gates before DNS apply is permitted from the UI:
+
+- migration_checklist has no `blocks_apply` blocker (already enforced today).
+- explicit operator attestation (danger-zone checkbox — already implemented, dogfooding #3).
+- a fresh backup is written before apply (already implemented).
+- **destination DNS cluster peer is standalone** (dogfooding #2, finding N2,
+  classified HIGH for clustered DNS): applying to a peer in `sync` role
+  propagates edits to production nameservers. Today this precondition has **no
+  UI affordance** and is verified out-of-band with `dig`. The Flight Director
+  must surface it as a gate/warning before DNS apply — an automatic check where
+  obtainable at account level, otherwise an explicit operator attestation.
+
 DNS can remain automatable where the existing DNS plan/apply/verify contract proves it safe, but the UI must treat it as a danger zone.
 
 Manual DNS should remain available as a safer option:
@@ -329,6 +376,16 @@ Recommended UX:
 - Files: allow delta sync where supported.
 - DB: warn strongly for dynamic sites; recommend maintenance/freeze window.
 - DNS: not a sync phase, but a cutover/switch concern.
+
+**Scope constraint (no new writer).** The tool has **no incremental delta engine
+today**, and building one would be a new writer — forbidden by the non-goals
+(§15). In this frontend phase `Final sync` therefore means: **re-run the existing
+apply for the selected phases + a freeze/maintenance-window recommendation + a
+staleness warning against the last snapshot.** "allow delta sync where supported"
+above is aspirational and must be gated on an existing capability actually
+existing; until then the honest answer for dynamic content is a freeze window, not
+a silent reconciliation. Do not present `Final sync` as a guarantee that source
+and destination are reconciled.
 
 The UI must not imply that a migration is safe if the source may have changed after the last snapshot.
 
@@ -366,10 +423,18 @@ Recommended initial rule:
 
 - Avoid persistent passwords by default.
 - Prefer token/password in memory for current job when possible.
-- If writing `host.yaml`, create it with mode `0600` and document its lifecycle.
+- `host.yaml` is already written atomically with mode `0600` today
+  (`internal/webui/webui.go`), so keep that; only document its lifecycle.
+- **`host.yaml` currently lives in the same working dir as every artifact**
+  (plaintext credentials next to the files an export would bundle). It must be
+  **explicitly excluded from any archive/report/export bundle** (PR 75). Moving it
+  out of the working dir is optional; excluding it from bundles is mandatory.
 - Never copy credentials into artifacts or reports.
-- Redact secrets in logs and UI.
+- Redact secrets in logs and UI. Before PR 69, audit that the exec tail, reports
+  and `events.jsonl` do not already echo the config/credentials.
 - Saved profiles should initially store non-secret connection metadata only.
+- The **job journal (`job.json`, §6)** must record job identity and progress only —
+  never credentials, never the resolved argv if it could contain a secret.
 
 ## 13. Green criteria
 
@@ -419,19 +484,27 @@ Default recommendation:
 
 ## 14. Roadmap
 
-### PR 69 — Setup Flow + Rehydration Foundation
+### PR 69 — Setup Flow + In-Flight Job Rehydration
 
-Goal: ensure the UI never loses migration context.
+Goal: ensure the UI never loses migration context — including while a job is running.
+
+Primary deliverable — **the job journal (`job.json`)**: a persisted, per-session
+record of the in-flight/last exec (identity, start time, phase, item where
+available, status, tail reference). This is the one genuinely missing foundation;
+everything else in this PR is setup and reuse. Without it, PR 70 (SSE) has no job
+identity to reattach to.
 
 Scope:
 
-- wizard for new migration
-- source/destination/account setup
-- safe credential handling decision for initial implementation
-- rehydration endpoint/view-model from session + artifacts + timeline
-- current job state model
-- clearer empty/error states
-- no redesign beyond what is needed for setup/rehydration
+- **job journal (`job.json`)**: persist exec identity + progress; surface an
+  already-running exec on refresh; replace the opaque `409` with a readable state.
+- **reuse** completed-state rehydration (`readArtifactFacts`) — do NOT reimplement it.
+- rehydration view-model = `readArtifactFacts` + `job.json` + timeline.
+- wizard for new migration; source/destination/account setup.
+- safe credential handling decision for initial implementation (see §12).
+- backup detection so Rollback is offered only when a backup exists (§11).
+- clearer empty/error states.
+- no redesign beyond what is needed for setup/rehydration.
 
 Out of scope:
 
@@ -441,6 +514,10 @@ Out of scope:
 - new collectors
 - full Flight Director design
 - cutover automation
+
+If this PR grows too large, split it: **69a** = job journal + surface running exec
+(minimal foundation), **69b** = setup wizard + credential decision. SSE (PR 70)
+stays immediately after.
 
 ### PR 70 — Live Job Engine: SSE + Progress/Log History
 
@@ -500,7 +577,7 @@ Goal: prevent false-ready cutover.
 
 Scope:
 
-- final sync phase
+- final sync phase (= re-run existing apply for selected phases + freeze-window guidance; NOT a new delta engine, see §10 and §15)
 - DB dynamic-site warning
 - fresh final verify
 - cutover decision screen
@@ -545,6 +622,14 @@ Before implementation, decide:
 4. What is the stale threshold for source snapshots before cutover?
 5. What does resume mean after an interrupted migration?
 6. What is the recommended observation/quarantine period before declaring the old server dismissible?
+7. **Job journal schema (`job.json`)** — open: which fields (action, started_at,
+   phase, item, status, tail reference), where it lives per-session, and its TTL.
+   To be finalized when PR 69 starts.
+8. **Item-level progress** — extend `--json-events` to all phases (§7 option A) or
+   accept phase-level progress for DNS/email/cron/pipeline (§7 option B)?
+9. **`host.yaml` location** — decided: keep in place, but **exclude it from every
+   archive/report/export bundle** (§12). Moving it out of the working dir remains
+   optional.
 
 ## 17. Recommended next step
 
