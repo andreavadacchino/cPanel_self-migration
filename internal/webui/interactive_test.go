@@ -23,10 +23,11 @@ const testHost = "127.0.0.1:8422"
 // fakeRunner records every step invocation and can be scripted to block or
 // fail; it stands in for the subprocess execution of the tool's own binary.
 type fakeRunner struct {
-	mu    sync.Mutex
-	calls []recordedStep
-	fail  string        // step name that should fail
-	gate  chan struct{} // when non-nil, block each step until closed
+	mu     sync.Mutex
+	calls  []recordedStep
+	fail   string            // step name that should fail
+	gate   chan struct{}     // when non-nil, block each step until closed
+	onCall func(name string) // when non-nil, invoked after recording each step (side effects for orchestrator gate tests)
 }
 
 type recordedStep struct {
@@ -44,7 +45,11 @@ func (f *fakeRunner) run(ctx context.Context, out io.Writer, name string, argv [
 	}
 	f.mu.Lock()
 	f.calls = append(f.calls, recordedStep{name: name, argv: append([]string{}, argv...)})
+	hook := f.onCall
 	f.mu.Unlock()
+	if hook != nil {
+		hook(name)
+	}
 	fmt.Fprintf(out, "step %s ok\n", name)
 	if name == f.fail {
 		return fmt.Errorf("scripted failure in %s", name)

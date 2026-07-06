@@ -28,10 +28,46 @@ Plan→Scope→Execution**, non il motore. Tre decisioni bloccate (tutte Opzione
    (riusa `readArtifactFacts`), nessun nuovo writer/CLI. `migration_plan.json`
    persistente rimandato finché lo schema non è product-validated.
 
-**Fase 1 (PR #78) e Fase 2: IMPLEMENTATE.** Prossima fase tecnica consigliata: **Fase 3 — Smart
-Migration Orchestrator** (bottone «Avvia» + esecuzione aree safe in-scope in sequenza, verify per
-fase, stop-on-fail; il gate server-side dell'orchestratore arriva qui). I numeri GitHub reali
-sono assegnati all'apertura delle PR.
+**Fase 1 (PR #78), Fase 2 (PR #79) e Fase 3: IMPLEMENTATE.** Prossima fase tecnica consigliata:
+**Fase 4 — Progress + Execution Monitor** (monitor esecuzione per fase; SSE solo se il dogfooding
+reale su una migrazione lunga lo giustifica — vedi PR #70). I numeri GitHub reali sono assegnati
+all'apertura delle PR.
+
+## Fase 3 — Smart Migration Orchestrator — COMPLETATA (2026-07-06)
+
+Il bottone «Avvia migrazione» diventa reale: **una sola strong-confirmation** avvia in sequenza le
+aree automatiche/safe/in-scope, DNS **mai** nell'auto-run. Consegnato:
+
+- **`internal/webui/workbench_orchestrator.go`**: `buildOrchestratorPhases(dir, f, scope)` deriva le
+  fasi **server-side** (contenuti se File/DB/Email in scope → un solo `migrate_content` con
+  `--file/--db/--mail` coerenti; config email/cron **automatiche solo se il piano esiste**, stessa
+  classifica del Migration Plan). `runOrchestration` esegue con **gate `isApplyBlockedByChecklist`
+  ricontrollato PRIMA di ogni fase write** (roadmap §14.3), verify inline dove esiste (email/cron con
+  **`--fail-on-drift`** → un drift ferma il run come un apply fallito), `migrate_content` =
+  `completed_with_report` (nessun verify clean finto), stop-on-first-failure, attach artifact
+  best-effort, journal per-fase. **Nessun rollback automatico.**
+- **`handleStartMigration`** (POST `/workbench/session/<id>/start-migration`, CSRF via `server.post`):
+  richiede Setup + `ScopeConfirmedAt`, **una** strong-confirmation (`validateStrongConfirmation`),
+  ricalcola `artifactFacts`+`contentScope`+`MigrationPlan` (non si fida dello scope salvato), rifiuta
+  se `!CanStartMigration` o nessuna fase automatica, riserva lo **slot single-writer condiviso**
+  (409 leggibile via `busyMessage`), redirect `?migrate=<code>`.
+- **`contentScope` è ora gate server-side reale per l'orchestratore**: area esclusa = nessun flag/fase.
+  Il path `/exec` avanzato NON è cambiato (rischio invariato: il vero gate write resta la
+  strong-confirmation per-account + checklist).
+- **Estrazione helper argv condivisi** in `workbench_exec.go` (`migrateContentArgv`,
+  `email/cronApplyArgv`, `email/cronVerifyArgv(failOnDrift)`), riusati da registry `/exec` E
+  orchestratore → **nessuna duplicazione di logica pericolosa** (`--yes-apply-writes`/`--backup`/`--apply`
+  vivono una volta sola), **nessun nuovo writer/CLI**.
+- **UI** (`screen_migrazione`): bottone «Avvia migrazione» attivo (`StartEnabled`) solo con piano
+  pronto + scope confermato + nessun job live; `migrationCTALabel(p, jobLive)` aggiornata (attiva
+  «Avvia migrazione» / «Migrazione in corso»); flash `migrateFlash`
+  (done/done_manual/partial/gate_stopped/blocked/no_auto/scope_unconfirmed/needs_setup) — la UI non
+  promette «completato» quando è parziale.
+- **Fuori scope confermato**: nessun `migration_plan.json`, nessuna SSE, nessun Campaign Mode/queue,
+  nessuno switch DNS, `dns_apply` resta azione avanzata / Danger Zone.
+- Test: 18 unit/handler webui (15 obbligatori + gate mid-run §14.3 + CSRF + cron-senza-piano);
+  regressione `/exec`/plan/scope verde. Gate: gofmt/vet puliti, go test webui/workbench/config verde,
+  race verde, `git diff --check` pulito; **go-reviewer + Docker LINUX_ALL_GREEN = gate utente**.
 
 ## Fase 2 — Scope Confirmation after Preflight — COMPLETATA (2026-07-06)
 

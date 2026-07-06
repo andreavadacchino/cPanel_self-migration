@@ -107,9 +107,13 @@ type migrationPlan struct {
 	Blocked bool
 	// ScopeConfirmed and CanEditScope are Fase 2 presentation fields, set by
 	// buildWorkbenchView (they need the session + live-job state, not just facts).
-	ScopeConfirmed  bool
-	CanEditScope    bool
-	CTALabel        string // state-aware label of the (still disabled) start CTA
+	ScopeConfirmed bool
+	CanEditScope   bool
+	// StartEnabled is true when the Fase 3 one-click orchestrator may actually
+	// run: plan ready, not blocked, scope confirmed, at least one automatic area,
+	// and no job live. When false the CTA renders as a disabled badge with CTALabel.
+	StartEnabled    bool
+	CTALabel        string // state-aware label of the start CTA
 	StartSummary    string
 	NotReadyMessage string
 	Areas           []migrationPlanArea
@@ -168,10 +172,11 @@ func applyBlockers(f artifactFacts, scope contentScope) (inScope, excluded []mig
 	return inScope, excluded
 }
 
-// migrationCTALabel is the state-aware copy of the (still disabled) "Avvia
-// migrazione" CTA. Priority: not-ready > blocked > scope-not-confirmed > ready.
-// The button itself remains inactive until the Fase 3 orchestrator.
-func migrationCTALabel(p migrationPlan) string {
+// migrationCTALabel is the state-aware copy of the "Avvia migrazione" CTA.
+// Priority: not-ready > blocked > scope-not-confirmed > no-automatic-area >
+// job-live > ready. When ready and no job is live the label is the active
+// "Avvia migrazione" (the template renders it as a real button, Fase 3).
+func migrationCTALabel(p migrationPlan, jobLive bool) string {
 	switch {
 	case !p.Ready:
 		return "Esegui il preflight prima di avviare"
@@ -179,10 +184,12 @@ func migrationCTALabel(p migrationPlan) string {
 		return "Migrazione bloccata: risolvi i problemi"
 	case !p.ScopeConfirmed:
 		return "Conferma lo scope prima di avviare"
-	case p.CanStartMigration:
-		return "Avvia migrazione — disponibile nella Fase 3"
-	default:
+	case !p.CanStartMigration:
 		return "Nessuna area automatica da avviare"
+	case jobLive:
+		return "Migrazione in corso"
+	default:
+		return "Avvia migrazione"
 	}
 }
 

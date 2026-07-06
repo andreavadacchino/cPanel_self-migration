@@ -116,19 +116,25 @@ func TestCanEditScope(t *testing.T) {
 	}
 }
 
-// Case 10 — the CTA copy reflects the state: blocked > not-confirmed > ready.
+// Case 10 — the CTA copy reflects the state: blocked > not-confirmed >
+// no-automatic-area > job-live > ready.
 func TestMigrationCTALabel(t *testing.T) {
-	if got := migrationCTALabel(migrationPlan{Ready: false}); !strings.Contains(strings.ToLower(got), "preflight") {
+	if got := migrationCTALabel(migrationPlan{Ready: false}, false); !strings.Contains(strings.ToLower(got), "preflight") {
 		t.Errorf("not-ready CTA should mention preflight, got %q", got)
 	}
-	if got := migrationCTALabel(migrationPlan{Ready: true, Blocked: true}); !strings.Contains(strings.ToLower(got), "blocc") {
+	if got := migrationCTALabel(migrationPlan{Ready: true, Blocked: true}, false); !strings.Contains(strings.ToLower(got), "blocc") {
 		t.Errorf("blocked CTA should mention blocco, got %q", got)
 	}
-	if got := migrationCTALabel(migrationPlan{Ready: true, ScopeConfirmed: false}); !strings.Contains(strings.ToLower(got), "conferma") {
+	if got := migrationCTALabel(migrationPlan{Ready: true, ScopeConfirmed: false}, false); !strings.Contains(strings.ToLower(got), "conferma") {
 		t.Errorf("unconfirmed CTA should ask to confirm, got %q", got)
 	}
-	if got := migrationCTALabel(migrationPlan{Ready: true, ScopeConfirmed: true, CanStartMigration: true}); !strings.Contains(got, "Fase 3") {
-		t.Errorf("confirmed+ready CTA should defer to Fase 3, got %q", got)
+	// Fase 3: confirmed + ready + no job live → the active "Avvia migrazione" copy.
+	if got := migrationCTALabel(migrationPlan{Ready: true, ScopeConfirmed: true, CanStartMigration: true}, false); !strings.Contains(strings.ToLower(got), "avvia migrazione") {
+		t.Errorf("confirmed+ready CTA should be the active start label, got %q", got)
+	}
+	// A live job freezes the CTA into "Migrazione in corso".
+	if got := migrationCTALabel(migrationPlan{Ready: true, ScopeConfirmed: true, CanStartMigration: true}, true); !strings.Contains(strings.ToLower(got), "in corso") {
+		t.Errorf("job-live CTA should say in corso, got %q", got)
 	}
 }
 

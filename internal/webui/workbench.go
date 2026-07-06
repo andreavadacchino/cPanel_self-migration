@@ -171,7 +171,12 @@ func (ws *workbenchServer) handleScreen(w http.ResponseWriter, r *http.Request, 
 		busy = ws.jobBusy()
 	}
 	view := buildWorkbenchView(ws.dir, ws.csrf, screen, sess, busy)
+	// One-shot flashes from a redirect round-trip: the Fase 2 scope confirm
+	// (?scope=) or the Fase 3 orchestrator outcome (?migrate=). At most one is set.
 	view.Flash = scopeFlash(r.URL.Query().Get("scope"))
+	if m := migrateFlash(r.URL.Query().Get("migrate")); m != "" {
+		view.Flash = m
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := ws.tpl.ExecuteTemplate(w, tplName, view); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
