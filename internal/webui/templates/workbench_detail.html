@@ -75,14 +75,14 @@
   {{if ne .Next.Screen ""}}<a href="/workbench/session/{{.Session.ID}}/{{.Next.Screen}}">Vai →</a>{{end}}
 </div>{{end}}
 
-{{/* Panoramica (screen 1) — base detail route. The migration identity + status
-     now live in the persistent fdHeader, so this stage opens with the screen
-     title and the full next-action call-out. */}}
+{{/* Panoramica (screen 1) = the Migration Cockpit. The persistent fdHeader
+     (identity, route, status, risk badge, next action) stays above; this stage
+     is the cabin: a hero with the ONE dominant action, a horizontal journey
+     stepper, the source↔destination comparison, the simplified plan, the
+     migration-vs-cutover blockers and the execution monitor. Engineering
+     surfaces (definition, governance, history, artifacts) move into a single
+     collapsed <details> — available, not the primary language. */}}
 {{template "wbHead" .}}
-
-<h1>Panoramica <span class="muted">— {{.Session.Name}}</span></h1>
-
-{{template "nextActionBox" .}}
 
 {{if and .Session.Setup (not .Facts.HostYAMLPresent)}}
 <div class="warnbox">
@@ -91,36 +91,157 @@
 </div>
 {{end}}
 
+{{/* HERO — where we are + the single dominant call-to-action. */}}
+<section class="cockpit-hero cockpit-{{.Cockpit.StateClass}}">
+  <div class="cockpit-hero-main">
+    <span class="cockpit-hero-lead">Stato migrazione</span>
+    <span class="cockpit-hero-state">{{.Cockpit.StateLabel}}</span>
+    {{if .Cockpit.CTA.Detail}}<p class="cockpit-hero-detail">{{.Cockpit.CTA.Detail}}</p>{{end}}
+  </div>
+  <div class="cockpit-hero-cta">
+    {{with .Cockpit.CTA}}
+      {{if eq .Kind "start"}}
+        {{template "startMigrationForm" $}}
+      {{else if eq .Kind "wait"}}
+        <div class="cockpit-cta-wait">&#9203; {{.Label}}<br><span class="muted">La pagina si aggiorna automaticamente.</span></div>
+      {{else}}
+        <a class="btn btn-primary cockpit-cta-btn" href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}">{{.Label}} &rarr;</a>
+      {{end}}
+    {{end}}
+  </div>
+</section>
+
+{{/* Horizontal journey stepper — reuses the seven Flight Director phases. */}}
+<nav class="cockpit-steps" aria-label="Percorso della migrazione">
+  {{range .Cockpit.Steps}}
+  <a class="cockpit-step cockpit-{{.State}}{{if .Current}} cockpit-current{{end}}" href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}"{{if .Current}} aria-current="step"{{end}}>
+    <span class="cockpit-step-dot dot {{fdDot .State}}"></span>
+    <span class="cockpit-step-label">{{.Label}}</span>
+    <span class="cockpit-step-cap">{{.Caption}}</span>
+  </a>
+  {{end}}
+</nav>
+
+{{/* Comparativa sorgente ↔ destinazione — only real checklist counts. */}}
+<section class="card">
+  <h2>Comparativa account</h2>
+  {{if .Cockpit.HasCompare}}
+  <p class="muted">Valori letti dalla verifica migrazione. I conteggi sono <strong>per area</strong> (caselle email, database, job cron, zone DNS) — non messaggi o tabelle, che non sono disponibili senza inventare dati.</p>
+  <div class="tablewrap">
+  <table class="cockpit-compare">
+    <thead><tr><th>Area</th><th>Sorgente</th><th>Destinazione</th><th>Stato</th><th>Azione</th></tr></thead>
+    <tbody>
+    {{range .Cockpit.Comparison}}
+    <tr>
+      <td><strong>{{.Label}}</strong></td>
+      <td>{{if .HasCount}}{{.Source}}{{else}}<span class="muted">—</span>{{end}}</td>
+      <td>{{if .HasCount}}{{.Dest}}{{else}}<span class="muted">—</span>{{end}}</td>
+      <td><span class="badge {{.StateClass}}">{{.State}}</span></td>
+      <td class="muted">{{.Action}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  {{else}}
+  <div class="warnbox">Non ancora disponibile: esegui il preflight per popolare questa sezione.</div>
+  {{end}}
+</section>
+
+{{/* Piano semplificato — tre card. Dettagli/coverage restano nel piano completo. */}}
+<section class="card">
+  <h2>Piano di migrazione</h2>
+  <div class="cockpit-plan-grid">
+    <div class="cockpit-plan-card cockpit-plan-auto">
+      <h3>Automatico</h3>
+      {{if .Cockpit.Plan.Automatic}}<ul class="stack">{{range .Cockpit.Plan.Automatic}}<li><strong>{{.Label}}</strong><span class="muted">{{.Summary}}</span></li>{{end}}</ul>{{else}}<p class="muted">Nessuna area automatica pronta.</p>{{end}}
+    </div>
+    <div class="cockpit-plan-card cockpit-plan-manual">
+      <h3>Manuale / verificabile</h3>
+      {{if .Cockpit.Plan.Manual}}<ul class="stack">{{range .Cockpit.Plan.Manual}}<li><strong>{{.Label}}</strong><span class="muted">{{.Summary}}</span></li>{{end}}</ul>{{else}}<p class="muted">Nessun task manuale.</p>{{end}}
+    </div>
+    <div class="cockpit-plan-card cockpit-plan-excluded">
+      <h3>Escluso o non pronto</h3>
+      {{if .Cockpit.Plan.Excluded}}<ul class="stack">{{range .Cockpit.Plan.Excluded}}<li><strong>{{.Label}}</strong><span class="muted">{{.Summary}}</span></li>{{end}}</ul>{{else}}<p class="muted">Nessuna area esclusa.</p>{{end}}
+    </div>
+  </div>
+  <p class="cockpit-plan-link"><a href="/workbench/session/{{.Session.ID}}/migrazione">Apri il piano dettagliato e conferma lo scope &rarr;</a></p>
+</section>
+
+{{/* Blocker migrazione vs cutover — reso esplicito (dogfooding #4 §6.2). */}}
+{{if or .Cockpit.MigrationBlocked .Cockpit.MigrationBlockers .Cockpit.CutoverBlockers .Cockpit.PendingCutover}}
+<section class="card">
+  <h2>Blocchi e attenzioni</h2>
+  {{if or .Cockpit.MigrationBlocked .Cockpit.MigrationBlockers}}
+  <div class="warnbox">
+    <strong>Bloccante migrazione</strong> — impedisce l'avvio della migrazione automatica finché non è risolto (rigenera l'analisi, non accettare).
+    {{if .Cockpit.MigrationBlockers}}<ul>{{range .Cockpit.MigrationBlockers}}<li><strong>{{.Area}}</strong>: {{.Detail}}</li>{{end}}</ul>{{end}}
+  </div>
+  {{end}}
+  {{if or .Cockpit.CutoverBlockers .Cockpit.PendingCutover}}
+  <div class="banner warn">
+    <strong>Bloccante cutover</strong> — <em>non</em> blocca la migrazione automatica: la migrazione può partire. Questi task vanno chiusi prima del <strong>cutover finale</strong> (spegnimento del vecchio server).
+    {{if .Cockpit.CutoverBlockers}}<ul>{{range .Cockpit.CutoverBlockers}}<li>{{.}}</li>{{end}}</ul>{{end}}
+    {{if .Cockpit.PendingCutover}}<ul>{{range .Cockpit.PendingCutover}}<li>{{manualTitleIT .}}</li>{{end}}</ul>{{end}}
+  </div>
+  {{end}}
+</section>
+{{end}}
+
+{{/* Execution monitor — real progress or honest degradation, never fake. */}}
+{{if .Cockpit.Monitor.Active}}
+{{with .Cockpit.Monitor}}
+<section class="card">
+  <h2>Monitor esecuzione</h2>
+  {{if .Job}}<p class="muted">Job <strong>{{.Job.Action}}</strong> — avviato {{fmtTime .Job.StartedAt}}, ultimo aggiornamento {{fmtTime .Job.UpdatedAt}}.{{if .JobLive}} La pagina si aggiorna automaticamente ogni 2 s.{{end}}</p>{{end}}
+  <div class="cockpit-phases">
+    {{range .Phases}}
+    <div class="cockpit-phase">
+      <span class="badge {{.StateClass}}">{{.StateLabel}}</span>
+      <div><strong>{{.Label}}</strong>{{if .Detail}}<div class="muted">{{.Detail}}</div>{{end}}</div>
+    </div>
+    {{end}}
+  </div>
+  {{if .RunPhases}}
+  <details class="section" open><summary><strong>Avanzamento contenuti (dagli eventi)</strong></summary>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Fase</th><th>Stato</th><th>Dettaglio</th></tr></thead>
+      <tbody>{{range .RunPhases}}<tr><td>{{.Label}}</td><td><span class="badge {{.StateClass}}">{{.StateLabel}}</span></td><td class="mono">{{if .Summary}}{{.Summary}}{{else}}<span class="muted">—</span>{{end}}</td></tr>{{end}}</tbody>
+    </table></div>
+    <p class="muted">Dettaglio reale per casella email, nome database e file falliti. Conteggi per singolo messaggio o tabella non sono disponibili.</p>
+  </details>
+  {{else if .JobLive}}
+  <p class="muted">Fase in corso — dettaglio item non disponibile.</p>
+  {{end}}
+  <details class="section"><summary><strong>Log esecuzione</strong></summary>
+    {{if .Log}}<pre class="tail">{{range .Log}}{{.}}
+{{end}}</pre>{{else}}<p class="muted">Nessun log disponibile.</p>{{end}}
+    <p class="muted">Solo eventi e messaggi d'errore sicuri (già ripuliti): nessuna credenziale, nessun host, nessun comando.</p>
+  </details>
+</section>
+{{end}}
+{{end}}
+
+{{/* Engineering surfaces — available but no longer the primary language. */}}
+<details class="section">
+<summary><strong>Dettagli tecnici</strong> — definizione, stato per fase, governance, cronologia, report</summary>
+
 {{with .Session.Setup}}
-<div class="section">
-<h2>Definizione della migrazione</h2>
+<h3>Definizione della migrazione</h3>
 <dl class="meta">
   {{if .PrimaryDomain}}<dt>Dominio principale</dt><dd>{{.PrimaryDomain}}</dd>{{end}}
   <dt>Server sorgente</dt><dd>{{.Source.Account}}<span class="muted">@</span>{{.Source.Host}}{{if .Source.Port}}<span class="muted">:{{.Source.Port}}</span>{{end}}</dd>
   <dt>Server destinazione</dt><dd>{{.Destination.Account}}<span class="muted">@</span>{{.Destination.Host}}{{if .Destination.Port}}<span class="muted">:{{.Destination.Port}}</span>{{end}}</dd>
-  <dt>Contenuti da migrare</dt><dd>
-    {{$c := .Content}}
-    {{if $c.Files}}<span class="badge">File del sito</span> {{end}}
-    {{if $c.Databases}}<span class="badge">Database</span> {{end}}
-    {{if $c.Email}}<span class="badge">Email</span> {{end}}
-    {{if $c.EmailConfig}}<span class="badge">Config. email</span> {{end}}
-    {{if $c.Cron}}<span class="badge">Cron</span> {{end}}
-    {{if $c.DNS}}<span class="badge error">DNS (delicato)</span>{{else}}<span class="muted">— DNS non incluso</span>{{end}}
-  </dd>
   {{if .Notes}}<dt>Note</dt><dd>{{.Notes}}</dd>{{end}}
 </dl>
-</div>
 {{end}}
 
-<div class="section">
-<h2>Stato per fase</h2>
+<h3>Stato per fase</h3>
 <ul class="sema">
 {{range .Phases}}<li><span class="dot {{.State}}"></span>{{.Label}}</li>{{end}}
 </ul>
-</div>
 
-<div class="section">
-<h2>Riepilogo</h2>
+<h3>Riepilogo</h3>
 <dl class="meta">
   <dt>Sorgente</dt><dd>{{.Session.SourceProfile}}</dd>
   <dt>Destinazione</dt><dd>{{.Session.DestinationProfile}}</dd>
@@ -128,10 +249,8 @@
   <dt>Aggiornata</dt><dd>{{fmtTime .Session.UpdatedAt}}</dd>
   {{if .Session.LastError}}<dt>Ultimo errore</dt><dd style="color:#9b1c1c">{{.Session.LastError}}</dd>{{end}}
 </dl>
-</div>
 
-<div class="section">
-<h2>Governance</h2>
+<h3>Governance</h3>
 <p class="muted">Lo stato di governance è un'attestazione umana: alcune fasi non lo avanzano da sole. Cambialo qui quando hai completato il passo.</p>
 <fieldset>
 <legend>Cambia stato</legend>
@@ -147,10 +266,8 @@
   <button type="submit">Imposta stato</button>
 </form>
 </fieldset>
-</div>
 
-<div class="section">
-<h2>Cronologia ({{len .Session.Timeline}} eventi)</h2>
+<h3>Cronologia ({{len .Session.Timeline}} eventi)</h3>
 {{if .Session.Timeline}}
 <table class="timeline">
 <thead><tr><th>Ora</th><th>Azione</th><th>Dettagli</th></tr></thead>
@@ -167,10 +284,7 @@
 {{else}}
 <p class="muted">Nessun evento.</p>
 {{end}}
-</div>
 
-<details class="section">
-<summary><strong>Dettagli tecnici</strong> — report allegati e allega manuale</summary>
 <h3>Report ({{len .Session.Artifacts}})</h3>
 {{if .Session.Artifacts}}
 <table>
@@ -216,3 +330,14 @@
 {{define "execFormWrite"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Digita <strong>{{$name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
 
 {{define "execFormRollback"}}{{$id := index . 0}}{{$name := index . 1}}{{$csrf := index . 2}}{{$action := index . 3}}{{$label := index . 4}}<fieldset style="margin:.5rem 0"><legend>{{$label}}</legend><form method="POST" action="/workbench/session/{{$id}}/exec"><input type="hidden" name="csrf" value="{{$csrf}}"><input type="hidden" name="action" value="{{$action}}"><label>Digita <strong>{{$name}}</strong> per confermare: <input type="text" name="confirm_account" size="20" autocomplete="off" required></label><label>Digita di nuovo per annullare le modifiche: <input type="text" name="confirm_rollback" size="20" autocomplete="off" required></label> <button type="submit" class="danger">{{$label}}</button></form></fieldset>{{end}}
+
+{{/* startMigrationForm — the ONE strong-confirmation that starts the smart
+     orchestrator (Fase 3). Shared by the cockpit hero and the "Cosa verrà
+     migrato" screen so the confirmation copy and the POST target stay identical
+     (no duplicated dangerous form logic). */}}
+{{define "startMigrationForm"}}<form method="post" action="/workbench/session/{{.Session.ID}}/start-migration" class="cockpit-start-form">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <label>Per confermare, digita il nome dell'account (<code>{{.Session.Name}}</code>):<br>
+    <input type="text" name="confirm_account" size="24" autocomplete="off" required></label>
+  <button type="submit" class="btn-primary">Avvia migrazione</button>
+</form>{{end}}

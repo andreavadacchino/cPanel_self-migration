@@ -58,11 +58,22 @@ func buildRiskBadge(status workbench.Status, f artifactFacts, scope contentScope
 	case workbench.StatusBlocked, workbench.StatusFailed:
 		return riskBadge{"Attenzione", "error"}
 	}
-	// 4. Checklist blocker (same oracle as nextAction/applyBlocked).
-	if f.Checklist != nil && (f.Checklist.ApplyBlocked ||
-		f.Checklist.OverallStatus == accountinventory.OverallBlocked ||
-		f.Checklist.OverallStatus == accountinventory.OverallNotReady) {
-		return riskBadge{"Bloccante", "error"}
+	// 4. Checklist blocker — distinguish migration-blocking from cutover-only
+	// blocking (dogfooding #4 §6.2). A checklist can be OverallBlocked for the
+	// CUTOVER while the migration itself is legitimately startable
+	// (ApplyBlocked=false): the header must not shout an error-red "Bloccante"
+	// next to an active "Avvia migrazione". Migration-blocking uses the same
+	// oracle as nextAction/applyBlocked and stays red; cutover-only blocking is a
+	// milder "Bloccante cutover" warning.
+	if f.Checklist != nil {
+		applyBlocked := f.Checklist.ApplyBlocked ||
+			f.Checklist.OverallStatus == accountinventory.OverallNotReady
+		switch {
+		case applyBlocked:
+			return riskBadge{"Bloccante migrazione", "error"}
+		case f.Checklist.OverallStatus == accountinventory.OverallBlocked:
+			return riskBadge{"Bloccante cutover", "warn"}
+		}
 	}
 	// 5. A wizard session whose credentials (host.yaml) are not set yet.
 	if scope.HasSetup && !f.HostYAMLPresent {

@@ -51,14 +51,36 @@ func TestRiskBadgeConfigRequired(t *testing.T) {
 	}
 }
 
-// A checklist blocker outranks a merely-missing config.
+// A migration blocker (apply-blocked) outranks a merely-missing config and is
+// labelled distinctly from a cutover-only block (dogfooding #4 §6.2).
 func TestRiskBadgeBlocking(t *testing.T) {
 	f := artifactFacts{HostYAMLPresent: true, Checklist: &accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1, ApplyBlocked: true,
 	}}
 	got := buildRiskBadge(workbench.StatusChecklistReady, f, legacyScope(), nil, false)
-	if got.Label != "Bloccante" || got.Class != "error" {
-		t.Errorf("apply-blocked risk = %+v, want Bloccante/error", got)
+	if got.Label != "Bloccante migrazione" || got.Class != "error" {
+		t.Errorf("apply-blocked risk = %+v, want Bloccante migrazione/error", got)
+	}
+}
+
+// Cutover-only blocking (OverallBlocked but ApplyBlocked=false) must NOT read as
+// a migration blocker: the migration is startable, so the badge is a milder
+// "Bloccante cutover" warning, visibly distinct from the migration blocker.
+func TestRiskBadgeCutoverBlockingDistinct(t *testing.T) {
+	f := artifactFacts{HostYAMLPresent: true, Checklist: &accountinventory.MigrationChecklist{
+		Mode: "migration-checklist", FormatVersion: 1,
+		ApplyBlocked: false, OverallStatus: accountinventory.OverallBlocked,
+	}}
+	got := buildRiskBadge(workbench.StatusChecklistReady, f, legacyScope(), nil, false)
+	if got.Label != "Bloccante cutover" || got.Class != "warn" {
+		t.Errorf("cutover-only block risk = %+v, want Bloccante cutover/warn", got)
+	}
+	// And it must be a different label than the migration blocker.
+	mig := buildRiskBadge(workbench.StatusChecklistReady, artifactFacts{HostYAMLPresent: true,
+		Checklist: &accountinventory.MigrationChecklist{Mode: "migration-checklist", FormatVersion: 1, ApplyBlocked: true},
+	}, legacyScope(), nil, false)
+	if got.Label == mig.Label {
+		t.Errorf("cutover and migration blockers share label %q", got.Label)
 	}
 }
 

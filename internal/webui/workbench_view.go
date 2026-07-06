@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/accountinventory"
 	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
@@ -485,6 +486,10 @@ type workbenchView struct {
 	// migrato" screen: what is automatic / manual / blocking / excluded, and
 	// what happens if the operator presses "Avvia migrazione". Read-only.
 	Plan migrationPlan
+	// Cockpit is the Fase 4 modern-cockpit read-model rendered on the Panoramica:
+	// hero state + dominant CTA, horizontal stepper, source↔destination
+	// comparison, simplified plan buckets and the execution monitor. Read-only.
+	Cockpit cockpitModel
 	// Flash is a transient message rendered once (e.g. after a scope confirm
 	// round-trip), derived from a query param — never persisted.
 	Flash string
@@ -686,6 +691,18 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBu
 	v.Plan.CTALabel = migrationCTALabel(v.Plan, v.JobLive)
 	if f.Checklist != nil {
 		v.OverallLabel = overallLabelIT(f.Checklist.OverallStatus)
+	}
+	// Fase 4 — Modern Migration Cockpit. Reconcile the persistent next action with
+	// the plan readiness on EVERY screen (dogfooding #4 §6.1: the header must not
+	// keep asking for the preflight when the checklist + plan already say the
+	// migration is startable) — this is cheap and aligns the fdHeader everywhere.
+	v.Next = reconcileNextAction(v.Next, sess.Status, f, v.Plan, v.Job, v.JobLive)
+	// The cockpit itself (comparison + execution monitor) is rendered ONLY on the
+	// Panoramica, so build it — and read events.jsonl via loadRunMonitor (fail-soft,
+	// bounded tail) — only there, never on the other six screens.
+	if screen == screenPanoramica {
+		run := loadRunMonitor(dir, time.Now())
+		v.Cockpit = buildCockpit(sess.Status, f, scope, v.Plan, v.Cutover, v.Timeline, v.Next, v.Job, v.JobLive, run)
 	}
 	return v
 }
