@@ -32,9 +32,35 @@ migrazione lunga**. Molto del valore SSE (reconnect, phase progress, stati) è g
 `job.json` + `loadRunMonitor` + meta-refresh; l'incremento reale è UX (no flicker, log-tail live)
 a costo di complessità (endpoint streaming long-lived, gate su GET persistente, reconnect).
 
-**Prossima direzione consigliata (NON iniziata): Setup Flow / New Migration Wizard** — semplificare
-il flusso operatore: nuova migrazione → sorgente → destinazione → account → cosa migrare → preflight.
-Possibile PR successiva: «Setup Flow / New Migration Wizard». Non iniziare codice SSE.
+## PR #72 — New Migration Wizard (setup flow) — COMPLETATA (2026-07-06)
+
+Mergiata su fork main (merge `43f29d6`). Consegnato:
+
+- **Wizard** `/workbench/new`: nuova migrazione → sorgente → destinazione → account cPanel →
+  cosa migrare → preflight, in linguaggio operatore.
+- **Modello dati** `internal/workbench/types.go`: `Endpoint` (host/porta/account, NESSUN campo
+  segreto), `ContentSelection` (files/db/email/email_config/cron/**dns separato opt-in**),
+  `SetupMeta`, `Session.Setup *SetupMeta` (pointer omitempty → sessioni vecchie leggono).
+  `Store.CreateWithSetup` (Create delega).
+- **Credenziali metadata-only** (scelta motivata dal codice): il wizard NON raccoglie segreti;
+  `host.yaml` (0600) resta la sede delle credenziali via il form `/config` esistente, collegato da
+  una callout. Anti-leak per costruzione (Endpoint senza segreto) + canary su disco + guardia
+  strutturale. Il wizard NON genera `host.yaml`.
+- **Gating frontend** dello schermo «Applica» su `Session.Setup.Content` (`contentScope`/
+  `deriveContentScope` → `workbenchView.Scope`): aree non selezionate = «non incluso», niente
+  apply/verify/rollback. Legacy `Setup==nil` invariato. Gating **frontend-only dichiarato**:
+  `/exec` non è gateato server-side, la conferma forte per-account resta il vero gate di scrittura.
+
+## PR #73 — Next actions scope-aware — COMPLETATA (2026-07-06)
+
+Chiude il debito UX residuo di #72: il banner «prossima azione consigliata» non cita più aree
+escluse dallo scope. `nextAction`/`missingVerifies` filtrano per `contentScope`; preflight elenca
+le aree incluse; DNS incluso → nota prudente; DNS/Cron/EmailConfig esclusi → mai citati; legacy
+invariato. Presentation-only, nessun writer/runner/apply/verify toccato.
+
+**Prossima direzione consigliata (NON iniziata): PR 71 — Flight Director UI** (header persistente,
+timeline laterale, main stage contestuale, next recommended action, risk badge). **SSE ancora
+rimandata** a dopo un dogfooding reale su una migrazione lunga. Non iniziare codice SSE.
 
 ## Stato consolidato al 2026-07-06
 

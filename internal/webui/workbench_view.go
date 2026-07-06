@@ -132,18 +132,83 @@ func readArtifactFacts(dir string) artifactFacts {
 	return f
 }
 
+// applyAreaLabels lists the operational areas to mention in the "apply" step,
+// filtered by the wizard scope. Legacy (no Setup) returns the historical set so
+// the banner text is byte-identical to before the wizard. "contenuti" bundles
+// mail/file/db (the migrate_content action); "email" is the email-config area.
+func (cs contentScope) applyAreaLabels() []string {
+	if !cs.HasSetup {
+		return []string{"contenuti", "email", "cron", "DNS"}
+	}
+	var out []string
+	if cs.ShowMigrateContent {
+		out = append(out, "contenuti")
+	}
+	if cs.IncludeEmailConfig {
+		out = append(out, "email")
+	}
+	if cs.IncludeCron {
+		out = append(out, "cron")
+	}
+	if cs.IncludeDNS {
+		out = append(out, "DNS")
+	}
+	return out
+}
+
+// includedAreaLabels returns operator-facing labels for the wizard-selected
+// areas, in a stable order. Empty for a legacy session (nil Setup), so the
+// preflight banner detail stays exactly as before.
+func (cs contentScope) includedAreaLabels() []string {
+	if !cs.HasSetup {
+		return nil
+	}
+	var out []string
+	if cs.IncludeFiles {
+		out = append(out, "File del sito")
+	}
+	if cs.IncludeDatabases {
+		out = append(out, "Database")
+	}
+	if cs.IncludeEmailContent {
+		out = append(out, "Email / Maildir")
+	}
+	if cs.IncludeEmailConfig {
+		out = append(out, "Configurazioni email")
+	}
+	if cs.IncludeCron {
+		out = append(out, "Cron")
+	}
+	if cs.IncludeDNS {
+		out = append(out, "DNS")
+	}
+	return out
+}
+
+// includedDetail is the "Questa migrazione include: …" line for the preflight
+// banner. Empty for legacy sessions (unchanged behaviour).
+func (cs contentScope) includedDetail() string {
+	labels := cs.includedAreaLabels()
+	if len(labels) == 0 {
+		return ""
+	}
+	return "Questa migrazione include: " + strings.Join(labels, ", ") + "."
+}
+
 // nextAction maps a governance status + artifact facts to the recommended
 // next step. Deterministic, total over AllStatuses, no invented scoring: the
 // text is the operator step toward the legal next status; refinements read
-// facts already computed by the engine (ApplyBlocked, verify presence).
-func nextAction(status workbench.Status, f artifactFacts) recommendedAction {
+// facts already computed by the engine (ApplyBlocked, verify presence). The
+// scope (wizard content selection) keeps the banner from citing areas the
+// operator did not include — legacy sessions (nil Setup) include everything.
+func nextAction(status workbench.Status, f artifactFacts, scope contentScope) recommendedAction {
 	applyBlocked := f.Checklist != nil && (f.Checklist.ApplyBlocked || f.Checklist.OverallStatus == accountinventory.OverallNotReady)
 
 	switch status {
 	case workbench.StatusDraft:
-		return recommendedAction{"Configura le connessioni ed esegui il preflight", screenPreflight, ""}
+		return recommendedAction{"Configura le connessioni ed esegui il preflight", screenPreflight, scope.includedDetail()}
 	case workbench.StatusPreflightRequired:
-		return recommendedAction{"Esegui il preflight verso sorgente e destinazione", screenPreflight, ""}
+		return recommendedAction{"Esegui il preflight verso sorgente e destinazione", screenPreflight, scope.includedDetail()}
 	case workbench.StatusInventoryReady:
 		return recommendedAction{"Esegui l'analisi per generare la verifica migrazione", screenPanoramica,
 			"L'operazione non avanza lo stato: poi avanzalo in Governance."}
@@ -159,14 +224,24 @@ func nextAction(status workbench.Status, f artifactFacts) recommendedAction {
 		if applyBlocked {
 			return recommendedAction{"Applicazione bloccata: risolvi i problemi bloccanti", screenApplica, ""}
 		}
-		return recommendedAction{"Applica le modifiche (contenuti, email, cron, DNS)", screenApplica, ""}
+		text := "Applica le modifiche"
+		if areas := scope.applyAreaLabels(); len(areas) > 0 {
+			text += " (" + strings.Join(areas, ", ") + ")"
+		}
+		// Prudent reminder ONLY when the operator explicitly opted DNS in via the
+		// wizard (legacy keeps its historical empty detail).
+		detail := ""
+		if scope.HasSetup && scope.IncludeDNS {
+			detail = "DNS incluso come area delicata: verifica piano e conferme prima di applicare."
+		}
+		return recommendedAction{text, screenApplica, detail}
 	case workbench.StatusApplyInProgress:
 		return recommendedAction{"Attendi il completamento dell'applicazione", screenApplica, ""}
 	case workbench.StatusApplyDone:
-		return recommendedAction{"Esegui le verifiche del risultato", screenApplica, missingVerifiesDetail(f)}
+		return recommendedAction{"Esegui le verifiche del risultato", screenApplica, missingVerifiesDetail(f, scope)}
 	case workbench.StatusVerificationRequired:
 		return recommendedAction{"Esegui le verifiche mancanti", screenApplica,
-			"La transizione a «Pronto per il cutover» è automatica quando tutte le verifiche sono pulite. " + missingVerifiesDetail(f)}
+			"La transizione a «Pronto per il cutover» è automatica quando tutte le verifiche sono pulite. " + missingVerifiesDetail(f, scope)}
 	case workbench.StatusReadyForCutover:
 		return recommendedAction{"Sei pronto: vai alla Chiusura", screenChiusura, ""}
 	case workbench.StatusCutoverDone:
@@ -184,20 +259,28 @@ func nextAction(status workbench.Status, f artifactFacts) recommendedAction {
 }
 
 // areaOrder is the fixed display order of the verify-bearing areas (DNS, Email,
-// Cron) with their Italian labels, used by missingVerifies.
+// Cron) with their Italian labels, used by missingVerifies. inScope reports
+// whether the area is part of the wizard content selection (always true for a
+// legacy session, where the scope includes everything).
 var areaOrder = []struct {
-	fa    func(artifactFacts) areaFacts
-	label string
+	fa      func(artifactFacts) areaFacts
+	label   string
+	inScope func(contentScope) bool
 }{
-	{func(f artifactFacts) areaFacts { return f.DNS }, "DNS"},
-	{func(f artifactFacts) areaFacts { return f.Email }, "Email"},
-	{func(f artifactFacts) areaFacts { return f.Cron }, "Cron"},
+	{func(f artifactFacts) areaFacts { return f.DNS }, "DNS", func(s contentScope) bool { return s.IncludeDNS }},
+	{func(f artifactFacts) areaFacts { return f.Email }, "Email", func(s contentScope) bool { return s.IncludeEmailConfig }},
+	{func(f artifactFacts) areaFacts { return f.Cron }, "Cron", func(s contentScope) bool { return s.IncludeCron }},
 }
 
-// missingVerifies lists the areas whose verify is not present or not CLEAN.
-func missingVerifies(f artifactFacts) []string {
+// missingVerifies lists the in-scope areas whose verify is not present or not
+// CLEAN. Areas the wizard excluded are skipped so the banner never asks the
+// operator to verify something outside the migration.
+func missingVerifies(f artifactFacts, scope contentScope) []string {
 	var out []string
 	for _, a := range areaOrder {
+		if !a.inScope(scope) {
+			continue
+		}
 		fa := a.fa(f)
 		if !fa.VerifyPresent || !fa.VerifyClean {
 			out = append(out, a.label)
@@ -206,8 +289,8 @@ func missingVerifies(f artifactFacts) []string {
 	return out
 }
 
-func missingVerifiesDetail(f artifactFacts) string {
-	m := missingVerifies(f)
+func missingVerifiesDetail(f artifactFacts, scope contentScope) string {
+	m := missingVerifies(f, scope)
 	if len(m) == 0 {
 		return "Tutte le verifiche sono pulite."
 	}
@@ -553,12 +636,13 @@ func sortedConfirms(f artifactFacts) []accountinventory.ManualAction {
 // journal (running + free slot → interrupted); it never triggers a write here.
 func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBusy bool) workbenchView {
 	f := readArtifactFacts(dir)
+	scope := deriveContentScope(sess)
 	v := workbenchView{
 		Session:     sess,
 		CSRF:        csrf,
 		Screen:      screen,
 		Facts:       f,
-		Next:        nextAction(sess.Status, f),
+		Next:        nextAction(sess.Status, f, scope),
 		Cutover:     cutoverReadiness(f),
 		Phases:      buildPhases(f, sess.Status),
 		Coverage:    buildCoverage(f),
@@ -568,7 +652,7 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBu
 		AllStatuses: workbench.AllStatuses,
 		AllKinds:    workbench.AllArtifactKinds,
 		Job:         reconcileJobJournal(dir, jobBusy),
-		Scope:       deriveContentScope(sess),
+		Scope:       scope,
 	}
 	v.JobLive = v.Job != nil && v.Job.State == jobStateRunning
 	if f.Checklist != nil {

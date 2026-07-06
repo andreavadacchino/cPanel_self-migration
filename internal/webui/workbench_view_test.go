@@ -21,7 +21,7 @@ func TestNextActionTotalOverAllStatuses(t *testing.T) {
 		screenChiusura: true,
 	}
 	for _, st := range workbench.AllStatuses {
-		got := nextAction(st, artifactFacts{})
+		got := nextAction(st, artifactFacts{}, legacyScope())
 		if strings.TrimSpace(got.Text) == "" {
 			t.Errorf("status %q: empty recommended action text", st)
 		}
@@ -48,7 +48,7 @@ func TestNextActionKeyStatuses(t *testing.T) {
 		{workbench.StatusCutoverDone, screenChiusura},
 	}
 	for _, c := range cases {
-		got := nextAction(c.status, artifactFacts{})
+		got := nextAction(c.status, artifactFacts{}, legacyScope())
 		if got.Screen != c.screen {
 			t.Errorf("status %q: screen = %q, want %q", c.status, got.Screen, c.screen)
 		}
@@ -59,7 +59,7 @@ func TestNextActionKeyStatuses(t *testing.T) {
 // checklist, the action must signal the block (not a plain "apply now").
 func TestNextActionApplyBlockedRefinement(t *testing.T) {
 	f := artifactFacts{Checklist: &accountinventory.MigrationChecklist{ApplyBlocked: true}}
-	got := nextAction(workbench.StatusReadyForApply, f)
+	got := nextAction(workbench.StatusReadyForApply, f, legacyScope())
 	if !strings.Contains(strings.ToLower(got.Text+got.Detail), "blocc") {
 		t.Errorf("ready_for_apply + ApplyBlocked: action should mention the block, got %+v", got)
 	}
@@ -73,7 +73,7 @@ func TestNextActionVerificationListsMissing(t *testing.T) {
 		Email: areaFacts{}, // missing
 		Cron:  areaFacts{VerifyPresent: true, VerifyClean: false},
 	}
-	got := nextAction(workbench.StatusVerificationRequired, f)
+	got := nextAction(workbench.StatusVerificationRequired, f, legacyScope())
 	low := strings.ToLower(got.Detail)
 	if !strings.Contains(low, "email") || !strings.Contains(low, "cron") {
 		t.Errorf("verification_required: detail should list Email+Cron, got %q", got.Detail)
@@ -90,7 +90,7 @@ func TestMissingVerifies(t *testing.T) {
 		Email: areaFacts{VerifyPresent: false},                    // missing
 		Cron:  areaFacts{VerifyPresent: true, VerifyClean: false}, // not clean
 	}
-	got := missingVerifies(f)
+	got := missingVerifies(f, legacyScope())
 	if len(got) != 2 {
 		t.Fatalf("missingVerifies = %v, want 2 (Email, Cron)", got)
 	}
