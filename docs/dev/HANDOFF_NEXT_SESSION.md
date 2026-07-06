@@ -1,102 +1,216 @@
 # Prompt di avvio — prossima sessione
 
-Stai lavorando sul tool Go **cpanel-self-migration**, directory
-/Users/andreavadacchino/Desktop/pADV/cPanel_self-migration.
+Stai lavorando sul tool Go **cpanel-self-migration**, directory locale abituale:
+`/Users/andreavadacchino/Desktop/pADV/cPanel_self-migration`.
 
-Leggi PRIMA: docs/dev/DOGFOODING_2_REPORT.md, docs/dev/DEVELOPMENT_STATE.md,
-docs/dev/PR61_BLOCKER_SCOPING.md.
+## Leggi PRIMA
 
-## Stato al 2026-07-05 — Dogfooding #2 SBLOCCATO (N1 risolto)
+1. `docs/dev/FRONTEND_FLIGHT_DIRECTOR_ROADMAP.md`
+2. `docs/dev/PR69_JOB_JOURNAL_DESIGN.md` (spec developer-ready della prossima PR)
+3. `docs/dev/DEVELOPMENT_STATE.md`
+4. `docs/dev/DOGFOODING_2_REPORT.md`
+5. `docs/dev/DOGFOODING_3_UX_WALK.md`
+6. `docs/dev/CUTOVER_RUNBOOK.md`
 
-### Verdetto #2 aggiornato: **UI-only completabile = SÌ** (con riserva N2 documentata)
+## Stato consolidato al 2026-07-06
 
-Il blocco N1 è **risolto alla radice** e il ciclo UI-only è stato completato fino
-a `ready_for_cutover` **dalla UI con click reali**. Dettaglio in
-`DOGFOODING_2_REPORT.md` (sezione VERDETTO AGGIORNATO 2026-07-05) e
-`DNS_MASS_EDIT_DIAGNOSIS_78.md`.
+Il tool è molto avanzato sul singolo account:
 
-- **N1 causa radice**: `mass_edit_zone` rifiuta `dname="@"` per l'apex → fix
-  `dnsCanonToRelative` apex→FQDN (**PR #64, merged**). Co-bug encoding `+`→spazio
-  (**PR #63, merged**). Entrambi in `main`.
-- **`dns apply` reale post-fix**: `3 applied, 0 failed`, `dns verify` CLEAN,
-  DKIM/SPF SOURCE coi `+` intatti.
-- **Walk governance UI** (2026-07-05, click reali, MAI `--force`): 6 hop
-  `preflight_required`→…→`verification_required`, poi Verifica DNS (lettura) →
-  **auto-transition a `ready_for_cutover` scattata da sola** (rule #5 ok).
+- core migrazione contenuti presente;
+- inventory/diff/policy/checklist presenti;
+- DNS/email/cron plan/apply/verify presenti;
+- workbench session model presente;
+- artifact registry presente;
+- UI locale presente;
+- UI italiana presente;
+- design system moderno presente;
+- dogfooding UI-only fino a `ready_for_cutover` documentato.
 
-Sessione dogfooding #2: `mig_20260704_1a4eaa2cc7d7`, ora a **`ready_for_cutover`**,
-NON archiviata, **nessun cutover eseguito**, nessun TTL toccato. Zona produzione
-intatta (A giorginisposi.it pubblico = .193).
+Le PR recenti hanno chiuso diversi blocchi importanti:
 
-### Prossimo passo — aggiornato 2026-07-05 (post #66)
+- **#63**: fix encoding UAPI `+/%` per evitare corruzione TXT/DKIM/SPF.
+- **#64**: fix apex DNS `@` → FQDN per `mass_edit_zone`.
+- **#65**: dogfooding #2 aggiornato: ciclo UI-only completabile fino a `ready_for_cutover`.
+- **#66**: workbench UX redesign in 7 schermate.
+- **#67**: traduzione IT delle manual actions a livello presentazione.
+- **#68**: design system condiviso e landing moderna.
 
-**UX guidata: FATTA e merged (PR #66).** Workbench redesign in 7 schermate
-(Panoramica/Preflight/Fotografia/Cosa verrà migrato/Conferme/Applica/Chiusura),
-SOLO presentazione, enum motore intatti. Validata con walk in browser reale
-(dogfooding #3, `DOGFOODING_3_UX_WALK.md`): guida corretta per stato, DNS danger
-zone che blocca l'apply senza attestazione, Chiusura senza falso SÌ su status
-forzato, sessione reale `mig_20260704` che rende il NO motivato corretto.
+## Correzione strategica
 
-Quadro attuale: **tool completo, UI product-grade, sessione reale a
-`ready_for_cutover`.** Restano in agenda solo:
+Non considerare la UI “finita” solo perché è più moderna.
 
-1. **Finestra di cutover** (decisione utente): data campagna, orario, ruolo sync
-   DNS (variante A/B/C), ordine account — vedi `CUTOVER_RUNBOOK.md` §7. Il tool
-   non le può prendere; sono le 5 voci mostrate nella schermata Chiusura.
-2. **Nota amministrativa mai chiusa**: registrare via `create_intervention` su
-   Orbit le scritture fatte sul sacrificale .78 in queste settimane, **quando il
-   TOTP torna disponibile**.
+La UI è migliorata, ma resta ancora troppo vicina al modello ingegneristico: sessioni, artifact, policy, acceptances, status governance, apply/verify report.
 
-~~Limite noto: i contenuti delle azioni manuali restano in inglese.~~
-**CHIUSO in #67 (merged):** Title/OperatorAction ora tradotti in IT a livello di
-presentazione (`manualTitleIT`/`manualActionIT`, pattern `statusLabelIT`), NON
-alla sorgente (le chiavi acceptance `AK-*` sono `sha256` su title/detail →
-intoccabili; la UI ri-renderizza l'artifact congelato, quindi la sessione reale
-è già in IT). Restano volutamente grezzi: `Detail` (diff di valori tecnici) e
-`Type`. La UI è ora **interamente in italiano**. Dettaglio: `MANUAL_ACTIONS_IT_DESIGN.md`.
+La prossima fase NON deve essere un altro restyling.
 
-### Friction residue (da chiudere, in ordine di priorità)
+La prossima fase deve trasformare la UI in un **Flight Director**: una cabina di regia migration-first che impedisce all’operatore di perdere il controllo durante migrazioni lunghe, refresh, job interrotti, azioni manuali e cutover.
 
-1. **[BLOCCANTE] N1 — `dns apply` fallisce**: `DNS::mass_edit_zone: The request
-   failed (Error ID m7sumx/qnrpvb)`, riproducibile 2/2. Isolato a livello utente:
-   add/remove/batch-semplice singoli funzionano; fallisce il **batch multi-op con
-   i replace** (probabile DKIM TXT multi-segmento o combinazione 2-remove+3-add).
-   **Root cause nel log WHM root-only su .78** → serve decisione utente su
-   sessione root per leggerlo e stabilire bug-prodotto vs quirk-ambiente. Il tool
-   gestisce il fallimento correttamente (backup, atomico, nessun apply parziale).
-   **Diagnosi completa + snippet di riproduzione: `N1_DNS_APPLY_MASS_EDIT_FAILURE.md`.**
+Principio guida:
 
-2. **N2 [HIGH per DNS cluster]** — nessun affordance UI per la pre-condizione
-   "peer DNS .78 standalone" (rule #4). Verificata fuori-banda con dig (DKIM
-   pubblica == source ≠ dest → standalone confermato). Aggiungere warning/check.
+> Prima rendi impossibile perdere il controllo. Poi rendi l’interfaccia bella.
 
-3. **N4 [MEDIUM]** — `pipelineSteps` genera il checklist PRIMA del dns-plan →
-   checklist iniziale sotto-riporta le azioni DNS (6→14 dopo la 1ª acceptance).
-   Fix: step `dns-plan` prima del checklist, o rigenerare il checklist dopo i plan.
+## Decisione di prodotto
 
-4. **N3 [MEDIUM/design]** — l'exec non avanza mai lo status; per l'auto-transition
-   serve percorrere a mano la scala governance a `verification_required`.
+Il tool non deve esporre come esperienza principale:
 
-### Traduzione webui in italiano — COMPLETATA (#62 + #66)
+- artifact;
+- policy;
+- acceptance;
+- raw status transitions;
+- JSON/report tecnici.
 
-`index.html`/`workbench_list.html`/`workbench_detail.html` tradotti in #62; il
-redesign #66 ha completato la traduzione della chrome del workbench (status/step/
-overall/coverage note, 33 aree) e aggiunto le 6 nuove schermate; **#67 ha tradotto
-i contenuti delle azioni manuali (Title/OperatorAction)** a livello presentazione.
-**Nessun residuo EN nella UI** (restano grezzi solo i dati tecnici: Detail=diff
-valori, Type, code POL-*/AK-*).
+Deve invece guidare l’operatore con:
 
-**#68 — UI moderna (design system condiviso):** `templates/_theme.html` (`themeCSS`
-+ `appHeader`) parsato in entrambi i set → look professionale sobrio coerente su
-dashboard, lista sessioni e le 7 schermate. `/` è ora una **landing** (hero + CTA
-al percorso guidato); la modalità avanzata (pipeline) resta sotto. Solo
-presentazione (4 righe Go: embed+ParseFS), zero regressioni, id/campi/glifi/
-traduzioni preservati. Per restilizzare basta editare `themeCSS`.
+- nuova migrazione;
+- sorgente;
+- destinazione;
+- account sorgente/destinazione;
+- cosa vuoi migrare;
+- preflight;
+- avvia migrazione;
+- progress/log live;
+- checklist comparativa source/destination;
+- task manuali con valori copiabili;
+- verifica finale;
+- cutover gateway;
+- archivio/report.
 
-## Workflow (promemoria)
+Gli artifact restano fonte auditabile, ma non devono essere il linguaggio primario della UI.
 
-- Solo push a fork (`git push fork`); PR con `gh pr create --repo andreavadacchino/cPanel_self-migration`
-- TDD; go-reviewer multi-giro fino APPROVE PULITO; Docker LINUX_ALL_GREEN eseguito (non promesso)
-- Gate dichiarato NEL BODY prima di chiedere il merge
-- `runner.go` off-limits
-- Scritture reali SOLO su sacrificale .78; letture .193 (prod) con load-check prima; MAI --force per transizioni
+## Roadmap frontend aggiornata
+
+### PR 69 — In-Flight Job Rehydration (Job Journal)
+
+Questa è la prossima PR consigliata. **Spec developer-ready: `PR69_JOB_JOURNAL_DESIGN.md`.**
+
+Obiettivo: la UI non deve mai perdere il controllo di un job in corso. La
+rehydration di stato *completato* **esiste già** (`readArtifactFacts` in
+`workbench_view.go`, letta da disco a ogni GET — dogfooding #3): va **riusata**, non
+riscritta. Il vero gap è l'**in-flight job**: oggi l'exec gira sincrono con tail
+in-memory, e un refresh/sleep lo rende irriattaccabile (409 opaco).
+
+Deliverable primario: **job journal (`job.json`)** — identità e progresso persistiti
+dell'exec in corso/ultimo, così un refresh ricostruisce «`migrate_content` in corso
+dalle HH:MM, fase X» e il 409 diventa uno stato leggibile.
+
+Scope:
+
+- **job journal (`job.json`)**: persistere identità+progresso; superficie dell'exec
+  in corso su refresh; eliminare il 409 opaco;
+- **riuso** di `readArtifactFacts` (nessuna riscrittura);
+- wizard nuova migrazione; source/destination/account setup;
+- decisione iniziale su gestione credenziali (§12 roadmap);
+- backup detection → Rollback offerto solo se il backup esiste;
+- empty/error states chiari.
+
+Se troppo grande, splittare: **69a** job journal + exec in corso (fondazione),
+**69b** setup wizard + credenziali.
+
+Fuori scope:
+
+- Campaign Mode;
+- queue multi-account;
+- nuovi writer;
+- nuovi collector;
+- full visual redesign;
+- cutover automation.
+
+### PR 70 — Live Job Engine: SSE + Progress/Log History
+
+Scope:
+
+- SSE endpoint;
+- live log stream;
+- historical log tail;
+- progress per fase/item;
+- reconnect dopo refresh;
+- stati interrupted/failed/completed.
+
+SSE è trasporto live, non fonte di verità. La fonte di verità resta sessione + artifact + events/report.
+
+### PR 71 — Flight Director UI
+
+Scope:
+
+- header globale persistente;
+- timeline laterale;
+- main stage contestuale;
+- next recommended action;
+- risk badge;
+- separazione chiara fra contenuti, email config, cron, DNS, verify, cutover.
+
+### PR 72 — Comparative Checklist UI
+
+Scope:
+
+- vista source vs destination;
+- stato per area;
+- cosa migrato / mancante / diverso / manuale;
+- drilldown tecnico solo su richiesta.
+
+### PR 73 — Manual Actions as Verifiable Tasks
+
+Scope:
+
+- valori sorgente leggibili;
+- valori destinazione attuali;
+- copia negli appunti;
+- azione consigliata;
+- `Verify now` dove possibile;
+- fallback `Segna come fatto manualmente` solo dove inevitabile;
+- acceptance salvata dietro le quinte.
+
+### PR 74 — Final Sync + Cutover Gateway
+
+Scope:
+
+- sync finale;
+- warning per DB/siti dinamici;
+- verify finale fresco;
+- decisione cutover;
+- stato osservazione/quarantena prima di considerare il vecchio server dismissible.
+
+### PR 75 — Final Report / Archive
+
+Scope:
+
+- report finale HTML/PDF-style;
+- riepilogo dati migrati;
+- azioni manuali confermate;
+- note irrisolte;
+- raccomandazioni post-cutover;
+- archivio sessione.
+
+## Domande aperte prima di PR 69
+
+1. Il pulsante “Avvia migrazione” deve includere solo file/db/mail, oppure anche email config e cron?
+2. DNS deve essere applicabile dalla UI o inizialmente solo “copy map + verify”?
+3. Le credenziali devono essere temporanee per singola migrazione o salvabili come profili?
+4. Qual è la soglia di stale snapshot prima del cutover?
+5. Cosa significa esattamente `Resume` dopo job interrotto?
+6. Quanto deve durare la fase di osservazione/quarantena prima di dire che il vecchio server può essere spento?
+7. **Schema `job.json`** — campi/path/TTL da ratificare (proposta in `PR69_JOB_JOURNAL_DESIGN.md` §4).
+8. **Progress granularity** — estendere `--json-events` a tutte le fasi, o accettare progress per-fase per DNS/email/cron/pipeline? (`events.jsonl` oggi solo per `migrate_content`).
+9. **`host.yaml`** — deciso: resta dov'è ma escluso da ogni archive/report bundle (roadmap §12).
+
+## Non-goal permanenti per questa fase
+
+- Nessun Campaign Mode.
+- Nessuna migrazione parallela.
+- Nessuna queue batch.
+- Nessuna promessa da clone WHM Transfer Tool.
+- Nessuna operazione root/WHM.
+- Nessun bottone cieco “migra tutto”.
+- DNS sempre separato da migrazione contenuti.
+- Spegnimento vecchio server mai immediatamente verde senza osservazione/post-check.
+
+## Workflow
+
+- Solo push a fork (`git push fork`).
+- PR verso `andreavadacchino/cPanel_self-migration`.
+- TDD dove applicabile.
+- go-reviewer multi-giro fino APPROVE PULITO.
+- Docker LINUX_ALL_GREEN eseguito, non promesso.
+- Gate dichiarato nel body PR prima del merge.
+- `runner.go` resta off-limits salvo necessità motivata.
+- Scritture reali solo su account sacrificale; produzione solo read-only salvo decisione esplicita.
