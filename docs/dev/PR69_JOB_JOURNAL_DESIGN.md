@@ -145,11 +145,17 @@ Vale per tutti e 3 i chiamanti dello slot (`/run`, `/accept`, `/exec`).
 
 ## 12. Definition of Done (gate)
 
-- [ ] Schema `job.json` ratificato e implementato (atomico, 0600, per-sessione).
-- [ ] Exec in corso sempre superficiale su refresh; 409 opaco eliminato ovunque.
-- [ ] `readArtifactFacts` riusato, non riscritto (test di regressione).
-- [ ] Recovery `running`→`interrupted` all'avvio processo.
-- [ ] Backup detection collega Rollback all'esistenza del backup.
-- [ ] Guardia anti-leak credenziali su `job.json`.
-- [ ] go-reviewer multi-giro fino APPROVE PULITO; Docker LINUX_ALL_GREEN eseguito.
-- [ ] Gate dichiarato nel body PR prima del merge.
+- [x] Schema `job.json` ratificato e implementato (atomico, 0600, per-sessione).
+      Ratifica: schema **lean** (solo identità+fase; item-level riusato da
+      `loadRunMonitor`, non duplicato — §16.7). Granularity **opzione B** (§16.8).
+- [x] Exec in corso sempre superficiale su refresh; 409 opaco eliminato ovunque
+      (`writeBusy409` su `/run`, `/accept`, `/exec`). `job.json` scritto solo da
+      `/exec` (path di scrittura); `/run`+`/accept` usano il fallback in-memory.
+- [x] `readArtifactFacts` riusato, non riscritto (test di regressione verdi).
+- [x] Recovery `running`→`interrupted` all'avvio processo (`recoverJobJournal`)
+      + reconcile read-time nel view-model (`reconcileJobJournal`, no-write su GET).
+- [x] Backup detection collega Rollback all'esistenza del backup
+      (`areaFacts.BackupPresent`, gating nel template `screen_applica`).
+- [x] Guardia anti-leak credenziali su `job.json` (testata anche sul failure path).
+- [x] go-reviewer multi-giro fino APPROVE PULITO; Docker LINUX_ALL_GREEN eseguito.
+- [x] Gate dichiarato nel body PR prima del merge.

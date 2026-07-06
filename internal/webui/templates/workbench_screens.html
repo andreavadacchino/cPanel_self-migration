@@ -122,7 +122,7 @@
 {{template "execBtnReadOnly" (list .Session.ID .CSRF "email_verify" "Verifica risultato")}}
 </div>
 {{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "email_apply" "Applica Email")}}
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "email_rollback" "Annulla modifiche Email")}}
+{{if .Facts.Email.BackupPresent}}{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "email_rollback" "Annulla modifiche Email")}}{{end}}
 
 <h2>Cron {{template "areaStatus" .Facts.Cron}}</h2>
 <div style="display:flex; gap:.5rem; flex-wrap:wrap">
@@ -130,7 +130,7 @@
 {{template "execBtnReadOnly" (list .Session.ID .CSRF "cron_verify" "Verifica risultato")}}
 </div>
 {{template "execFormWrite" (list .Session.ID .Session.Name .CSRF "cron_apply" "Applica Cron")}}
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "cron_rollback" "Annulla modifiche Cron")}}
+{{if .Facts.Cron.BackupPresent}}{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "cron_rollback" "Annulla modifiche Cron")}}{{end}}
 
 <div class="dangerzone">
 <h3>&#9888; DNS — Danger Zone {{template "areaStatus" .Facts.DNS}}</h3>
@@ -156,7 +156,7 @@
 </form>
 <p class="muted">L'attestazione è una conferma manuale, non un controllo applicato dal tool: il tool opera a livello utente e non può leggere lo stato del cluster. La protezione effettiva resta la conferma forte (nome account).</p>
 </fieldset>
-{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "dns_rollback" "Annulla modifiche DNS")}}
+{{if .Facts.DNS.BackupPresent}}{{template "execFormRollback" (list .Session.ID .Session.Name .CSRF "dns_rollback" "Annulla modifiche DNS")}}{{end}}
 </div>
 
 {{template "wbFooter" .}}

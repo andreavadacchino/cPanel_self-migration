@@ -45,7 +45,7 @@ func (s *server) saveAcceptTo(w http.ResponseWriter, r *http.Request, redirectUR
 	// slot taken and is refused, and vice versa — real mutual exclusion, so
 	// the two writers of migration_checklist.json never overlap.
 	if !s.job.tryReserve() {
-		http.Error(w, "an analysis run is in progress — wait for it to finish before accepting", http.StatusConflict)
+		writeBusy409(w, s.dir, s.job)
 		return
 	}
 	defer s.job.release()

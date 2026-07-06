@@ -39,6 +39,10 @@ type areaFacts struct {
 	ApplyPresent  bool
 	VerifyPresent bool
 	VerifyClean   bool
+	// BackupPresent is true when <area>_backup.json exists: the Rollback button
+	// for this area is offered ONLY then — no rollback is promised without a
+	// backup to restore (roadmap §11, PR69 §8).
+	BackupPresent bool
 }
 
 // artifactFacts is the read-only snapshot of the shared artifact dir. A missing
@@ -104,6 +108,7 @@ func readArtifactFacts(dir string) artifactFacts {
 		a.fa.PlanPresent = fileExists(filepath.Join(dir, a.planName))
 		a.fa.ApplyPresent = fileExists(filepath.Join(dir, a.prefix+"_apply_report.json"))
 		a.fa.VerifyPresent, a.fa.VerifyClean = readVerifyClean(filepath.Join(dir, a.prefix+"_verify_report.json"))
+		a.fa.BackupPresent = fileExists(filepath.Join(dir, a.prefix+"_backup.json"))
 	}
 
 	// Checklist — same guard as buildPage (mode + format_version), fail-soft.
@@ -325,6 +330,9 @@ type workbenchView struct {
 	OverallLabel string
 	AllStatuses  []workbench.Status
 	AllKinds     []workbench.ArtifactKind
+	// Job is the in-flight/last exec journal (nil when none), reconciled against
+	// the live slot: a running record with a free slot presents as interrupted.
+	Job *jobJournal
 }
 
 // areaLabelsIT translates EVERY coverage-manifest area (and checklist section)
@@ -485,7 +493,9 @@ func sortedConfirms(f artifactFacts) []accountinventory.ManualAction {
 }
 
 // buildWorkbenchView assembles the model for a screen. Read-only, fail-soft.
-func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session) workbenchView {
+// jobBusy is the live single-writer slot state, used ONLY to reconcile the job
+// journal (running + free slot → interrupted); it never triggers a write here.
+func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBusy bool) workbenchView {
 	f := readArtifactFacts(dir)
 	v := workbenchView{
 		Session:     sess,
@@ -501,6 +511,7 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session) workb
 		StatusLabel: statusLabelIT(sess.Status),
 		AllStatuses: workbench.AllStatuses,
 		AllKinds:    workbench.AllArtifactKinds,
+		Job:         reconcileJobJournal(dir, jobBusy),
 	}
 	if f.Checklist != nil {
 		v.OverallLabel = overallLabelIT(f.Checklist.OverallStatus)

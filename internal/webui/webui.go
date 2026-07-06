@@ -152,11 +152,19 @@ func New(o Options) (http.Handler, error) {
 		csrf: hex.EncodeToString(tok),
 		job:  newJobManager(o.Dir, o.Runner, o.BaseContext),
 	}
+	// Crash recovery: a job journal still marked running at startup is the
+	// residue of a ui killed mid-exec — the in-memory slot is free by
+	// construction now, so its subprocess died with the old process. Persist it
+	// as interrupted so the first page reflects reality (roadmap §6).
+	recoverJobJournal(o.Dir, time.Now().UTC())
 	if o.SessionStore != nil {
 		ws, err := newWorkbenchServer(o.SessionStore, o.Dir, s.csrf)
 		if err != nil {
 			return nil, err
 		}
+		// The per-session screens reconcile the job journal against the LIVE
+		// slot: a running record with a free slot is presented as interrupted.
+		ws.jobBusy = s.job.running
 		s.workbench = ws
 		base := o.BaseContext
 		if base == nil {
@@ -374,7 +382,7 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.job.start(); err != nil {
 		if errors.Is(err, errBusy) {
-			http.Error(w, "a run is already in progress — wait for it to finish", http.StatusConflict)
+			writeBusy409(w, s.dir, s.job)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)

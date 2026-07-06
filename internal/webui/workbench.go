@@ -20,6 +20,10 @@ type workbenchServer struct {
 	tpl   *template.Template
 	csrf  string
 	dir   string // shared artifact dir (== server.dir): read-only artifact reads
+	// jobBusy reports whether the shared single-writer slot is currently held,
+	// so the view-model can reconcile a running job journal against the live
+	// slot (running + free slot → interrupted). Wired in New(); nil-safe.
+	jobBusy func() bool
 }
 
 func newWorkbenchServer(store *workbench.Store, dir, csrf string) (*workbenchServer, error) {
@@ -136,7 +140,11 @@ func (ws *workbenchServer) handleScreen(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "internal error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	view := buildWorkbenchView(ws.dir, ws.csrf, screen, sess)
+	busy := false
+	if ws.jobBusy != nil {
+		busy = ws.jobBusy()
+	}
+	view := buildWorkbenchView(ws.dir, ws.csrf, screen, sess, busy)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := ws.tpl.ExecuteTemplate(w, tplName, view); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
