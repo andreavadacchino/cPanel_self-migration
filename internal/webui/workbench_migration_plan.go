@@ -101,9 +101,18 @@ type migrationPlan struct {
 	Ready             bool // enough artifacts (a valid checklist) to classify
 	HasSetup          bool
 	CanStartMigration bool
-	StartSummary      string
-	NotReadyMessage   string
-	Areas             []migrationPlanArea
+	// Blocked is the global apply gate (ApplyBlocked || OverallStatus==NOT_READY):
+	// true means the real /exec apply gate would refuse, distinct from "nothing
+	// automatic to run" (DNS-only), which also makes CanStartMigration false.
+	Blocked bool
+	// ScopeConfirmed and CanEditScope are Fase 2 presentation fields, set by
+	// buildWorkbenchView (they need the session + live-job state, not just facts).
+	ScopeConfirmed  bool
+	CanEditScope    bool
+	CTALabel        string // state-aware label of the (still disabled) start CTA
+	StartSummary    string
+	NotReadyMessage string
+	Areas           []migrationPlanArea
 	// Blockers are apply blockers for sections the operator INCLUDED in scope
 	// (plus global/unknown sections, which are never hidden). ExcludedBlockers
 	// are apply blockers for sections the operator explicitly excluded — shown
@@ -159,6 +168,24 @@ func applyBlockers(f artifactFacts, scope contentScope) (inScope, excluded []mig
 	return inScope, excluded
 }
 
+// migrationCTALabel is the state-aware copy of the (still disabled) "Avvia
+// migrazione" CTA. Priority: not-ready > blocked > scope-not-confirmed > ready.
+// The button itself remains inactive until the Fase 3 orchestrator.
+func migrationCTALabel(p migrationPlan) string {
+	switch {
+	case !p.Ready:
+		return "Esegui il preflight prima di avviare"
+	case p.Blocked:
+		return "Migrazione bloccata: risolvi i problemi"
+	case !p.ScopeConfirmed:
+		return "Conferma lo scope prima di avviare"
+	case p.CanStartMigration:
+		return "Avvia migrazione — disponibile nella Fase 3"
+	default:
+		return "Nessuna area automatica da avviare"
+	}
+}
+
 // scopeWarnings returns the plan-level warnings (currently: implicit scope for a
 // legacy session with no wizard Setup).
 func scopeWarnings(scope contentScope) []migrationPlanIssue {
@@ -196,6 +223,7 @@ func buildMigrationPlan(f artifactFacts, scope contentScope) migrationPlan {
 	// and mirrors the real /exec gate isApplyBlockedByChecklist: apply is blocked
 	// by policy blockers or by an unreliable verdict (NOT_READY caps evidence).
 	applyBlocked := f.Checklist.ApplyBlocked || f.Checklist.OverallStatus == accountinventory.OverallNotReady
+	p.Blocked = applyBlocked
 
 	p.Areas = planAreas(f, scope)
 	p.Blockers, p.ExcludedBlockers = applyBlockers(f, scope)

@@ -206,6 +206,74 @@ func (s *Store) SetStatus(id string, to Status, force bool, reason string, now t
 	return sess, nil
 }
 
+// ConfirmScope updates the migration content selection and marks the scope as
+// confirmed after the preflight (Fase 2). It is a session METADATA mutation, not
+// a migration write — no credentials, no artifact, no engine call. A legacy
+// session (nil Setup) gains a Setup carrying the chosen content. The change is
+// recorded in the timeline. The caller (webui) is responsible for the product
+// gate "editable only before the first apply/write".
+func (s *Store) ConfirmScope(id string, content ContentSelection, now time.Time) (*Session, error) {
+	fl, err := s.lockFile()
+	if err != nil {
+		return nil, err
+	}
+	defer unlockFile(fl)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, err := s.readSession(id)
+	if err != nil {
+		return nil, err
+	}
+
+	if sess.Setup == nil {
+		sess.Setup = &SetupMeta{}
+	}
+	sess.Setup.Content = content
+	confirmed := now
+	sess.Setup.ScopeConfirmedAt = &confirmed
+	sess.UpdatedAt = now
+	sess.Timeline = append(sess.Timeline, TimelineEvent{
+		Timestamp:   now,
+		Action:      "scope_confirmed",
+		Reason:      scopeSummary(content),
+		ToolVersion: version.String(),
+	})
+
+	if err := s.writeSession(id, sess); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+// scopeSummary builds a short, non-secret description of the confirmed areas for
+// the timeline reason.
+func scopeSummary(c ContentSelection) string {
+	var areas []string
+	if c.Files {
+		areas = append(areas, "file")
+	}
+	if c.Databases {
+		areas = append(areas, "database")
+	}
+	if c.Email {
+		areas = append(areas, "email")
+	}
+	if c.EmailConfig {
+		areas = append(areas, "config email")
+	}
+	if c.Cron {
+		areas = append(areas, "cron")
+	}
+	if c.DNS {
+		areas = append(areas, "DNS (manuale)")
+	}
+	if len(areas) == 0 {
+		return "scope confermato: nessuna area"
+	}
+	return "scope confermato: " + strings.Join(areas, ", ")
+}
+
 // writeSession atomically persists the session (write-temp + rename).
 // The folderID parameter is the validated directory name — never derived
 // from sess.ID to prevent path traversal via crafted JSON content.

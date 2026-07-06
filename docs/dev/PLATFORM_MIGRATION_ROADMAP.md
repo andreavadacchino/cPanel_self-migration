@@ -446,7 +446,13 @@ cieco "migra tutto", spegnimento vecchio server verde senza osservazione.
 blocco «Piano migrazione» della schermata «Cosa verrà migrato»; CTA one-click disabilitata.
 Read-model only, nessun writer/CLI, DNS mai auto-runnable.
 
-**Prossima: Fase 2 — Scope Confirmation after Preflight** — usa questo Migration Plan read-only.
+**Fase 2 — Scope Confirmation after Preflight — ✅ IMPLEMENTATA.** Blocco «Conferma cosa vuoi
+migrare» in `screen_migrazione` (preset + custom + DNS manuale); `Store.ConfirmScope` +
+`SetupMeta.ScopeConfirmedAt`; edit-gate `canEditScope` (scope congelato dopo apply/job live); CTA
+state-aware. Metadata only, nessun writer/CLI, DNS mai automatico, orchestratore non implementato.
+
+**Prossima: Fase 3 — Smart Migration Orchestrator** — bottone «Avvia» + esecuzione aree safe
+in-scope in sequenza con verify per fase (gate server-side dell'orchestratore).
 
 La Fase 1 costruisce il contratto dati/UI (read-only) che risponde a "cosa succederà premendo
 Avvia migrazione": cosa è automatico, manuale verificabile, bloccante, escluso,
