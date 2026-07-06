@@ -314,12 +314,63 @@ type countRow struct {
 	Dest   int
 }
 
+// contentScope translates the wizard's content selection into per-area
+// "show this operational action" booleans for the templates. The rule:
+//
+//	Setup == nil  → legacy/advanced session: every area is included (true), so
+//	                the operational screens behave exactly as before the wizard.
+//	Setup != nil  → only the areas the operator picked in the wizard are shown
+//	                as operational actions; the rest render an explicit
+//	                "non incluso in questa migrazione" note.
+//
+// This governs presentation only: it never gates the exec handler (the strong
+// per-account confirmation remains the real write gate) and touches no engine,
+// writer or apply/verify semantics.
+type contentScope struct {
+	HasSetup            bool
+	IncludeFiles        bool // migrate_content: File
+	IncludeDatabases    bool // migrate_content: Database
+	IncludeEmailContent bool // migrate_content: Posta (Email/Maildir)
+	IncludeEmailConfig  bool // email_apply/verify/rollback (forwarders, filters, …)
+	IncludeCron         bool // cron_apply/verify/rollback
+	IncludeDNS          bool // dns_apply/verify/rollback + danger zone
+	// ShowMigrateContent is true when at least one migrate_content area
+	// (File/Database/Email) is included — otherwise the form is hidden entirely.
+	ShowMigrateContent bool
+}
+
+// deriveContentScope computes the per-area gating for a session. A nil Setup
+// (legacy or advanced-create) includes everything.
+func deriveContentScope(sess *workbench.Session) contentScope {
+	hasSetup := sess.Setup != nil
+	inc := func(sel bool) bool { return !hasSetup || sel }
+	var c workbench.ContentSelection
+	if hasSetup {
+		c = sess.Setup.Content
+	}
+	cs := contentScope{
+		HasSetup:            hasSetup,
+		IncludeFiles:        inc(c.Files),
+		IncludeDatabases:    inc(c.Databases),
+		IncludeEmailContent: inc(c.Email),
+		IncludeEmailConfig:  inc(c.EmailConfig),
+		IncludeCron:         inc(c.Cron),
+		IncludeDNS:          inc(c.DNS),
+	}
+	cs.ShowMigrateContent = cs.IncludeFiles || cs.IncludeDatabases || cs.IncludeEmailContent
+	return cs
+}
+
 // workbenchView is the unified read-only model for all 7 screens.
 type workbenchView struct {
-	Session      *workbench.Session
-	CSRF         string
-	Screen       string
-	Facts        artifactFacts
+	Session *workbench.Session
+	CSRF    string
+	Screen  string
+	Facts   artifactFacts
+	// Scope gates which operational actions the screens show, per the wizard's
+	// content selection (templates read .Scope.IncludeDNS, .Scope.IncludeCron,
+	// .Scope.ShowMigrateContent, …). Legacy sessions include everything.
+	Scope        contentScope
 	Next         recommendedAction
 	Cutover      cutoverVerdict
 	Phases       []phaseRow
@@ -517,6 +568,7 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBu
 		AllStatuses: workbench.AllStatuses,
 		AllKinds:    workbench.AllArtifactKinds,
 		Job:         reconcileJobJournal(dir, jobBusy),
+		Scope:       deriveContentScope(sess),
 	}
 	v.JobLive = v.Job != nil && v.Job.State == jobStateRunning
 	if f.Checklist != nil {
