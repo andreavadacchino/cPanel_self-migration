@@ -82,12 +82,24 @@ type phaseOutcome struct {
 	Detail string
 }
 
+// orchStopKind classifies WHY a run stopped, so the redirect code is derived
+// from a typed field set explicitly at each stop site — never by sniffing the
+// Italian human copy (which is free to change without breaking control flow).
+type orchStopKind int
+
+const (
+	stopNone    orchStopKind = iota // completed all phases
+	stopGate                        // checklist turned blocking mid-run
+	stopFailure                     // a write or verify phase failed
+)
+
 // orchestrationResult is the aggregate outcome of a run.
 type orchestrationResult struct {
 	Outcomes   []phaseOutcome
-	Stopped    bool   // a phase failed or the gate closed mid-run
-	StopReason string // human copy for the stop
-	Err        error  // non-nil when stopped (drives the journal terminal state)
+	Stopped    bool         // a phase failed or the gate closed mid-run
+	StopKind   orchStopKind // typed stop classification (drives the redirect code)
+	StopReason string       // human copy for the stop
+	Err        error        // non-nil when stopped (drives the journal terminal state)
 }
 
 // buildOrchestratorPhases derives the auto-run phases server-side from the
@@ -163,8 +175,11 @@ const (
 
 // runOrchestration executes the phases in sequence with a per-phase gate
 // re-check, stop-on-first-failure, and best-effort artifact attach + journal
-// phase updates. It never rolls back.
-func (ws *workbenchExecServer) runOrchestration(ctx context.Context, sessionID string, phases []orchestratorPhase, startedAt time.Time) orchestrationResult {
+// phase updates. It never rolls back. base is the parent context; EACH step
+// gets its OWN execTimeout clock (mirroring the single-action /exec semantics),
+// so a long content phase can never eat the whole run's budget and cause a
+// later write to be killed mid-flight by a shared, artificial deadline.
+func (ws *workbenchExecServer) runOrchestration(base context.Context, sessionID string, phases []orchestratorPhase, startedAt time.Time) orchestrationResult {
 	res := orchestrationResult{Outcomes: make([]phaseOutcome, len(phases))}
 	for i, ph := range phases {
 		res.Outcomes[i] = phaseOutcome{Key: ph.key, Label: ph.label, State: phaseNotRun, Detail: orchestratorNotRunDetail}
@@ -176,17 +191,19 @@ func (ws *workbenchExecServer) runOrchestration(ctx context.Context, sessionID s
 		// turned blocking mid-run stops the orchestrator immediately.
 		if isApplyBlockedByChecklist(ws.dir) {
 			res.Stopped = true
+			res.StopKind = stopGate
 			res.StopReason = orchestratorGateStoppedMsg
 			res.Err = errors.New("apply gate closed during orchestration")
 			return res
 		}
 		ws.journalPhaseRunning(sessionID, ph.label, startedAt)
 
-		// Write step.
-		if err := ws.runner(ctx, tail, ph.write.name, ph.write.argv); err != nil {
+		// Write step (own fresh timeout).
+		if err := ws.runStep(base, tail, ph.write); err != nil {
 			res.Outcomes[i] = phaseOutcome{ph.key, ph.label, phaseFailed,
 				"Errore durante l'applicazione: " + err.Error()}
 			res.Stopped = true
+			res.StopKind = stopFailure
 			res.StopReason = fmt.Sprintf("Migrazione interrotta durante «%s». Le fasi precedenti sono state completate. Nessun rollback automatico è stato eseguito.", ph.label)
 			res.Err = err
 			return res
@@ -196,10 +213,11 @@ func (ws *workbenchExecServer) runOrchestration(ctx context.Context, sessionID s
 		// Verify step (email/cron): --fail-on-drift makes a dirty verify exit
 		// non-zero, so a drift stops the run exactly like an apply failure.
 		if ph.verify != nil {
-			if err := ws.runner(ctx, tail, ph.verify.name, ph.verify.argv); err != nil {
+			if err := ws.runStep(base, tail, *ph.verify); err != nil {
 				res.Outcomes[i] = phaseOutcome{ph.key, ph.label, phaseFailed,
 					"Verifica non superata dopo l'applicazione: " + err.Error()}
 				res.Stopped = true
+				res.StopKind = stopFailure
 				res.StopReason = fmt.Sprintf("Migrazione interrotta: la verifica di «%s» non è stata superata. Le fasi precedenti restano registrate. Nessun rollback automatico è stato eseguito.", ph.label)
 				res.Err = err
 				return res
@@ -213,18 +231,30 @@ func (ws *workbenchExecServer) runOrchestration(ctx context.Context, sessionID s
 	return res
 }
 
-// attachOrchestratorArtifact attaches a produced artifact best-effort: a missing
-// file or an attach error must not fail a phase that actually ran (the artifact
-// facts are re-derived from disk anyway). Nil art = nothing to attach.
+// runStep runs ONE orchestrator step with its OWN execTimeout, identical to the
+// per-click budget of the single /exec action it mirrors.
+func (ws *workbenchExecServer) runStep(base context.Context, tail *tailBuffer, st orchestratorStep) error {
+	ctx, cancel := context.WithTimeout(base, execTimeout)
+	defer cancel()
+	return ws.runner(ctx, tail, st.name, st.argv)
+}
+
+// attachOrchestratorArtifact attaches a produced artifact best-effort: a MISSING
+// file is silently skipped (the artifact facts are re-derived from disk anyway),
+// but a genuine store error (disk full, permission, corruption) is logged so it
+// is not completely invisible in the server logs. It never fails a phase that
+// actually ran. Nil art = nothing to attach.
 func (ws *workbenchExecServer) attachOrchestratorArtifact(sessionID string, art *artifactOutput) {
 	if art == nil {
 		return
 	}
 	p := filepath.Join(ws.dir, art.filename)
 	if _, err := os.Stat(p); err != nil {
-		return
+		return // no artifact produced (e.g. a step that writes nothing) — nothing to attach
 	}
-	_, _ = ws.store.AttachArtifact(sessionID, art.kind, p, time.Now().UTC())
+	if _, err := ws.store.AttachArtifact(sessionID, art.kind, p, time.Now().UTC()); err != nil {
+		fmt.Fprintf(os.Stderr, "webui: orchestrator artifact attach %s failed: %v\n", art.filename, err)
+	}
 }
 
 // journalPhaseRunning updates the job journal with the current phase so a
@@ -309,10 +339,9 @@ func (ws *workbenchExecServer) handleStartMigration(w http.ResponseWriter, r *ht
 		ws.job.release()
 	}()
 
-	ctx, cancel := context.WithTimeout(ws.base, execTimeout)
-	defer cancel()
-
-	result := ws.runOrchestration(ctx, sessionID, phases, startedAt)
+	// Each phase step gets its own execTimeout inside runOrchestration (mirroring
+	// the single /exec action), so no shared deadline can kill a later write.
+	result := ws.runOrchestration(ws.base, sessionID, phases, startedAt)
 	runErr = result.Err
 	if p := lastRunningPhase(result.Outcomes); p != "" {
 		stopPhase = p
@@ -357,13 +386,14 @@ func summarizeOutcomes(outs []phaseOutcome) string {
 	return strings.Join(parts, ", ")
 }
 
-// resultCode maps the run to a migrate-flash code. A clean full run with DNS (or
-// other manual tasks) opted in is "done_manual", otherwise "done".
+// resultCode maps the run to a migrate-flash code from the TYPED stop kind (not
+// from the human copy). A clean full run with DNS (or other manual tasks) opted
+// in is "done_manual", otherwise "done".
 func resultCode(res orchestrationResult, scope contentScope) string {
-	if res.Err != nil {
-		if strings.Contains(res.StopReason, "verifica migrazione ora segnala") {
-			return "gate_stopped"
-		}
+	switch res.StopKind {
+	case stopGate:
+		return "gate_stopped"
+	case stopFailure:
 		return "partial"
 	}
 	if scope.IncludeDNS {

@@ -5,12 +5,15 @@ package webui
 // credentials, no real apply. Each test asserts one non-negotiable invariant.
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -562,6 +565,61 @@ func TestOrchestratorLegacySessionNotStartable(t *testing.T) {
 	}
 	if len(fr.recorded()) != 0 {
 		t.Errorf("legacy session must never auto-run, got %v", fr.recorded())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-phase timeout: each step gets its OWN execTimeout clock, not one shared
+// deadline across the whole run (a long content phase must never eat the budget
+// of a later write and get it killed mid-flight).
+// ---------------------------------------------------------------------------
+
+func TestOrchestratorPerPhaseTimeout(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "migrations")
+	os.MkdirAll(storeDir, 0o700)
+	store, _ := workbench.NewStore(storeDir)
+	sess, _ := store.Create("acct", "s", "d", time.Now())
+	writeChecklist(t, dir, readyChecklist())
+
+	var mu sync.Mutex
+	var deadlines []time.Time
+	var dones []<-chan struct{}
+	runner := func(ctx context.Context, out io.Writer, name string, argv []string) error {
+		mu.Lock()
+		dl, ok := ctx.Deadline()
+		if !ok {
+			dl = time.Time{}
+		}
+		deadlines = append(deadlines, dl)
+		dones = append(dones, ctx.Done())
+		mu.Unlock()
+		return nil
+	}
+	ws := &workbenchExecServer{
+		store: store, runner: runner, base: context.Background(),
+		job: newJobManager(dir, runner, context.Background()), dir: dir,
+	}
+	phases := []orchestratorPhase{
+		{key: "a", label: "A", write: orchestratorStep{name: "step a", argv: []string{"x"}}, reportOnly: true},
+		{key: "b", label: "B", write: orchestratorStep{name: "step b", argv: []string{"y"}}, reportOnly: true},
+	}
+	res := ws.runOrchestration(context.Background(), sess.ID, phases, time.Now().UTC())
+	if res.Stopped {
+		t.Fatalf("unexpected stop: %+v", res)
+	}
+	if len(deadlines) != 2 {
+		t.Fatalf("want 2 steps executed, got %d", len(deadlines))
+	}
+	for i, dl := range deadlines {
+		if dl.IsZero() {
+			t.Errorf("step %d ran without a per-step deadline", i)
+		}
+	}
+	// Distinct contexts: two separate WithTimeout scopes have different Done
+	// channels — proof each phase got its own timeout, not one shared clock.
+	if dones[0] == dones[1] {
+		t.Error("both phases shared the same context — per-phase timeout not applied")
 	}
 }
 
