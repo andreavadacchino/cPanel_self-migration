@@ -6,10 +6,11 @@ Stai lavorando sul tool Go **cpanel-self-migration**, directory locale abituale:
 ## Leggi PRIMA
 
 1. `docs/dev/FRONTEND_FLIGHT_DIRECTOR_ROADMAP.md`
-2. `docs/dev/DEVELOPMENT_STATE.md`
-3. `docs/dev/DOGFOODING_2_REPORT.md`
-4. `docs/dev/DOGFOODING_3_UX_WALK.md`
-5. `docs/dev/CUTOVER_RUNBOOK.md`
+2. `docs/dev/PR69_JOB_JOURNAL_DESIGN.md` (spec developer-ready della prossima PR)
+3. `docs/dev/DEVELOPMENT_STATE.md`
+4. `docs/dev/DOGFOODING_2_REPORT.md`
+5. `docs/dev/DOGFOODING_3_UX_WALK.md`
+6. `docs/dev/CUTOVER_RUNBOOK.md`
 
 ## Stato consolidato al 2026-07-06
 
@@ -78,21 +79,32 @@ Gli artifact restano fonte auditabile, ma non devono essere il linguaggio primar
 
 ## Roadmap frontend aggiornata
 
-### PR 69 — Setup Flow + Rehydration Foundation
+### PR 69 — In-Flight Job Rehydration (Job Journal)
 
-Questa è la prossima PR consigliata.
+Questa è la prossima PR consigliata. **Spec developer-ready: `PR69_JOB_JOURNAL_DESIGN.md`.**
 
-Obiettivo: la UI deve poter ricostruire sempre lo stato della migrazione da sessione, timeline e artifact anche dopo refresh, browser chiuso, laptop in sleep o connessione SSE caduta.
+Obiettivo: la UI non deve mai perdere il controllo di un job in corso. La
+rehydration di stato *completato* **esiste già** (`readArtifactFacts` in
+`workbench_view.go`, letta da disco a ogni GET — dogfooding #3): va **riusata**, non
+riscritta. Il vero gap è l'**in-flight job**: oggi l'exec gira sincrono con tail
+in-memory, e un refresh/sleep lo rende irriattaccabile (409 opaco).
+
+Deliverable primario: **job journal (`job.json`)** — identità e progresso persistiti
+dell'exec in corso/ultimo, così un refresh ricostruisce «`migrate_content` in corso
+dalle HH:MM, fase X» e il 409 diventa uno stato leggibile.
 
 Scope:
 
-- wizard nuova migrazione;
-- source/destination/account setup;
-- decisione iniziale su gestione credenziali;
-- rehydration view-model da `session.json`, timeline, artifact e report;
-- current job state leggibile;
-- empty/error states chiari;
-- preparazione del modello per Flight Director.
+- **job journal (`job.json`)**: persistere identità+progresso; superficie dell'exec
+  in corso su refresh; eliminare il 409 opaco;
+- **riuso** di `readArtifactFacts` (nessuna riscrittura);
+- wizard nuova migrazione; source/destination/account setup;
+- decisione iniziale su gestione credenziali (§12 roadmap);
+- backup detection → Rollback offerto solo se il backup esiste;
+- empty/error states chiari.
+
+Se troppo grande, splittare: **69a** job journal + exec in corso (fondazione),
+**69b** setup wizard + credenziali.
 
 Fuori scope:
 
@@ -177,6 +189,9 @@ Scope:
 4. Qual è la soglia di stale snapshot prima del cutover?
 5. Cosa significa esattamente `Resume` dopo job interrotto?
 6. Quanto deve durare la fase di osservazione/quarantena prima di dire che il vecchio server può essere spento?
+7. **Schema `job.json`** — campi/path/TTL da ratificare (proposta in `PR69_JOB_JOURNAL_DESIGN.md` §4).
+8. **Progress granularity** — estendere `--json-events` a tutte le fasi, o accettare progress per-fase per DNS/email/cron/pipeline? (`events.jsonl` oggi solo per `migrate_content`).
+9. **`host.yaml`** — deciso: resta dov'è ma escluso da ogni archive/report bundle (roadmap §12).
 
 ## Non-goal permanenti per questa fase
 
