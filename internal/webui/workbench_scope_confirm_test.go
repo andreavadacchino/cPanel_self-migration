@@ -204,6 +204,26 @@ func TestConfirmScopeHandlerLockedAfterApply(t *testing.T) {
 	}
 }
 
+// A confirm POST without a valid CSRF token is rejected and does not mutate.
+func TestConfirmScopeHandlerRejectsBadCSRF(t *testing.T) {
+	h, store, dir := newTestWorkbenchHandler(t)
+	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+		Mode: "migration-checklist", FormatVersion: 1,
+		OverallStatus: accountinventory.OverallReadyToCutover,
+	})
+	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+
+	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sess.ID+"/scope",
+		form(map[string]string{"csrf": "wrong-token", "preset": "site"}))
+	if rr.Code == http.StatusSeeOther {
+		t.Fatalf("bad CSRF must not succeed, got %d", rr.Code)
+	}
+	got, _ := store.Get(sess.ID)
+	if got.Setup != nil && got.Setup.ScopeConfirmedAt != nil {
+		t.Error("bad CSRF must not mutate the scope")
+	}
+}
+
 // Render — the plan screen shows the scope-confirm block and the state-aware CTA.
 func TestConfirmScopeScreenRenders(t *testing.T) {
 	h, store, dir := newTestWorkbenchHandler(t)

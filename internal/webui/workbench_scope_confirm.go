@@ -118,7 +118,11 @@ func (ws *workbenchServer) handleConfirmScope(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Edit gate: frozen once a write has run or a job is live.
+	// Edit gate: frozen once a write has run or a job is live. Note: this reads
+	// the facts outside the store flock, so a narrow TOCTOU exists if a write
+	// started between here and ConfirmScope. Acceptable for this single-operator,
+	// single-session tool — the real write gate remains the strong per-account
+	// confirmation, and a stale scope confirmation is a metadata-only race.
 	f := readArtifactFacts(ws.dir)
 	if !canEditScope(f, ws.jobLiveNow()) {
 		http.Error(w, "Lo scope non è più modificabile: una migrazione è già stata avviata o è in corso.", http.StatusForbidden)
