@@ -476,6 +476,10 @@ type workbenchView struct {
 	// both presentation-only summaries of the facts above (Flight Director shell).
 	Risk     riskBadge
 	Timeline []timelineStep
+	// Plan is the Fase 1 migration-plan read-model shown on the "Cosa verrà
+	// migrato" screen: what is automatic / manual / blocking / excluded, and
+	// what happens if the operator presses "Avvia migrazione". Read-only.
+	Plan migrationPlan
 }
 
 // areaLabelsIT translates EVERY coverage-manifest area (and checklist section)
@@ -661,6 +665,7 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBu
 	v.JobLive = v.Job != nil && v.Job.State == jobStateRunning
 	v.Risk = buildRiskBadge(sess.Status, f, scope, v.Job, v.JobLive)
 	v.Timeline = buildTimeline(screen, sess.Status, f, scope, v.Job, v.JobLive)
+	v.Plan = buildMigrationPlan(f, scope)
 	if f.Checklist != nil {
 		v.OverallLabel = overallLabelIT(f.Checklist.OverallStatus)
 	}

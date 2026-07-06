@@ -441,9 +441,14 @@ cieco "migra tutto", spegnimento vecchio server verde senza osservazione.
 
 ## 15. Prossima fase consigliata
 
-**Fase 1 — Platform Migration Plan / Readiness.**
+**Fase 1 — Platform Migration Plan / Readiness — ✅ IMPLEMENTATA (GitHub PR #78).**
+`internal/webui/workbench_migration_plan.go` (`migrationPlan` + `buildMigrationPlan`) reso nel
+blocco «Piano migrazione» della schermata «Cosa verrà migrato»; CTA one-click disabilitata.
+Read-model only, nessun writer/CLI, DNS mai auto-runnable.
 
-Costruisce il contratto dati/UI (read-only) che risponde a "cosa succederà premendo
+**Prossima: Fase 2 — Scope Confirmation after Preflight** — usa questo Migration Plan read-only.
+
+La Fase 1 costruisce il contratto dati/UI (read-only) che risponde a "cosa succederà premendo
 Avvia migrazione": cosa è automatico, manuale verificabile, bloccante, escluso,
 in scope. È il prerequisito di scope-confirmation (Fase 2) e orchestratore (Fase 3), e
 non tocca alcun writer.

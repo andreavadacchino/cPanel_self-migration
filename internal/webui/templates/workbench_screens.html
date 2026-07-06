@@ -40,6 +40,51 @@
 {{template "wbHead" .}}
 <h1>Cosa verrà migrato <span class="muted">— {{.Session.Name}}</span></h1>
 {{template "nextActionBox" .}}
+
+{{/* Fase 1 — Piano migrazione (read-only): cosa succede se premo «Avvia». */}}
+<section class="card">
+  <h2>Piano migrazione</h2>
+  {{if not .Plan.Ready}}
+  <div class="warnbox">{{.Plan.NotReadyMessage}}</div>
+  {{range .Plan.Warnings}}<p class="muted">&#9432; {{.Detail}}</p>{{end}}
+  {{else}}
+  <p>
+    {{if .Plan.CanStartMigration}}<span class="badge done">Pronto per migrare</span>
+    {{else}}<span class="badge error">Non ancora pronto</span>{{end}}
+  </p>
+  <p class="muted">{{.Plan.StartSummary}}</p>
+
+  <h3>Cosa verrà eseguito automaticamente</h3>
+  <ul class="stack">
+    {{range .Plan.Areas}}{{if .AutoRunnable}}<li><span class="badge {{.BadgeClass}}">{{.CategoryLabel}}</span> <strong>{{.Label}}</strong> — {{.Summary}}</li>{{end}}{{end}}
+    {{if not .Plan.CanStartMigration}}<li class="muted">Nessuna esecuzione automatica finché la migrazione non è pronta.</li>{{end}}
+  </ul>
+
+  <h3>Cosa resta manuale o verificabile</h3>
+  <ul class="stack">
+    {{range .Plan.Areas}}{{if and .Included (not .AutoRunnable)}}<li><span class="badge {{.BadgeClass}}">{{.CategoryLabel}}</span> <strong>{{.Label}}</strong> — {{.Summary}}</li>{{end}}{{end}}
+  </ul>
+
+  {{if .Plan.Blockers}}
+  <h3>Cosa blocca la migrazione</h3>
+  <div class="warnbox">
+    <ul>{{range .Plan.Blockers}}<li><strong>{{.Area}}</strong>: {{.Detail}}</li>{{end}}</ul>
+    Risolvi questi problemi e riesegui il preflight.
+  </div>
+  {{end}}
+  {{if .Plan.ExcludedBlockers}}<p class="muted">&#9432; Altri problemi bloccanti riguardano aree non incluse in questa migrazione ({{len .Plan.ExcludedBlockers}}): non le migreremo, ma finché l'analisi complessiva è bloccata l'avvio automatico resta disabilitato.</p>{{end}}
+
+  <h3 class="muted">Cosa è escluso dallo scope</h3>
+  <ul class="stack muted">
+    {{range .Plan.Areas}}{{if not .Included}}<li>{{.Label}} — non incluso in questa migrazione.</li>{{end}}{{end}}
+  </ul>
+
+  {{range .Plan.Warnings}}<p class="muted">&#9432; {{.Detail}}</p>{{end}}
+
+  <p><span class="badge draft">Avvia migrazione — disponibile nella Fase 3</span></p>
+  {{end}}
+</section>
+
 {{if .Coverage}}
 <p class="muted">✅ automatico · 🟡 richiede una conferma operatore · ⚪ non gestito dal tool (con il motivo).</p>
 <table>
