@@ -563,6 +563,21 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
+	// New Migration Wizard: GET renders the guided form, POST creates the
+	// session with its non-secret setup metadata.
+	if path == "/workbench/new" {
+		switch r.Method {
+		case http.MethodGet:
+			s.workbench.handleNewForm(w, r)
+		case http.MethodPost:
+			s.post(w, r, s.workbench.handleWizardCreate)
+		default:
+			w.Header().Set("Allow", "GET, POST")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return true
+	}
+
 	const sessionPrefix = "/workbench/session/"
 	if !strings.HasPrefix(path, sessionPrefix) {
 		return false

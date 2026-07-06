@@ -91,11 +91,20 @@ func TestWorkbenchNoWriteVerbs(t *testing.T) {
 }
 
 // TestSessionJSONNoCredentialFields verifies that the Session type's JSON
-// serialization never includes fields that could contain credentials.
+// serialization never includes fields that could contain SECRETS.
+//
+// Since the New Migration Wizard (setup flow) the session legitimately stores
+// the NON-secret connection COORDINATES of a migration — host, port and the
+// cPanel account (== user-level SSH user) — under Session.Setup. Those are
+// safe to persist and display; they are what makes a session self-describing.
+// This guard therefore forbids only genuinely secret-bearing tags. Credentials
+// (ssh_pass, tokens, keys) live ONLY in host.yaml (0600) and must never appear
+// in a session json tag. A structural companion guard lives in setup_test.go
+// (TestEndpointHasNoSecretField).
 func TestSessionJSONNoCredentialFields(t *testing.T) {
 	credentialFields := []string{
-		"password", "token", "secret", "ssh_key", "private_key",
-		"host", "port", "ip", "ssh_user",
+		"password", "passwd", "ssh_pass", "token", "secret",
+		"ssh_key", "private_key", "apikey", "api_key", "credential",
 	}
 
 	dir := "."

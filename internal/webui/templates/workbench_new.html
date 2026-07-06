@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nuova migrazione — Migrazione cPanel</title>
+{{template "themeCSS" .}}
+</head>
+<body>
+{{template "appHeader" "workbench"}}
+<div class="container">
+<nav class="crumbs"><a href="/workbench">← Tutte le sessioni</a></nav>
+
+<h1>Nuova migrazione</h1>
+<p class="muted">Definisci la migrazione di un account: da quale server parti, verso quale server vai, quale account copi e cosa vuoi spostare. Alla fine ti guideremo al controllo preliminare (preflight).</p>
+
+{{if .Errors}}
+<div class="warnbox">
+  <strong>Controlla questi campi:</strong>
+  <ul style="margin:.4rem 0 0 1.1rem">{{range .Errors}}<li>{{.}}</li>{{end}}</ul>
+</div>
+{{end}}
+
+<form method="POST" action="/workbench/new">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+
+<div class="card">
+<fieldset>
+<legend>1 · Nome della migrazione</legend>
+<label for="w_name">Come vuoi chiamare questa migrazione? <span class="muted">(obbligatorio)</span>
+  <input type="text" id="w_name" name="name" value="{{.Name}}" required placeholder="es. giorginisposi"></label>
+<label for="w_domain">Dominio principale <span class="muted">(consigliato)</span>
+  <input type="text" id="w_domain" name="primary_domain" value="{{.PrimaryDomain}}" placeholder="es. giorginisposi.it"></label>
+<label for="w_notes">Note <span class="muted">(facoltative)</span>
+  <input type="text" id="w_notes" name="notes" value="{{.Notes}}" placeholder="promemoria per te"></label>
+</fieldset>
+</div>
+
+<div class="card">
+<fieldset>
+<legend>2 · Da quale server stai migrando? (sorgente)</legend>
+<p class="muted">Il server di partenza viene solo letto: non viene mai modificato.</p>
+<label for="w_src_host">Indirizzo del server (IP o hostname) <span class="muted">(obbligatorio)</span>
+  <input type="text" id="w_src_host" name="src_host" value="{{.Src.Host}}" required placeholder="es. 192.168.1.193"></label>
+<label for="w_src_port">Porta SSH
+  <input type="text" id="w_src_port" name="src_port" value="{{.Src.Port}}" placeholder="22"></label>
+<label for="w_src_account">Account cPanel <span class="muted">(è anche l'utente SSH) — (obbligatorio)</span>
+  <input type="text" id="w_src_account" name="src_account" value="{{.Src.Account}}" required placeholder="es. giorginisposi"></label>
+</fieldset>
+</div>
+
+<div class="card">
+<fieldset>
+<legend>3 · Verso quale server vuoi migrare? (destinazione)</legend>
+<p class="muted">Il server di destinazione è quello che riceve la copia.</p>
+<label for="w_dst_host">Indirizzo del server (IP o hostname) <span class="muted">(obbligatorio)</span>
+  <input type="text" id="w_dst_host" name="dst_host" value="{{.Dst.Host}}" required placeholder="es. 192.168.1.78"></label>
+<label for="w_dst_port">Porta SSH
+  <input type="text" id="w_dst_port" name="dst_port" value="{{.Dst.Port}}" placeholder="22"></label>
+<label for="w_dst_account">Account cPanel <span class="muted">(è anche l'utente SSH) — (obbligatorio)</span>
+  <input type="text" id="w_dst_account" name="dst_account" value="{{.Dst.Account}}" required placeholder="es. giorginisposi"></label>
+</fieldset>
+</div>
+
+<div class="card">
+<fieldset>
+<legend>4 · Cosa vuoi migrare?</legend>
+<p class="muted">Scegli i contenuti da copiare. Nessuna opzione «migra tutto»: selezioni solo ciò che ti serve.</p>
+<label><input type="checkbox" name="content_files" value="1"{{if .Content.Files}} checked{{end}}> File del sito</label>
+<label><input type="checkbox" name="content_databases" value="1"{{if .Content.Databases}} checked{{end}}> Database</label>
+<label><input type="checkbox" name="content_email" value="1"{{if .Content.Email}} checked{{end}}> Email / Maildir</label>
+<label><input type="checkbox" name="content_email_config" value="1"{{if .Content.EmailConfig}} checked{{end}}> Configurazioni email (inoltri, filtri, risponditori)</label>
+<label><input type="checkbox" name="content_cron" value="1"{{if .Content.Cron}} checked{{end}}> Cron (operazioni pianificate)</label>
+</fieldset>
+
+<div class="dangerzone">
+<h3>DNS — area delicata</h3>
+<p>Il DNS è separato di proposito: modificarlo può raggiungere i nameserver di produzione e cambiare dove punta il dominio per tutti. Non è mai incluso automaticamente in una migrazione di contenuti. Attivalo solo se sai di volerlo gestire da qui.</p>
+<label><input type="checkbox" name="content_dns" value="1"{{if .Content.DNS}} checked{{end}}> Includi la gestione DNS in questa migrazione</label>
+</div>
+</div>
+
+<div class="card">
+<fieldset>
+<legend>5 · Pronto per il preflight</legend>
+<p class="muted">Alla creazione ti porteremo alla migrazione, con il <strong>controllo preliminare (preflight)</strong> come prossimo passo consigliato.</p>
+<div class="warnbox">
+  <strong>Configurazione tecnica richiesta prima del preflight.</strong>
+  Le <em>credenziali</em> (password SSH) non si inseriscono qui: vanno completate nel file <code>host.yaml</code> nella directory di lavoro. Puoi configurarle dalla <a href="/">pagina delle connessioni</a>.
+</div>
+<button type="submit">Crea migrazione</button>
+</fieldset>
+</div>
+
+</form>
+</div>
+</body>
+</html>

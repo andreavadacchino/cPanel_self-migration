@@ -166,6 +166,45 @@ type TimelineEvent struct {
 	ToolVersion string    `json:"tool_version"`
 }
 
+// Endpoint records the NON-SECRET coordinates of one cPanel host in a
+// migration: where it is and which account to operate on. It carries NO
+// password/token field ON PURPOSE — the session is persisted to disk and may
+// be bundled into a report/archive, so a secret here would leak by
+// construction. Credentials live only in host.yaml (0600). Account is the
+// cPanel account user, which in this tool's model is the same as the
+// user-level SSH user (there is no separate account field in the config).
+type Endpoint struct {
+	Host    string `json:"host,omitempty"`    // IP or hostname
+	Port    int    `json:"port,omitempty"`    // SSH port (default 22)
+	Account string `json:"account,omitempty"` // cPanel account == user-level SSH user
+}
+
+// ContentSelection records which content areas the operator chose to migrate.
+// DNS is DELIBERATELY a separate flag, never implied by a bulk "migrate
+// everything" gesture (the wizard has no such gesture): touching DNS can reach
+// production nameservers, so it must be an explicit, isolated choice.
+type ContentSelection struct {
+	Files       bool `json:"files"`
+	Databases   bool `json:"databases"`
+	Email       bool `json:"email"`
+	EmailConfig bool `json:"email_config"`
+	Cron        bool `json:"cron"`
+	DNS         bool `json:"dns"`
+}
+
+// SetupMeta is the operator-facing definition of a migration captured by the
+// New Migration Wizard: which account, from where, to where, and what to move.
+// Every field is non-secret and safe to persist and display. It is optional (a
+// pointer on Session, json omitempty) so sessions created before the wizard —
+// which have no "setup" key — stay readable and stay nil.
+type SetupMeta struct {
+	PrimaryDomain string           `json:"primary_domain,omitempty"`
+	Notes         string           `json:"notes,omitempty"`
+	Source        Endpoint         `json:"source"`
+	Destination   Endpoint         `json:"destination"`
+	Content       ContentSelection `json:"content"`
+}
+
 // Session represents a single migration session — the governance envelope
 // around one account migration from source to destination.
 type Session struct {
@@ -182,4 +221,8 @@ type Session struct {
 	Artifacts          []ArtifactEntry `json:"artifacts"`
 	Timeline           []TimelineEvent `json:"timeline"`
 	ToolVersion        string          `json:"tool_version"`
+	// Setup is the non-secret migration definition from the New Migration
+	// Wizard. Nil for sessions created before the wizard or via the legacy
+	// name/source/destination create path.
+	Setup *SetupMeta `json:"setup,omitempty"`
 }
