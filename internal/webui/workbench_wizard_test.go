@@ -51,6 +51,20 @@ func validWizardForm(csrf string) url.Values {
 	}
 }
 
+// TestWorkbenchListLinksToWizard: the sessions list must offer a discoverable
+// entry point to the guided wizard.
+func TestWorkbenchListLinksToWizard(t *testing.T) {
+	dir := t.TempDir()
+	h, _ := wizardHandler(t, dir)
+	rr := doReq(h, http.MethodGet, "/workbench", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /workbench = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `href="/workbench/new"`) {
+		t.Errorf("sessions list must link to /workbench/new")
+	}
+}
+
 func TestWizardFormRenders(t *testing.T) {
 	dir := t.TempDir()
 	h, _ := wizardHandler(t, dir)
