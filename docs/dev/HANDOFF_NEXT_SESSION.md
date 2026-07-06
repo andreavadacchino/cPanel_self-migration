@@ -6,11 +6,35 @@ Stai lavorando sul tool Go **cpanel-self-migration**, directory locale abituale:
 ## Leggi PRIMA
 
 1. `docs/dev/FRONTEND_FLIGHT_DIRECTOR_ROADMAP.md`
-2. `docs/dev/PR69_JOB_JOURNAL_DESIGN.md` (spec developer-ready della prossima PR)
+2. `docs/dev/PR69_JOB_JOURNAL_DESIGN.md` (spec della fase Job Journal — **IMPLEMENTATA**, GitHub PR #70)
 3. `docs/dev/DEVELOPMENT_STATE.md`
 4. `docs/dev/DOGFOODING_2_REPORT.md`
 5. `docs/dev/DOGFOODING_3_UX_WALK.md`
 6. `docs/dev/CUTOVER_RUNBOOK.md`
+
+## PR #70 — In-Flight Job Rehydration Journal — COMPLETATA (2026-07-06)
+
+Prima fase tecnica della roadmap documentale #69 (Setup/Rehydration Foundation),
+mergiata come **GitHub PR #70**. Consegnato:
+
+- `job.json` per-working-dir (atomico 0600, come `store.writeSession`): identità+fase
+  dell'exec in corso/ultimo. Schema **lean** ratificato (no item-level in job.json:
+  riusato da `loadRunMonitor`/`events.jsonl`); granularity **opzione B** (nessun writer toccato).
+- rehydration minima dell'exec in corso su refresh (banner running/interrupted);
+- **409 leggibili** su tutti e 3 i chiamanti dello slot (`/run`, `/accept`, `/exec`) via `writeBusy409`;
+- **recovery** `running`→`interrupted` allo startup + reconcile read-time (no-write su GET);
+- **rollback gated by backup** (`areaFacts.BackupPresent` → pulsante solo se `<area>_backup.json` esiste);
+- **meta-refresh 2s** sulle schermate workbench mentre `JobLive` (riuso pattern dashboard);
+- anti-leak: journal solo identità+fase, mai credenziali/argv (testato anche sul failure path).
+
+**SSE NON implementata** — rimandata, da **rivalutare solo dopo dogfooding reale su una
+migrazione lunga**. Molto del valore SSE (reconnect, phase progress, stati) è già coperto da
+`job.json` + `loadRunMonitor` + meta-refresh; l'incremento reale è UX (no flicker, log-tail live)
+a costo di complessità (endpoint streaming long-lived, gate su GET persistente, reconnect).
+
+**Prossima direzione consigliata (NON iniziata): Setup Flow / New Migration Wizard** — semplificare
+il flusso operatore: nuova migrazione → sorgente → destinazione → account → cosa migrare → preflight.
+Possibile PR successiva: «Setup Flow / New Migration Wizard». Non iniziare codice SSE.
 
 ## Stato consolidato al 2026-07-06
 
@@ -34,6 +58,9 @@ Le PR recenti hanno chiuso diversi blocchi importanti:
 - **#66**: workbench UX redesign in 7 schermate.
 - **#67**: traduzione IT delle manual actions a livello presentazione.
 - **#68**: design system condiviso e landing moderna.
+- **#69**: roadmap Flight Director (docs-only) + spec dev-ready Job Journal.
+- **#70**: In-Flight Job Rehydration Journal (`job.json`, 409 leggibili, recovery interrupted,
+  rollback gated by backup, meta-refresh live). SSE NON inclusa (rimandata).
 
 ## Correzione strategica
 
@@ -79,9 +106,10 @@ Gli artifact restano fonte auditabile, ma non devono essere il linguaggio primar
 
 ## Roadmap frontend aggiornata
 
-### PR 69 — In-Flight Job Rehydration (Job Journal)
+### PR 69 — In-Flight Job Rehydration (Job Journal) — ✅ FATTA (GitHub PR #70)
 
-Questa è la prossima PR consigliata. **Spec developer-ready: `PR69_JOB_JOURNAL_DESIGN.md`.**
+Implementata e mergiata (vedi «PR #70 — COMPLETATA» sopra). Spec: `PR69_JOB_JOURNAL_DESIGN.md`.
+Il setup wizard (69b) NON è incluso: è la prossima direzione consigliata (Setup Flow).
 
 Obiettivo: la UI non deve mai perdere il controllo di un job in corso. La
 rehydration di stato *completato* **esiste già** (`readArtifactFacts` in
@@ -115,7 +143,9 @@ Fuori scope:
 - full visual redesign;
 - cutover automation.
 
-### PR 70 — Live Job Engine: SSE + Progress/Log History
+### PR 70 (roadmap) — Live Job Engine: SSE + Progress/Log History — ⏸️ RIMANDATA
+
+Da rivalutare **solo dopo dogfooding reale su una migrazione lunga**. Non iniziare in questa fase.
 
 Scope:
 
@@ -189,8 +219,11 @@ Scope:
 4. Qual è la soglia di stale snapshot prima del cutover?
 5. Cosa significa esattamente `Resume` dopo job interrotto?
 6. Quanto deve durare la fase di osservazione/quarantena prima di dire che il vecchio server può essere spento?
-7. **Schema `job.json`** — campi/path/TTL da ratificare (proposta in `PR69_JOB_JOURNAL_DESIGN.md` §4).
-8. **Progress granularity** — estendere `--json-events` a tutte le fasi, o accettare progress per-fase per DNS/email/cron/pipeline? (`events.jsonl` oggi solo per `migrate_content`).
+7. ~~**Schema `job.json`**~~ — **RATIFICATO (PR #70)**: schema lean (`session_id, action, started_at,
+   updated_at, state, phase, error, tool_version`), path `<dir>/job.json`, nessun TTL (un journal per
+   working dir, sovrascritto). Item-level NON in job.json (riusato da `loadRunMonitor`).
+8. ~~**Progress granularity**~~ — **RATIFICATO (PR #70)**: opzione B (phase-level dal journal;
+   item-level solo per `migrate_content` dal monitor esistente). Nessun writer toccato. Opzione A → PR SSE futura.
 9. **`host.yaml`** — deciso: resta dov'è ma escluso da ogni archive/report bundle (roadmap §12).
 
 ## Non-goal permanenti per questa fase

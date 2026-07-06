@@ -486,6 +486,11 @@ Default recommendation:
 
 ### PR 69 — Setup Flow + In-Flight Job Rehydration
 
+> **Stato (2026-07-06):** Job Journal **FATTO** e mergiato come GitHub **PR #70**
+> (`job.json`, 409 leggibili, recovery interrupted, rollback gated by backup,
+> meta-refresh live). Il **Setup wizard (69b)** NON è ancora fatto → prossima
+> direzione consigliata. SSE (PR 70) **rimandata**, da rivalutare dopo dogfooding reale.
+
 Goal: ensure the UI never loses migration context — including while a job is running.
 
 Primary deliverable — **the job journal (`job.json`)**: a persisted, per-session
@@ -622,11 +627,11 @@ Before implementation, decide:
 4. What is the stale threshold for source snapshots before cutover?
 5. What does resume mean after an interrupted migration?
 6. What is the recommended observation/quarantine period before declaring the old server dismissible?
-7. **Job journal schema (`job.json`)** — open: which fields (action, started_at,
-   phase, item, status, tail reference), where it lives per-session, and its TTL.
-   To be finalized when PR 69 starts.
-8. **Item-level progress** — extend `--json-events` to all phases (§7 option A) or
-   accept phase-level progress for DNS/email/cron/pipeline (§7 option B)?
+7. **Job journal schema (`job.json`)** — **DECISO (PR #70)**: schema lean
+   (`session_id, action, started_at, updated_at, state, phase, error, tool_version`),
+   `<dir>/job.json`, nessun TTL. Item-level NON persistito (riusato da `loadRunMonitor`).
+8. **Item-level progress** — **DECISO (PR #70)**: opzione B (phase-level dal journal;
+   item-level solo per `migrate_content` dal monitor esistente). Opzione A rinviata alla PR SSE.
 9. **`host.yaml` location** — decided: keep in place, but **exclude it from every
    archive/report/export bundle** (§12). Moving it out of the working dir remains
    optional.
