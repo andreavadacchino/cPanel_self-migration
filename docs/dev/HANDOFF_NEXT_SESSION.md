@@ -28,10 +28,36 @@ Plan→Scope→Execution**, non il motore. Tre decisioni bloccate (tutte Opzione
    (riusa `readArtifactFacts`), nessun nuovo writer/CLI. `migration_plan.json`
    persistente rimandato finché lo schema non è product-validated.
 
-**Fase 1 — Platform Migration Plan / Readiness: IMPLEMENTATA** (GitHub PR #78). Prossima fase
-tecnica consigliata: **Fase 2 — Scope Confirmation after Preflight** (usa il Migration Plan
-read-only). Poi Fase 3 — Smart Migration Orchestrator (bottone «Avvia» + esecuzione aree safe
-in-scope con verify per fase). I numeri GitHub reali sono assegnati all'apertura delle PR.
+**Fase 1 (PR #78) e Fase 2: IMPLEMENTATE.** Prossima fase tecnica consigliata: **Fase 3 — Smart
+Migration Orchestrator** (bottone «Avvia» + esecuzione aree safe in-scope in sequenza, verify per
+fase, stop-on-fail; il gate server-side dell'orchestratore arriva qui). I numeri GitHub reali
+sono assegnati all'apertura delle PR.
+
+## Fase 2 — Scope Confirmation after Preflight — COMPLETATA (2026-07-06)
+
+Usa il Migration Plan (Fase 1) per far confermare/raffinare all'operatore cosa migrare, DOPO il
+preflight, prima dell'orchestratore. Consegnato:
+
+- **`internal/webui/workbench_scope_confirm.go`**: preset → `ContentSelection`
+  (`all_safe`/`site`/`email`/`files`/`databases`/`custom`); **DNS mai nel set automatico di un
+  preset** (checkbox indipendente «Includi DNS come task manuale/verificabile»). `hasAutomaticArea`
+  (DNS-only NON conta). `canEditScope(f, jobLive)`: scope congelato una volta partita una write
+  (`report.json` o `<area>_apply_report.json`) o con job live. `handleConfirmScope` (POST
+  `/workbench/session/<id>/scope`, CSRF): edit-gate → preset → **rifiuta DNS-only** (redirect
+  `?scope=need_area`, nessuna mutazione) → `ConfirmScope` → redirect `?scope=updated`.
+- **`internal/workbench` (types+store)**: `SetupMeta.ScopeConfirmedAt *time.Time` (omitempty,
+  backward-compatible); `Store.ConfirmScope(id, content, now)` = mutazione METADATA (no write di
+  migrazione), timeline event `scope_confirmed`, una sessione legacy (Setup nil) **acquisisce** un
+  Setup.
+- **UI** (`screen_migrazione`): blocco «Conferma cosa vuoi migrare» (radio preset + checkbox custom
+  + DNS), flash `?scope=`, badge «Scope confermato». **CTA state-aware** `migrationCTALabel`:
+  non-pronto → «Esegui il preflight…»; bloccato → «Migrazione bloccata…»; non confermato → «Conferma
+  lo scope prima di avviare»; confermato+pronto → «Avvia migrazione — disponibile nella Fase 3».
+  Il bottone **resta disabilitato**.
+- **Non toccati**: `validateStrongConfirmation`, `isApplyBlockedByChecklist`, `actionRegistry`,
+  `pipelineSteps`; `contentScope` **non** reso gate server-side (Fase 3). Nessun writer/CLI nuovo.
+- Test: 11 unit/handler/render (webui) + 2 store. Gate: gofmt/vet puliti, go test verde, race verde,
+  Docker LINUX_ALL_GREEN; go-reviewer.
 
 ## Fase 1 — Platform Migration Plan / Readiness — COMPLETATA (2026-07-06, PR #78)
 

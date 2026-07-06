@@ -203,6 +203,11 @@ type SetupMeta struct {
 	Source        Endpoint         `json:"source"`
 	Destination   Endpoint         `json:"destination"`
 	Content       ContentSelection `json:"content"`
+	// ScopeConfirmedAt is set when the operator confirms/refines the migration
+	// scope AFTER the preflight (Fase 2). Nil = scope chosen in the wizard but
+	// not yet confirmed post-preflight, or a legacy session. omitempty keeps old
+	// session.json readable and unchanged.
+	ScopeConfirmedAt *time.Time `json:"scope_confirmed_at,omitempty"`
 }
 
 // Session represents a single migration session — the governance envelope

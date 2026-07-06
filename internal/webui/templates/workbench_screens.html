@@ -44,6 +44,7 @@
 {{/* Fase 1 — Piano migrazione (read-only): cosa succede se premo «Avvia». */}}
 <section class="card">
   <h2>Piano migrazione</h2>
+  {{if .Flash}}<p class="muted">&#9432; {{.Flash}}</p>{{end}}
   {{if not .Plan.Ready}}
   <div class="warnbox">{{.Plan.NotReadyMessage}}</div>
   {{range .Plan.Warnings}}<p class="muted">&#9432; {{.Detail}}</p>{{end}}
@@ -81,7 +82,39 @@
 
   {{range .Plan.Warnings}}<p class="muted">&#9432; {{.Detail}}</p>{{end}}
 
-  <p><span class="badge draft">Avvia migrazione — disponibile nella Fase 3</span></p>
+  {{/* Fase 2 — Conferma/raffina lo scope dopo il preflight (metadata, non write). */}}
+  <h3>Conferma cosa vuoi migrare</h3>
+  {{if .Plan.ScopeConfirmed}}<p><span class="badge done">Scope confermato</span> La prossima fase potrà avviare la migrazione automatica delle aree selezionate e sicure.</p>{{end}}
+  {{if .Plan.CanEditScope}}
+  <p class="muted">Scegli cosa vuoi migrare automaticamente. Le aree lasciate fuori potrai gestirle manualmente. Il DNS non verrà applicato automaticamente: sarà un task manuale verificabile.</p>
+  <form method="post" action="/workbench/session/{{.Session.ID}}/scope">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <fieldset>
+      <legend>Cosa vuoi includere nella migrazione automatica?</legend>
+      <label><input type="radio" name="preset" value="all_safe" checked> Tutto il migrabile — file, database, email/Maildir, configurazioni email, cron</label><br>
+      <label><input type="radio" name="preset" value="site"> Solo sito — file + database</label><br>
+      <label><input type="radio" name="preset" value="email"> Solo email — Maildir + configurazioni email</label><br>
+      <label><input type="radio" name="preset" value="files"> Solo file</label><br>
+      <label><input type="radio" name="preset" value="databases"> Solo database</label><br>
+      <label><input type="radio" name="preset" value="custom"> Personalizzata (usa le caselle qui sotto)</label>
+    </fieldset>
+    <fieldset>
+      <legend>Personalizzata — aree singole (valide con «Personalizzata»)</legend>
+      <label><input type="checkbox" name="files" value="1"> File del sito</label>
+      <label><input type="checkbox" name="databases" value="1"> Database</label>
+      <label><input type="checkbox" name="email" value="1"> Email / Maildir</label>
+      <label><input type="checkbox" name="email_config" value="1"> Configurazioni email</label>
+      <label><input type="checkbox" name="cron" value="1"> Cron</label>
+    </fieldset>
+    <label><input type="checkbox" name="dns" value="1"> Includi DNS come task manuale/verificabile</label>
+    <p class="muted">DNS non verrà applicato automaticamente dal flusso principale. Se incluso, verrà mostrato come task manuale/verificabile.</p>
+    <button type="submit">Conferma scope</button>
+  </form>
+  {{else}}
+  <div class="warnbox">Lo scope non è più modificabile: una migrazione è già stata avviata o è in corso.</div>
+  {{end}}
+
+  <p><span class="badge draft">{{.Plan.CTALabel}}</span></p>
   {{end}}
 </section>
 

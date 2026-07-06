@@ -227,7 +227,10 @@ func TestMigrationPlanScreenRendersReady(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("migrazione = %d, want 200", code)
 	}
-	for _, want := range []string{"Piano migrazione", "Pronto per migrare", "disponibile nella Fase 3", "DNS"} {
+	// Fase 2: the CTA is state-aware. An unconfirmed scope (legacy session, no
+	// ScopeConfirmedAt) shows the "confirm scope first" label, not the deferred
+	// "disponibile nella Fase 3" (which appears only once the scope is confirmed).
+	for _, want := range []string{"Piano migrazione", "Pronto per migrare", "Conferma lo scope prima di avviare", "DNS"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("plan screen missing %q", want)
 		}

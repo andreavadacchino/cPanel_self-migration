@@ -616,6 +616,12 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
 			s.wbExec.handleExec(w, r, sessionID)
 		})
+	case action == "scope":
+		// Fase 2: confirm/refine the migration scope after the preflight, then
+		// return to the plan screen. Metadata mutation only, no migration write.
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.workbench.handleConfirmScope(w, r, sessionID)
+		})
 	case action == "accept":
 		// Register an operator acceptance from the Conferme screen, then return
 		// to that screen (the dashboard /accept still returns to "/").

@@ -52,11 +52,15 @@ type artifactFacts struct {
 	HostYAMLPresent        bool
 	InventorySourcePresent bool
 	InventoryDestPresent   bool
-	Checklist              *accountinventory.MigrationChecklist
-	ChecklistErr           string
-	DNS                    areaFacts
-	Email                  areaFacts
-	Cron                   areaFacts
+	// ContentApplyPresent is true when a content migration apply report
+	// (report.json) exists: a content migration has already run, so the scope
+	// must no longer be editable (Fase 2 edit gate).
+	ContentApplyPresent bool
+	Checklist           *accountinventory.MigrationChecklist
+	ChecklistErr        string
+	DNS                 areaFacts
+	Email               areaFacts
+	Cron                areaFacts
 }
 
 // recommendedAction is the "PROSSIMA AZIONE CONSIGLIATA" block (screen 1).
@@ -90,6 +94,7 @@ func readArtifactFacts(dir string) artifactFacts {
 		HostYAMLPresent:        fileExists(filepath.Join(dir, "host.yaml")),
 		InventorySourcePresent: fileExists(filepath.Join(dir, "inventory_source.json")),
 		InventoryDestPresent:   fileExists(filepath.Join(dir, "inventory_destination.json")),
+		ContentApplyPresent:    fileExists(filepath.Join(dir, "report.json")),
 	}
 
 	// Per-area artifacts. Plan filenames are the REAL on-disk names (verified
@@ -480,6 +485,9 @@ type workbenchView struct {
 	// migrato" screen: what is automatic / manual / blocking / excluded, and
 	// what happens if the operator presses "Avvia migrazione". Read-only.
 	Plan migrationPlan
+	// Flash is a transient message rendered once (e.g. after a scope confirm
+	// round-trip), derived from a query param — never persisted.
+	Flash string
 }
 
 // areaLabelsIT translates EVERY coverage-manifest area (and checklist section)
@@ -666,6 +674,11 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBu
 	v.Risk = buildRiskBadge(sess.Status, f, scope, v.Job, v.JobLive)
 	v.Timeline = buildTimeline(screen, sess.Status, f, scope, v.Job, v.JobLive)
 	v.Plan = buildMigrationPlan(f, scope)
+	// Fase 2 presentation fields: scope-confirmed state, the edit gate, and the
+	// state-aware CTA copy (the button itself stays disabled until Fase 3).
+	v.Plan.ScopeConfirmed = sess.Setup != nil && sess.Setup.ScopeConfirmedAt != nil
+	v.Plan.CanEditScope = canEditScope(f, v.JobLive)
+	v.Plan.CTALabel = migrationCTALabel(v.Plan)
 	if f.Checklist != nil {
 		v.OverallLabel = overallLabelIT(f.Checklist.OverallStatus)
 	}
