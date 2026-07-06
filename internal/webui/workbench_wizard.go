@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"bytes"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,12 +70,17 @@ func (ws *workbenchServer) handleNewForm(w http.ResponseWriter, r *http.Request)
 }
 
 func (ws *workbenchServer) renderWizard(w http.ResponseWriter, v wizardView, code int) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(code)
-	if err := ws.tpl.ExecuteTemplate(w, "workbench_new.html", v); err != nil {
-		// Header already written; nothing further we can do but log-less fail.
+	// Render into a buffer first so a template failure yields a clean 500
+	// (headers not yet sent) instead of a partial page under an already-written
+	// status code — the form uses a non-200 status on validation errors.
+	var buf bytes.Buffer
+	if err := ws.tpl.ExecuteTemplate(&buf, "workbench_new.html", v); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_, _ = w.Write(buf.Bytes())
 }
 
 // handleWizardCreate validates the wizard submission and, when valid, creates a
