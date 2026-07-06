@@ -333,6 +333,11 @@ type workbenchView struct {
 	// Job is the in-flight/last exec journal (nil when none), reconciled against
 	// the live slot: a running record with a free slot presents as interrupted.
 	Job *jobJournal
+	// JobLive is true only while an exec is genuinely in flight (journal running
+	// AFTER reconciliation), and drives the screen meta-refresh so the running
+	// job stays surfaced without a manual reload. Interrupted/completed/failed
+	// are terminal and do NOT refresh.
+	JobLive bool
 }
 
 // areaLabelsIT translates EVERY coverage-manifest area (and checklist section)
@@ -513,6 +518,7 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBu
 		AllKinds:    workbench.AllArtifactKinds,
 		Job:         reconcileJobJournal(dir, jobBusy),
 	}
+	v.JobLive = v.Job != nil && v.Job.State == jobStateRunning
 	if f.Checklist != nil {
 		v.OverallLabel = overallLabelIT(f.Checklist.OverallStatus)
 	}

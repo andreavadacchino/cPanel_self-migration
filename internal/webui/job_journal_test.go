@@ -305,6 +305,74 @@ func TestJobJournalViewReconcile(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// A running job makes the workbench screens auto-refresh (reuses the dashboard
+// meta-refresh) so an exec launched from a screen stays surfaced without a
+// manual reload — completes "exec sempre superficiale su refresh".
+// ---------------------------------------------------------------------------
+
+func TestJobLiveDrivesAutoRefresh(t *testing.T) {
+	dir := t.TempDir()
+	sess := &workbench.Session{ID: "mig_x", Name: "n", Status: workbench.StatusReadyForApply}
+
+	if v := buildWorkbenchView(dir, "c", "", sess, false); v.JobLive {
+		t.Error("no journal but JobLive is true")
+	}
+	now := time.Now().UTC()
+	if err := writeJobJournal(dir, jobJournal{
+		Action: "migrate content", State: jobStateRunning, StartedAt: now, UpdatedAt: now, Phase: "migrate content",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// running + slot busy → live (auto-refresh)
+	if v := buildWorkbenchView(dir, "c", "", sess, true); !v.JobLive {
+		t.Error("running + busy slot but JobLive false")
+	}
+	// running + free slot → reconciled to interrupted → NOT live
+	if v := buildWorkbenchView(dir, "c", "", sess, false); v.JobLive {
+		t.Error("running + free slot (interrupted) must not drive auto-refresh")
+	}
+	// terminal state → not live
+	if err := writeJobJournal(dir, jobJournal{Action: "x", State: jobStateCompleted, StartedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if v := buildWorkbenchView(dir, "c", "", sess, true); v.JobLive {
+		t.Error("completed job but JobLive true")
+	}
+}
+
+func TestWorkbenchScreenAutoRefreshesDuringExec(t *testing.T) {
+	h, _, sessID, csrf, fr := newJournalEnv(t)
+	fr.gate = make(chan struct{})
+	form := url.Values{"csrf": {csrf}, "action": {"dns_verify"}}
+	done := make(chan struct{})
+	go func() {
+		doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sessID+"/exec", form)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var body string
+	for time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		body = doWorkbenchReq(h, http.MethodGet, "/workbench/session/"+sessID, nil).Body.String()
+		if strings.Contains(body, `http-equiv="refresh"`) {
+			break
+		}
+	}
+	close(fr.gate)
+	<-done
+	if !strings.Contains(body, `http-equiv="refresh"`) {
+		t.Error("workbench screen did not auto-refresh while an exec was in flight")
+	}
+
+	// After completion the screen must stop auto-refreshing.
+	after := doWorkbenchReq(h, http.MethodGet, "/workbench/session/"+sessID, nil).Body.String()
+	if strings.Contains(after, `http-equiv="refresh"`) {
+		t.Error("workbench screen still auto-refreshes after the exec completed")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Backup detection (§8): facts expose per-area BackupPresent
 // ---------------------------------------------------------------------------
 
