@@ -229,6 +229,17 @@ real binary. Accounts must be registered in Orbit to be reachable;
 `turtlebeachandora.com`/`fidopetstore.it` exist on the server but are NOT
 in Orbit — `doctorbike.it` and `italplant.com` are and were used.
 
+## Dogfooding #4 (2026-07-07) — Smart Orchestrator (Fase 3)
+
+UI-walk in browser reale + suite test (43/43 PASS) + una esecuzione reale dell'orchestratore
+osservata end-to-end su store/dir **isolati** (senza `host.yaml` → fallimento al config-load,
+**nessun server cPanel contattato**; percorso di **fallimento parziale** reale osservato: badge
+`Ultimo job fallito`, flash `migrate=partial`, `job.json` `state=failed phase=Contenuti`).
+Verdetto **🔵 Buono ma serve Fase 4**: flusso wizard→piano→scope→una-conferma→stato parziale
+coerente e usabile, DNS spiegato e mai in auto-run. Buco non colmabile senza migrazione lunga
+reale: il monitor d'esecuzione (Fase 4) è il prerequisito per un apply reale su sacrificale
+(Scenario A). Nessun bug bloccante. Report: `DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md`.
+
 ## Dogfooding #2 (2026-07-04) — verdetto e follow-up
 
 Ciclo UI-only di giorginisposi (report completo:
