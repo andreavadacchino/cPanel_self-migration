@@ -11,7 +11,8 @@ Stai lavorando sul tool Go **cpanel-self-migration**, directory locale abituale:
 4. `docs/dev/DEVELOPMENT_STATE.md`
 5. `docs/dev/DOGFOODING_2_REPORT.md`
 6. `docs/dev/DOGFOODING_3_UX_WALK.md`
-7. `docs/dev/CUTOVER_RUNBOOK.md`
+7. `docs/dev/DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md` (dogfooding Fase 3 — verdetto 🔵 «serve Fase 4»)
+8. `docs/dev/CUTOVER_RUNBOOK.md`
 
 ## Direzione prodotto — decisioni bloccate (2026-07-06, PLATFORM_MIGRATION_ROADMAP)
 
@@ -32,6 +33,15 @@ Plan→Scope→Execution**, non il motore. Tre decisioni bloccate (tutte Opzione
 **Fase 4 — Progress + Execution Monitor** (monitor esecuzione per fase; SSE solo se il dogfooding
 reale su una migrazione lunga lo giustifica — vedi PR #70). I numeri GitHub reali sono assegnati
 all'apertura delle PR.
+
+**Dogfooding #4 (2026-07-07, `DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md`):** UI-walk in browser
+reale + suite test (43/43) + una esecuzione reale dell'orchestratore osservata end-to-end (fallita al
+config-load, dir isolata senza `host.yaml` → **nessun server contattato**, ma percorso di fallimento
+parziale reale). Verdetto **🔵 Buono ma serve Fase 4**: flusso wizard→piano→scope→una-conferma→stato
+parziale coerente e usabile; DNS spiegato e mai in auto-run; **non** dimostrabile «meta-refresh vs SSE»
+senza una migrazione lunga reale → il monitor d'esecuzione (Fase 4) è prerequisito per un apply reale
+su sacrificale (Scenario A). Nessun bug bloccante; due friction di messaggistica annotate
+(readiness↔next-action; badge «Bloccante»-cutover vs migrazione avviabile).
 
 ## Fase 3 — Smart Migration Orchestrator — COMPLETATA (2026-07-06)
 
