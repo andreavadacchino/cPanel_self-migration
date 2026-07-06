@@ -5,7 +5,7 @@ Stai lavorando sul tool Go **cpanel-self-migration**, directory locale abituale:
 
 ## Leggi PRIMA
 
-1. **`docs/dev/PLATFORM_MIGRATION_ROADMAP.md`** ⭐ — direzione prodotto attuale (tool → piattaforma smart) + roadmap PR #76-#82
+1. **`docs/dev/PLATFORM_MIGRATION_ROADMAP.md`** ⭐ — direzione prodotto attuale (tool → piattaforma smart) + roadmap a fasi (Fase 1…7)
 2. `docs/dev/FRONTEND_FLIGHT_DIRECTOR_ROADMAP.md`
 3. `docs/dev/PR69_JOB_JOURNAL_DESIGN.md` (spec della fase Job Journal — **IMPLEMENTATA**, GitHub PR #70)
 4. `docs/dev/DEVELOPMENT_STATE.md`
@@ -19,16 +19,16 @@ Trasformazione da workbench tecnico a **piattaforma smart di migrazione**. Scope
 chiave: **il motore è maturo e live-proven** — il gap è **orchestrazione + contratto
 Plan→Scope→Execution**, non il motore. Tre decisioni bloccate (tutte Opzione 1):
 
-1. **Orchestratore (PR #78):** una sola conferma forte → esegue in sequenza le aree
+1. **Orchestratore (Fase 3):** una sola conferma forte → esegue in sequenza le aree
    safe E in-scope, stop-on-first-failure, verify per fase, report unico. **DNS mai
    nell'auto-run.** Riusa `pipelineSteps` + gate esistenti.
 2. **DNS:** flusso primario = fotografa → classifica (5 categorie) → task manuali
    verificabili. `dns_apply` resta azione avanzata / Danger Zone, nessuna regressione.
-3. **Migration Plan (PR #76):** read-model aggregato sopra artifact esistenti
+3. **Migration Plan (Fase 1):** read-model aggregato sopra artifact esistenti
    (riusa `readArtifactFacts`), nessun nuovo writer/CLI. `migration_plan.json`
    persistente rimandato finché lo schema non è product-validated.
 
-**Prossima PR di codice consigliata: #76 — Platform Migration Plan / Readiness** (read-only).
+**Prossima fase tecnica consigliata: Fase 1 — Platform Migration Plan / Readiness** (read-only). Il numero GitHub reale della PR sarà quello assegnato all'apertura, non "76".
 
 ## PR #70 — In-Flight Job Rehydration Journal — COMPLETATA (2026-07-06)
 

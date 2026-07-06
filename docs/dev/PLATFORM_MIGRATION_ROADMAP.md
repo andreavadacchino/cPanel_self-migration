@@ -163,7 +163,7 @@ interni di `run_pipeline` (`pipelineSteps`), non lanciabili singolarmente.
    l'esposizione in UI.
 7. **Nessun preflight destinazione standalone.** La fotografia dei due lati è uno
    step di `run_pipeline` (via `inventory`), non un comando `preflight` dedicato.
-   Da valutare in #76/#77 (vedi §14).
+   Da valutare in Fase 1/Fase 2 (vedi §14).
 
 ---
 
@@ -185,7 +185,7 @@ La distinzione **bloccante-migrazione vs bloccante-cutover** è già nel modello
 
 ---
 
-## 7. Migration Plan (PR #76)
+## 7. Migration Plan (Fase 1)
 
 ### Decisione (bloccata)
 
@@ -193,7 +193,7 @@ La distinzione **bloccante-migrazione vs bloccante-cutover** è già nel modello
 > artifacts; it is not yet a new engine artifact. Persisting `migration_plan.json`
 > is deferred until the Plan schema is product-validated.**
 
-PR #76 è un **read-model di piattaforma**: aggregazione READ sopra artifact già
+La Fase 1 è un **read-model di piattaforma**: aggregazione READ sopra artifact già
 prodotti. **Nessun nuovo writer, nessun nuovo motore, nessun nuovo subcomando CLI.**
 Riusa `readArtifactFacts` (`workbench_view.go:88`) e il pattern view-model.
 
@@ -228,12 +228,12 @@ Bloccante:             spazio insufficiente · credenziali errate · account des
 Escluso:               aree non selezionate nello scope
 ```
 
-PR #76 risponde alla domanda **"Cosa succederà se premo Avvia migrazione?"**.
+La Fase 1 risponde alla domanda **"Cosa succederà se premo Avvia migrazione?"**.
 NON implementa ancora il bottone one-click.
 
 ---
 
-## 8. Scope Selection (PR #77)
+## 8. Scope Selection (Fase 2)
 
 Mappata su `workbench.ContentSelection` (`types.go:186`), già raccolta dal wizard:
 
@@ -249,7 +249,7 @@ Mappata su `workbench.ContentSelection` (`types.go:186`), già raccolta dal wiza
 \* DNS non entra mai nell'auto-run: se selezionato, alimenta il track manuale
 verificabile, non l'orchestratore.
 
-**Ogni scope parziale deve avere un finale coerente** (PR #81): "solo email
+**Ogni scope parziale deve avere un finale coerente** (Fase 6): "solo email
 completata" è uno stato terminale legittimo, non "migrazione incompleta".
 
 > Nota: `Email` e `EmailConfig` sono due flag distinti. `Email` = contenuto caselle
@@ -258,7 +258,7 @@ completata" è uno stato terminale legittimo, non "migrazione incompleta".
 
 ---
 
-## 9. Smart Migration Orchestrator (PR #78)
+## 9. Smart Migration Orchestrator (Fase 3)
 
 ### Decisione (bloccata) — Opzione 1
 
@@ -308,7 +308,7 @@ rewrite: compone `migrate_content`/`email_apply`/`cron_apply` esistenti.
 
 ---
 
-## 10. Manual Tasks comparativi (PR #80)
+## 10. Manual Tasks comparativi (Fase 5)
 
 Riusa il modello acceptance esistente: `ManualAction` (`checklist_types.go:134`) con
 chiave stabile `AK-<12hex>` = sha256(type\0section\0title\0detail), persistita in
@@ -374,20 +374,26 @@ la migrazione automatica. Non esegue lo switch DNS."* Il writer non va rimosso
 
 ---
 
-## 12. Roadmap PR proposta
+## 12. Roadmap proposta (a fasi)
 
-| PR | Titolo | Contenuto | Nuovo codice motore? |
-|----|--------|-----------|----------------------|
-| **#76** | Platform Migration Plan / Readiness | Struct `MigrationPlan` read-only + screen "Piano migrazione" (aggregazione artifact). Include DNS classification, non `dns_apply` primario. Risponde "cosa succede se premo Avvia". | No (read-model) |
-| **#77** | Scope Confirmation after Preflight | Schermata conferma scope dopo preflight, usa il Migration Plan read-only. DNS come manual task track, non auto-run. | No |
-| **#78** | Smart Migration Orchestrator | Orchestratore server-side: 1 conferma → aree safe in-scope in sequenza, verify per fase, stop-on-fail, stato parziale. Riusa `pipelineSteps` + gate. DNS escluso. | Sì (orchestrazione, non nuovi writer) |
-| **#79** | Progress + Execution Monitor | Progress per fase, job state, monitor esecuzione. (SSE solo se dogfooding lo giustifica) | Minimo |
-| **#80** | Comparative Manual Tasks | Task DNS src/dst, copia valore, "Verifica ora", stati task. Riusa acceptance model. | No/minimo |
-| **#81** | Final Verification / Migration Completion | Verifica finale + tassonomia stato finale (completata / con task aperti / non pronta / pronta cutover). Finale coerente per scope parziali. | No/minimo |
-| **#82** | Report finale / Archive | Report unico + archive (`host.yaml` escluso da ogni bundle). | Minimo |
-| _futura_ | Persist `migration_plan.json` | Solo dopo stabilizzazione schema, come contratto per orchestrator/report/audit/resume. | Sì (deferred) |
+> **Nota:** i numeri GitHub reali vengono assegnati al momento dell'apertura delle
+> PR. Questa roadmap usa **"Fase 1…7"** (numerazione logica) per evitare
+> disallineamenti tra piano logico e numerazione GitHub. Ogni fase diventerà una o
+> più PR il cui numero reale sarà quello che GitHub assegna in quel momento — non i
+> numeri qui sotto.
 
-Roadmap **incrementale, non mega-refactor**. Ogni PR è piccola, gateabile e
+| Fase | Titolo | Contenuto | Nuovo codice motore? |
+|------|--------|-----------|----------------------|
+| **Fase 1** | Platform Migration Plan / Readiness | Struct `MigrationPlan` read-only + screen "Piano migrazione" (aggregazione artifact). Include DNS classification, non `dns_apply` primario. Risponde "cosa succede se premo Avvia". | No (read-model) |
+| **Fase 2** | Scope Confirmation after Preflight | Schermata conferma scope dopo preflight, usa il Migration Plan read-only. DNS come manual task track, non auto-run. | No |
+| **Fase 3** | Smart Migration Orchestrator | Orchestratore server-side: 1 conferma → aree safe in-scope in sequenza, verify per fase, stop-on-fail, stato parziale. Riusa `pipelineSteps` + gate. DNS escluso. | Sì (orchestrazione, non nuovi writer) |
+| **Fase 4** | Progress + Execution Monitor | Progress per fase, job state, monitor esecuzione. (SSE solo se dogfooding lo giustifica) | Minimo |
+| **Fase 5** | Comparative Manual Tasks | Task DNS src/dst, copia valore, "Verifica ora", stati task. Riusa acceptance model. | No/minimo |
+| **Fase 6** | Final Verification / Migration Completion | Verifica finale + tassonomia stato finale (completata / con task aperti / non pronta / pronta cutover). Finale coerente per scope parziali. | No/minimo |
+| **Fase 7** | Report finale / Archive | Report unico + archive (`host.yaml` escluso da ogni bundle). | Minimo |
+| **Deferred** | Persist `migration_plan.json` | Solo dopo stabilizzazione schema, come contratto per orchestrator/report/audit/resume. | Sì (deferred) |
+
+Roadmap **incrementale, non mega-refactor**. Ogni fase è piccola, gateabile e
 verificabile in isolamento.
 
 ---
@@ -398,7 +404,7 @@ verificabile in isolamento.
 Migration Plan, screen nuove.
 
 **Rimandato / non-goal per questa fase:**
-- Orchestratore one-click implementato adesso (è PR #78, solo progettato qui).
+- Orchestratore one-click implementato adesso (è la Fase 3, solo progettata qui).
 - SSE (rimandata a dopo dogfooding reale).
 - Persistenza `migration_plan.json` (deferred, vedi §7).
 - Switch DNS automatico / cutover DNS automatico.
@@ -415,31 +421,31 @@ cieco "migra tutto", spegnimento vecchio server verde senza osservazione.
 1. **Preflight destinazione standalone.** Oggi non esiste un comando `preflight`:
    la fotografia dei due lati è uno step di `run_pipeline` (via `inventory`, il cui
    `Collect` fotografa entrambi i lati read-only). Se il flusso prodotto richiede un
-   preflight destinazione *prima e separato* dall'apply, va valutato in #76/#77 se
+   preflight destinazione *prima e separato* dall'apply, va valutato in Fase 1/Fase 2 se
    la pipeline read-only esistente basta o serve un'affordance dedicata. **Non
    risolto in questa sessione docs-only.**
 2. **Classificazione "safe/automatica" per area.** Quali condizioni rendono
    `routing email` o `cron` eligible per l'auto-run è un giudizio di prodotto da
-   codificare in #76 (definizione dei criteri) ed enforced in #78. Rischio:
+   codificare in Fase 1 (definizione dei criteri) ed enforced in Fase 3. Rischio:
    classificare safe qualcosa che in un caso limite non lo è. Mitigazione: la
    freshness guard per-op del motore config (`EvaluateEmailOp`, `CronApplyBackup`
    sha256) fallisce comunque closed.
 3. **Una-conferma vs gate per-write.** Collassare N conferme in 1 sposta la
    responsabilità del gate dentro l'orchestratore: DEVE ri-verificare la checklist
    prima di *ogni* fase (non solo all'inizio), altrimenti si indebolisce la
-   protezione odierna. Requisito hard per #78.
+   protezione odierna. Requisito hard per la Fase 3.
 4. **Affordance cluster-DNS-standalone** ancora assente in UI (§5, gap 6): non
-   blocca questa roadmap ma va nel track DNS manuale (#80).
+   blocca questa roadmap ma va nel track DNS manuale (Fase 5).
 
 ---
 
-## 15. Prossima PR consigliata
+## 15. Prossima fase consigliata
 
-**PR #76 — Platform Migration Plan / Readiness.**
+**Fase 1 — Platform Migration Plan / Readiness.**
 
 Costruisce il contratto dati/UI (read-only) che risponde a "cosa succederà premendo
 Avvia migrazione": cosa è automatico, manuale verificabile, bloccante, escluso,
-in scope. È il prerequisito di scope-confirmation (#77) e orchestratore (#78), e
+in scope. È il prerequisito di scope-confirmation (Fase 2) e orchestratore (Fase 3), e
 non tocca alcun writer.
 
 ---
@@ -453,8 +459,8 @@ non tocca alcun writer.
 | DNS non è trattato come falso blocker? | Sì | Track manuale verificabile, mai auto-run (§10) |
 | I task manuali sono verificabili, non solo "confermati"? | Sì | "Verifica ora" + acceptance model (§10) |
 | Il one-click non è "vai e spera"? | Sì | Verify per fase + stop-on-fail + stato parziale (§9) |
-| Lo scope parziale è supportato? | Sì | `ContentSelection`, finale coerente per scope (§8, §12 #81) |
-| Migrazione solo email/file/db ha finale coerente? | Sì | Stato terminale legittimo (#81) |
+| Lo scope parziale è supportato? | Sì | `ContentSelection`, finale coerente per scope (§8, Fase 6) |
+| Migrazione solo email/file/db ha finale coerente? | Sì | Stato terminale legittimo (Fase 6) |
 | Non stiamo costruendo Campaign Mode prematuramente? | Sì (evitato) | Single-account ribadito (§2, §13) |
 | Non stiamo aggiungendo SSE solo per estetica? | Sì (evitato) | Rimandata a dogfooding (§5, §11) |
-| Il piano è implementabile a PR piccole? | Sì | #76 read-only, incrementali (§12) |
+| Il piano è implementabile a PR piccole? | Sì | Fase 1 read-only, incrementali (§12) |
