@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{{if .JobLive}}<meta http-equiv="refresh" content="2">{{end}}
 <title>{{.Session.Name}} — {{.Screen}}</title>
 {{template "themeCSS" .}}
 </head>
@@ -20,7 +21,12 @@
   <a href="/workbench/session/{{.Session.ID}}/conferme"{{if eq .Screen "conferme"}} class="active"{{end}}>Conferme operatore</a>
   <a href="/workbench/session/{{.Session.ID}}/applica"{{if eq .Screen "applica"}} class="active"{{end}}>Applica e verifica</a>
   <a href="/workbench/session/{{.Session.ID}}/chiusura"{{if eq .Screen "chiusura"}} class="active"{{end}}>Chiusura</a>
-</div>{{end}}
+</div>{{template "jobBanner" .}}{{end}}
+
+{{/* jobBanner surfaces the in-flight/last exec from the job journal on every
+     screen, so a refresh or re-entry never loses a running migration and an
+     interrupted one is flagged instead of silently offering a 409 on retry. */}}
+{{define "jobBanner"}}{{with .Job}}{{if eq (printf "%s" .State) "running"}}<div style="margin:.75rem 0;padding:.6rem .85rem;border-radius:6px;background:#fef9c3;border:1px solid #eab308">&#9203; <strong>{{.Action}}</strong> in corso dalle {{fmtTime .StartedAt}}{{if and .Phase (ne .Phase .Action)}} — fase {{.Phase}}{{end}}. La pagina si aggiorna automaticamente.</div>{{else if eq (printf "%s" .State) "interrupted"}}<div style="margin:.75rem 0;padding:.6rem .85rem;border-radius:6px;background:#fee2e2;border:1px solid #dc2626">&#9888; L'operazione <strong>{{.Action}}</strong> avviata alle {{fmtTime .StartedAt}} è stata <strong>interrotta</strong> (processo terminato). Controlla gli artefatti prima di riprovare.</div>{{end}}{{end}}{{end}}
 
 {{define "nextActionBox"}}<div class="nextbox">
   <div class="lead">Prossima azione consigliata</div>

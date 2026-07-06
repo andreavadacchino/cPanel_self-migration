@@ -329,20 +329,33 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	}
 
 	// Single-writer slot (shared with /run and /accept to prevent concurrent
-	// writes to the same artifact directory)
+	// writes to the same artifact directory). A busy slot is no longer an
+	// opaque 409: busyMessage reads the job journal and names the running
+	// action + started-at + phase (roadmap §7).
 	if !ws.job.tryReserve() {
-		http.Error(w, "an execution is already in progress", http.StatusConflict)
+		writeBusy409(w, ws.dir, ws.job)
 		return
 	}
-	defer ws.job.release()
+	// Persist the job identity BEFORE launching the subprocess, so a refresh, a
+	// sleep or a killed ui always reconstructs "action running since ..."
+	// (roadmap §6). The terminal state is written in the defer so it runs on
+	// every return path (attach/timeline errors included); pairing it with
+	// release() means a refresh never sees running with a free slot within a
+	// live process.
+	start := time.Now()
+	startedAt := start.UTC()
+	startJobJournal(ws.dir, sessionID, action.name, startedAt)
+	var execErr error
+	defer func() {
+		finishJobJournal(ws.dir, sessionID, action.name, action.name, startedAt, time.Now().UTC(), execErr)
+		ws.job.release()
+	}()
 
 	// Execute subprocess synchronously
 	ctx, cancel := context.WithTimeout(ws.base, execTimeout)
 	defer cancel()
 
 	tail := &tailBuffer{limit: execTailLimit}
-	start := time.Now()
-	var execErr error
 	var tolerated []string // names of tolerant steps that failed but did not abort
 	if action.pipeline {
 		for _, st := range pipelineSteps(ws.dir) {
