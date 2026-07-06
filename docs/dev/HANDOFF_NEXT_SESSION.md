@@ -28,7 +28,35 @@ Plan→Scope→Execution**, non il motore. Tre decisioni bloccate (tutte Opzione
    (riusa `readArtifactFacts`), nessun nuovo writer/CLI. `migration_plan.json`
    persistente rimandato finché lo schema non è product-validated.
 
-**Prossima fase tecnica consigliata: Fase 1 — Platform Migration Plan / Readiness** (read-only). Il numero GitHub reale della PR sarà quello assegnato all'apertura, non "76".
+**Fase 1 — Platform Migration Plan / Readiness: IMPLEMENTATA** (GitHub PR #78). Prossima fase
+tecnica consigliata: **Fase 2 — Scope Confirmation after Preflight** (usa il Migration Plan
+read-only). Poi Fase 3 — Smart Migration Orchestrator (bottone «Avvia» + esecuzione aree safe
+in-scope con verify per fase). I numeri GitHub reali sono assegnati all'apertura delle PR.
+
+## Fase 1 — Platform Migration Plan / Readiness — COMPLETATA (2026-07-06, PR #78)
+
+Prima PR di codice della roadmap prodotto. **Read-model only**, risponde a «cosa succede se premo
+Avvia migrazione?». Consegnato:
+
+- **`internal/webui/workbench_migration_plan.go`**: read-model puro `migrationPlan` +
+  `buildMigrationPlan(f, scope)` che aggrega `artifactFacts` (via `readArtifactFacts`) e
+  `contentScope`. 6 categorie (automatic / manual_verifiable / blocking_migration /
+  blocking_cutover / informational / excluded). Fail-soft: senza checklist → `Ready=false` +
+  messaggio umano.
+- **`CanStartMigration`** = stesso oracolo di blocco di `nextAction` (`ApplyBlocked ||
+  OverallStatus==NOT_READY`, = gate reale `isApplyBlockedByChecklist`) **più** «almeno un'area
+  automatica in scope» (l'orchestratore Fase 3 esegue solo aree automatiche): può solo essere più
+  conservativo, mai contraddire il blocco reale.
+- **DNS sempre manuale/verificabile, MAI auto-runnable** (dns_apply resta avanzato/Danger Zone).
+  Cron/EmailConfig automatici solo se il piano esiste (rischio safe/automatico non finto risolto).
+  Blocker di aree escluse mostrati a parte (`ExcludedBlockers`), mai nascosti (gate globale).
+- **UI**: schermata «Cosa verrà migrato» (`screen_migrazione`) arricchita col blocco «Piano
+  migrazione»; CTA one-click **disabilitata** («Avvia migrazione — disponibile nella Fase 3»).
+- **Nessun** nuovo writer/CLI, **nessun** `migration_plan.json` persistente (deferred), `/exec` +
+  strong-confirmation immutati, `contentScope` non reso gate server-side.
+- Test: 10 unit + 2 render HTML. Gate: gofmt/vet puliti, go test verde, race verde, Docker
+  LINUX_ALL_GREEN. Review: go-reviewer R1 REQUEST CHANGES (oracolo `CanStartMigration`;
+  `applyBlockers` non scope-aware; dead code) → fix → **R2 APPROVE**.
 
 ## PR #70 — In-Flight Job Rehydration Journal — COMPLETATA (2026-07-06)
 
