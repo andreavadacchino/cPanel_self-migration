@@ -58,9 +58,33 @@ escluse dallo scope. `nextAction`/`missingVerifies` filtrano per `contentScope`;
 le aree incluse; DNS incluso → nota prudente; DNS/Cron/EmailConfig esclusi → mai citati; legacy
 invariato. Presentation-only, nessun writer/runner/apply/verify toccato.
 
-**Prossima direzione consigliata (NON iniziata): PR 71 — Flight Director UI** (header persistente,
-timeline laterale, main stage contestuale, next recommended action, risk badge). **SSE ancora
-rimandata** a dopo un dogfooding reale su una migrazione lunga. Non iniziare codice SSE.
+## PR — Flight Director UI shell — COMPLETATA (2026-07-06)
+
+Salto da «schermate workbench» a **cabina di regia**, SOLO presentazione. Consegnato:
+
+- **Header persistente** (`fdHeader`) su tutte le schermate sessione: nome migrazione, dominio
+  principale, sorgente→destinazione con account/porte, stato governance, **risk badge** onesto,
+  tag DNS incluso/escluso, job in corso/interrotto, prossima azione. Wizard mostra account@host;
+  legacy `Setup==nil` fa fallback a source/destination profile.
+- **Timeline laterale** (`fdTimeline`): le 7 fasi (Panoramica · Preflight · Fotografia account ·
+  Cosa verrà migrato · Conferme operatore · Applica e verifica · Chiusura) con stato sintetico
+  (Da fare / In corso / Fatto / Attenzione), fase corrente evidenziata, link alle **route reali**
+  esistenti (nessuna route inventata). Sostituisce il vecchio pill-nav `wbNav`.
+- **Main stage** contestuale: i template delle schermate esistenti restano invariati dentro
+  `<main class="fd-stage">`; `wbHead`/`wbFooter` ristrutturati per la shell a due colonne.
+- **Risk badge onesto** (`buildRiskBadge`) e **timeline** (`buildTimeline`): funzioni pure in
+  `workbench_flightdirector.go`, derivate da status + artifact facts + job journal + scope. NON
+  promettono falso verde: stati terminali (cutover completato / archiviata) vincono su una
+  checklist stale; job running/interrotto e blocker restano visibili.
+
+Nessun writer/runner/apply/verify/collector toccato; nessun endpoint/SSE nuovo; `/exec` immutato;
+form critici (migrate_content, conferma forte per-account, DNS danger zone, CSRF) intatti; legacy
+invariato. Gate: go-reviewer R1 REQUEST CHANGES (stati terminali + coerenza inventario) → R2
+APPROVE; Docker LINUX_ALL_GREEN; race webui+workbench verde.
+
+**Prossima direzione consigliata (NON iniziata):** o **dogfooding UI reale** su una migrazione
+lunga (per decidere se SSE serve davvero), oppure **Comparative Checklist UI** (source vs
+destination per area). NON Campaign Mode. **SSE ancora rimandata** — non iniziare codice SSE.
 
 ## Stato consolidato al 2026-07-06
 
@@ -87,6 +111,10 @@ Le PR recenti hanno chiuso diversi blocchi importanti:
 - **#69**: roadmap Flight Director (docs-only) + spec dev-ready Job Journal.
 - **#70**: In-Flight Job Rehydration Journal (`job.json`, 409 leggibili, recovery interrupted,
   rollback gated by backup, meta-refresh live). SSE NON inclusa (rimandata).
+- **#72**: New Migration Wizard + `Session.Setup`/`ContentSelection` (DNS separato/opt-in).
+- **#73**: Next actions scope-aware.
+- **Flight Director UI shell**: header persistente + timeline laterale + risk badge onesto
+  (presentation-only, SSE ancora rimandata).
 
 ## Correzione strategica
 
