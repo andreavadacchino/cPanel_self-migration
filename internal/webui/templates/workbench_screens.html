@@ -1,6 +1,5 @@
 {{define "screen_preflight"}}
 {{template "wbHead" .}}
-{{template "wbNav" .}}
 <h1>Preflight <span class="muted">— {{.Session.Name}}</span></h1>
 {{template "nextActionBox" .}}
 <p class="muted">Il preflight verifica le pre-condizioni prima di toccare i server. Le voci raggiungibilità si confermano eseguendo l'analisi; il cluster DNS va confermato fuori dalla UI.</p>
@@ -20,7 +19,6 @@
 
 {{define "screen_inventario"}}
 {{template "wbHead" .}}
-{{template "wbNav" .}}
 <h1>Fotografia account <span class="muted">— {{.Session.Name}}</span></h1>
 {{template "nextActionBox" .}}
 {{if .Counts}}
@@ -40,7 +38,6 @@
 
 {{define "screen_migrazione"}}
 {{template "wbHead" .}}
-{{template "wbNav" .}}
 <h1>Cosa verrà migrato <span class="muted">— {{.Session.Name}}</span></h1>
 {{template "nextActionBox" .}}
 {{if .Coverage}}
@@ -61,7 +58,6 @@
 
 {{define "screen_conferme"}}
 {{template "wbHead" .}}
-{{template "wbNav" .}}
 <h1>Conferme operatore <span class="muted">— {{.Session.Name}}</span></h1>
 {{template "nextActionBox" .}}
 <p class="muted">Ogni voce accettabile diventa non-bloccante una volta confermata. Le voci da risolvere (es. un cron attivo perso, un MX esterno) NON si accettano: vanno sistemate.</p>
@@ -96,7 +92,6 @@
 
 {{define "screen_applica"}}
 {{template "wbHead" .}}
-{{template "wbNav" .}}
 <h1>Applica e verifica <span class="muted">— {{.Session.Name}}</span></h1>
 {{template "nextActionBox" .}}
 <p class="muted">Ogni applicazione crea un <strong>backup automatico</strong> prima di scrivere ed è atomica (nessuna applicazione parziale). Le scritture richiedono di digitare il nome dell'account; annullare le modifiche richiede la doppia conferma.</p>
@@ -191,7 +186,6 @@
 
 {{define "screen_chiusura"}}
 {{template "wbHead" .}}
-{{template "wbNav" .}}
 <h1>Chiusura <span class="muted">— {{.Session.Name}}</span></h1>
 <h2>Posso spegnere il vecchio server?</h2>
 {{if .Cutover.CanShutdown}}

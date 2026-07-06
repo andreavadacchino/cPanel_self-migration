@@ -472,6 +472,10 @@ type workbenchView struct {
 	// job stays surfaced without a manual reload. Interrupted/completed/failed
 	// are terminal and do NOT refresh.
 	JobLive bool
+	// Risk is the persistent-header risk badge and Timeline is the left rail —
+	// both presentation-only summaries of the facts above (Flight Director shell).
+	Risk     riskBadge
+	Timeline []timelineStep
 }
 
 // areaLabelsIT translates EVERY coverage-manifest area (and checklist section)
@@ -655,6 +659,8 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBu
 		Scope:       scope,
 	}
 	v.JobLive = v.Job != nil && v.Job.State == jobStateRunning
+	v.Risk = buildRiskBadge(sess.Status, f, scope, v.Job, v.JobLive)
+	v.Timeline = buildTimeline(screen, sess.Status, f, scope, v.Job, v.JobLive)
 	if f.Checklist != nil {
 		v.OverallLabel = overallLabelIT(f.Checklist.OverallStatus)
 	}

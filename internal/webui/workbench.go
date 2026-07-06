@@ -59,6 +59,31 @@ func newWorkbenchServer(store *workbench.Store, dir, csrf string) (*workbenchSer
 		"stepLabel":      stepLabelIT,
 		"manualTitleIT":  manualTitleIT,
 		"manualActionIT": manualActionIT,
+		// Flight Director timeline: state → dot class and Italian state label.
+		"fdDot": func(state string) string {
+			switch state {
+			case "done":
+				return "done"
+			case "doing":
+				return "ready"
+			case "warn":
+				return "partial"
+			default:
+				return "todo"
+			}
+		},
+		"fdStateLabel": func(state string) string {
+			switch state {
+			case "done":
+				return "Fatto"
+			case "doing":
+				return "In corso"
+			case "warn":
+				return "Attenzione"
+			default:
+				return "Da fare"
+			}
+		},
 	}
 	tpl, err := template.New("").Funcs(funcMap).ParseFS(workbenchTemplatesFS,
 		"templates/workbench_list.html",

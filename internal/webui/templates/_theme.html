@@ -149,12 +149,6 @@
   .acceptform input{padding:.35rem .5rem;}
   .acceptform button{min-height:34px; padding:.35rem .8rem; font-size:.86rem;}
 
-  /* Guided-flow stepper (wbnav) ------------------------------------------- */
-  .wbnav{display:flex; flex-wrap:wrap; gap:.3rem; margin:0 0 1.4rem; padding:.35rem; background:var(--surface); border:1px solid var(--border); border-radius:999px; box-shadow:var(--shadow-sm);}
-  .wbnav a{padding:.45rem .9rem; border-radius:999px; color:var(--muted); font-weight:550; font-size:.9rem;}
-  .wbnav a:hover{background:var(--surface-2); color:var(--text-strong); text-decoration:none;}
-  .wbnav a.active{background:var(--accent); color:#fff; box-shadow:var(--shadow-sm);}
-
   /* Next-action call-out --------------------------------------------------- */
   .nextbox{background:var(--accent-soft); border:1px solid var(--accent-border); border-left:4px solid var(--accent); border-radius:var(--radius-sm); padding:.9rem 1.1rem; margin:1rem 0;}
   .nextbox .lead{font-size:.74rem; text-transform:uppercase; letter-spacing:.05em; color:var(--accent); font-weight:700;}
@@ -185,6 +179,40 @@
   details.section > summary{cursor:pointer; font-weight:600; color:var(--text-strong); padding:.3rem 0;}
   details.section > summary:hover{color:var(--accent);}
   fieldset legend{color:var(--text-strong);}
+
+  /* Flight Director shell -------------------------------------------------- */
+  .badge.warn{background:var(--warn-bg); color:var(--warn); border-color:var(--warn-border);}
+  .fdhead{display:flex; flex-wrap:wrap; gap:.9rem 1.5rem; justify-content:space-between; align-items:flex-start; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:1rem 1.2rem; margin:0 0 1.25rem;}
+  .fdhead-main{min-width:16rem; flex:1 1 22rem;}
+  .fdhead-title{display:flex; flex-wrap:wrap; align-items:center; gap:.45rem;}
+  .fdhead-name{font-size:1.3rem; font-weight:680; color:var(--text-strong); letter-spacing:-.01em; margin-right:.2rem;}
+  .fdhead-domain{font-family:var(--mono); font-size:.9rem; color:var(--accent); margin-top:.3rem;}
+  .fdhead-route{font-size:.92rem; color:var(--text); margin-top:.3rem;}
+  .fd-arrow{color:var(--muted); font-weight:700; padding:0 .15rem;}
+  .fdhead-side{flex:1 1 15rem; min-width:14rem; max-width:24rem;}
+  .fdhead-next{background:var(--accent-soft); border:1px solid var(--accent-border); border-left:4px solid var(--accent); border-radius:var(--radius-sm); padding:.5rem .75rem;}
+  .fdhead-next-lead{display:block; font-size:.68rem; text-transform:uppercase; letter-spacing:.05em; color:var(--accent); font-weight:700;}
+  .fdhead-next-text{font-weight:640; color:var(--text-strong);}
+
+  .fd-grid{display:grid; grid-template-columns:15rem minmax(0,1fr); gap:1.5rem; align-items:start;}
+  .fd-stage{min-width:0;}
+  .fd-rail{position:sticky; top:4.5rem;}
+  .fd-steps{list-style:none; margin:0; padding:.35rem; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm);}
+  .fd-step a{display:grid; grid-template-columns:auto 1fr; grid-template-rows:auto auto; column-gap:.55rem; align-items:center; padding:.45rem .6rem; border-radius:var(--radius-xs); color:var(--text);}
+  .fd-step a:hover{background:var(--surface-2); text-decoration:none;}
+  .fd-step-dot{grid-row:1 / span 2; align-self:center;}
+  .fd-step-label{font-weight:550; font-size:.9rem;}
+  .fd-step-state{grid-column:2; font-size:.72rem; color:var(--muted); line-height:1.1;}
+  .fd-step.fd-current a{background:var(--accent-soft);}
+  .fd-step.fd-current .fd-step-label{color:var(--accent); font-weight:680;}
+  .fd-step.fd-warn .fd-step-state{color:var(--warn); font-weight:600;}
+  @media (max-width:820px){
+    .fd-grid{grid-template-columns:1fr;}
+    .fd-rail{position:static;}
+    .fd-steps{display:flex; flex-wrap:wrap; gap:.2rem;}
+    .fd-step{flex:1 1 auto;}
+    .fd-step-state{display:none;}
+  }
 </style>{{end}}
 
 {{/* appHeader — shared top bar with brand + primary navigation. The passed

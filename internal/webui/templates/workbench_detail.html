@@ -1,3 +1,8 @@
+{{/* wbHead opens the Flight Director shell: the persistent migration header,
+     the left phase timeline (aside) and the contextual main stage. Every guided
+     screen renders its own content inside <main class="fd-stage"> and closes the
+     shell with wbFooter — the header, timeline, risk badge, job status and next
+     action stay identical across screens (the operator never loses the cabin). */}}
 {{define "wbHead"}}<!doctype html>
 <html lang="it">
 <head>
@@ -11,17 +16,52 @@
 {{template "appHeader" "workbench"}}
 <div class="container">
 <nav class="crumbs"><a href="/workbench">← Tutte le sessioni</a></nav>
+{{template "fdHeader" .}}
+<div class="fd-grid">
+<aside class="fd-rail">{{template "fdTimeline" .}}</aside>
+<main class="fd-stage">
 {{end}}
 
-{{define "wbNav"}}<div class="wbnav">
-  <a href="/workbench/session/{{.Session.ID}}"{{if eq .Screen ""}} class="active"{{end}}>Panoramica</a>
-  <a href="/workbench/session/{{.Session.ID}}/preflight"{{if eq .Screen "preflight"}} class="active"{{end}}>Preflight</a>
-  <a href="/workbench/session/{{.Session.ID}}/inventario"{{if eq .Screen "inventario"}} class="active"{{end}}>Fotografia account</a>
-  <a href="/workbench/session/{{.Session.ID}}/migrazione"{{if eq .Screen "migrazione"}} class="active"{{end}}>Cosa verrà migrato</a>
-  <a href="/workbench/session/{{.Session.ID}}/conferme"{{if eq .Screen "conferme"}} class="active"{{end}}>Conferme operatore</a>
-  <a href="/workbench/session/{{.Session.ID}}/applica"{{if eq .Screen "applica"}} class="active"{{end}}>Applica e verifica</a>
-  <a href="/workbench/session/{{.Session.ID}}/chiusura"{{if eq .Screen "chiusura"}} class="active"{{end}}>Chiusura</a>
-</div>{{template "jobBanner" .}}{{end}}
+{{/* fdHeader — persistent migration header. Migration identity, source →
+     destination (accounts), main domain, global status, an honest risk badge,
+     the DNS scope tag, the in-flight/last job and the next recommended action —
+     all visible on every screen. Wizard sessions show accounts@hosts; legacy
+     (Setup==nil) sessions fall back to the source/destination profile strings. */}}
+{{define "fdHeader"}}<header class="fdhead">
+  <div class="fdhead-main">
+    <div class="fdhead-title">
+      <span class="fdhead-name">{{.Session.Name}}</span>
+      {{template "statusBadge" (list .Session.Status .StatusLabel)}}
+      <span class="badge {{.Risk.Class}}">{{.Risk.Label}}</span>
+      {{if .Scope.HasSetup}}{{if .Scope.IncludeDNS}}<span class="badge error" title="Il DNS può raggiungere i nameserver di produzione">DNS incluso — area delicata</span>{{else}}<span class="badge draft">DNS non incluso</span>{{end}}{{end}}
+    </div>
+    {{with .Session.Setup}}
+      {{if .PrimaryDomain}}<div class="fdhead-domain">{{.PrimaryDomain}}</div>{{end}}
+      <div class="fdhead-route">{{.Source.Account}}<span class="muted">@</span>{{.Source.Host}}{{if .Source.Port}}<span class="muted">:{{.Source.Port}}</span>{{end}} <span class="fd-arrow">→</span> {{.Destination.Account}}<span class="muted">@</span>{{.Destination.Host}}{{if .Destination.Port}}<span class="muted">:{{.Destination.Port}}</span>{{end}}</div>
+    {{else}}
+      <div class="fdhead-route">{{.Session.SourceProfile}} <span class="fd-arrow">→</span> {{.Session.DestinationProfile}}</div>
+    {{end}}
+  </div>
+  <div class="fdhead-side">
+    <div class="fdhead-next">
+      <span class="fdhead-next-lead">Prossima azione</span>
+      <span class="fdhead-next-text">{{.Next.Text}}</span>
+    </div>
+    {{template "jobBanner" .}}
+  </div>
+</header>{{end}}
+
+{{/* fdTimeline — left rail of the seven guided phases. Each links to its real
+     screen route, shows a synthetic state (Da fare / In corso / Fatto /
+     Attenzione) derived from artifacts+status, and the current phase is
+     highlighted. It replaces the old pill nav without inventing new routes. */}}
+{{define "fdTimeline"}}<nav aria-label="Fasi della migrazione"><ol class="fd-steps">
+{{range .Timeline}}<li class="fd-step fd-{{.State}}{{if .Current}} fd-current{{end}}"><a href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}"{{if .Current}} aria-current="step"{{end}}>
+  <span class="fd-step-dot dot {{fdDot .State}}"></span>
+  <span class="fd-step-label">{{.Label}}</span>
+  <span class="fd-step-state">{{fdStateLabel .State}}</span>
+</a></li>{{end}}
+</ol></nav>{{end}}
 
 {{/* jobBanner surfaces the in-flight/last exec from the job journal on every
      screen, so a refresh or re-entry never loses a running migration and an
@@ -35,11 +75,12 @@
   {{if ne .Next.Screen ""}}<a href="/workbench/session/{{.Session.ID}}/{{.Next.Screen}}">Vai →</a>{{end}}
 </div>{{end}}
 
-{{/* Panoramica (screen 1) — base detail route */}}
+{{/* Panoramica (screen 1) — base detail route. The migration identity + status
+     now live in the persistent fdHeader, so this stage opens with the screen
+     title and the full next-action call-out. */}}
 {{template "wbHead" .}}
-{{template "wbNav" .}}
 
-<h1>{{.Session.Name}} {{template "statusBadge" (list .Session.Status .StatusLabel)}}</h1>
+<h1>Panoramica <span class="muted">— {{.Session.Name}}</span></h1>
 
 {{template "nextActionBox" .}}
 
@@ -162,7 +203,11 @@
      label — never the raw enum. */}}
 {{define "statusBadge"}}{{$s := index . 0}}{{$l := index . 1}}{{if eq $s "draft"}}<span class="badge draft">{{$l}}</span>{{else if eq $s "archived"}}<span class="badge archived">{{$l}}</span>{{else if or (eq $s "cutover_done") (eq $s "apply_done")}}<span class="badge done">{{$l}}</span>{{else if or (eq $s "blocked") (eq $s "failed")}}<span class="badge error">{{$l}}</span>{{else}}<span class="badge active">{{$l}}</span>{{end}}{{end}}
 
-{{define "wbFooter"}}</div>
+{{/* wbFooter closes the contextual main stage, the two-column fd-grid and the
+     container opened by wbHead. */}}
+{{define "wbFooter"}}</main>
+</div>
+</div>
 </body>
 </html>{{end}}
 
