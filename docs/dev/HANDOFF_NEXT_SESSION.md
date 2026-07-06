@@ -29,10 +29,12 @@ Plan→Scope→Execution**, non il motore. Tre decisioni bloccate (tutte Opzione
    (riusa `readArtifactFacts`), nessun nuovo writer/CLI. `migration_plan.json`
    persistente rimandato finché lo schema non è product-validated.
 
-**Fase 1 (PR #78), Fase 2 (PR #79) e Fase 3: IMPLEMENTATE.** Prossima fase tecnica consigliata:
-**Fase 4 — Progress + Execution Monitor** (monitor esecuzione per fase; SSE solo se il dogfooding
-reale su una migrazione lunga lo giustifica — vedi PR #70). I numeri GitHub reali sono assegnati
-all'apertura delle PR.
+**Fase 1 (PR #78), Fase 2 (PR #79), Fase 3 e Fase 4: IMPLEMENTATE.** Prossima fase tecnica
+consigliata: **Fase 5 — Comparative Manual Tasks** (task DNS src/dst, copia valore, «Verifica
+ora», stati task; riusa acceptance model). SSE resta rimandata finché un dogfooding reale su una
+migrazione lunga non la giustifica — il monitor esecuzione della Fase 4 (meta-refresh 2s + job
+journal + events.jsonl) è ora il prerequisito per osservare quel run. I numeri GitHub reali sono
+assegnati all'apertura delle PR.
 
 **Dogfooding #4 (2026-07-07, `DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md`):** UI-walk in browser
 reale + suite test (43/43) + una esecuzione reale dell'orchestratore osservata end-to-end (fallita al
@@ -42,6 +44,37 @@ parziale coerente e usabile; DNS spiegato e mai in auto-run; **non** dimostrabil
 senza una migrazione lunga reale → il monitor d'esecuzione (Fase 4) è prerequisito per un apply reale
 su sacrificale (Scenario A). Nessun bug bloccante; due friction di messaggistica annotate
 (readiness↔next-action; badge «Bloccante»-cutover vs migrazione avviabile).
+
+## Fase 4 — Modern Migration Cockpit + Execution Monitor — COMPLETATA (2026-07-07)
+
+Trasforma la Panoramica in una **cabina di regia** (presentation-only). Consegnato:
+
+- **`internal/webui/workbench_cockpit.go`** (NUOVO, read-model puro): `buildCockpit(...)` aggrega
+  hero-state + CTA dominante, stepper orizzontale (riusa i 7 step di `buildTimeline`), **comparativa
+  sorgente↔destinazione** (`buildCockpitComparison` — conteggi SOLO da `MigrationChecklist.Sections`
+  `SourceCount/DestinationCount`; files/email_config senza conteggio onesto → «—», mai inventati),
+  piano semplificato in 3 bucket (`bucketPlanAreas`: automatico/manuale/escluso) ed **execution
+  monitor** (`buildCockpitMonitor`: fasi Contenuti/Config email/Cron/DNS con stati
+  not_run/running/completed/completed_with_report/failed/skipped/manual). **DNS sempre manuale, mai
+  auto-run.**
+- **Cablaggio `loadRunMonitor` nel workbench**: l'item-level da `events.jsonl` (mailbox/DB-name/file
+  falliti — **non** messaggi/tabelle/file-count) era wired solo nella dashboard legacy; ora è nel
+  cockpit via `buildWorkbenchView` (fail-soft). Il «Log esecuzione» espone SOLO `run.Errors` (redatti
+  by construction) + `job.Error` — **mai** raw tail/host/argv (il tail exec non è persistito né redatto).
+- **`reconcileNextAction`** (dogfooding #4 §6.1): allinea la «Prossima azione» persistente alla
+  readiness del piano (niente più «esegui preflight» quando checklist+piano dicono «pronto»); deferisce
+  agli stati post-apply/terminali e a `ContentApplyPresent` per non ri-offrire «Avvia» dopo una migrazione.
+- **`buildRiskBadge` split** (dogfooding #4 §6.2): «Bloccante migrazione» (error, apply-blocked) vs
+  «Bloccante cutover» (warn, OverallBlocked ma migrazione avviabile) — resi espliciti anche nel cockpit.
+- **UI**: `screen_migrazione` riusa il define condiviso `startMigrationForm` (nessuna duplicazione del
+  form pericoloso) e collassa la coverage tecnica sotto `<details>`; `screen_applica` rinominata
+  «Azioni avanzate» (percorso esperto, azioni singole intatte, DNS Danger Zone invariata); dettagli
+  tecnici (definizione/governance/cronologia/report) collassati sotto `<details>` in Panoramica.
+- **Fuori scope confermato**: nessun writer/CLI/`migration_plan.json`, nessuna SSE, nessun nuovo motore
+  di comparazione (niente parsing di inventory/diff), orchestratore/gate/CSRF/strong-confirmation immutati.
+- Test: 20 nuovi (unit read-model + render HTTP) sui 15 casi del brief; `TestRiskBadge*` aggiornati.
+  Gate: gofmt/vet puliti, go test webui/workbench/config verde, race verde, `git diff --check` pulito,
+  **Docker LINUX_ALL_GREEN** (go1.25.11, 20 pkg, 0 FAIL); go-reviewer = gate utente.
 
 ## Fase 3 — Smart Migration Orchestrator — COMPLETATA (2026-07-06)
 

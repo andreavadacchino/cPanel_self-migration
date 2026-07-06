@@ -213,6 +213,58 @@
     .fd-step{flex:1 1 auto;}
     .fd-step-state{display:none;}
   }
+
+  /* Migration Cockpit (Fase 4) -------------------------------------------- */
+  .cockpit-hero{display:flex; flex-wrap:wrap; gap:1rem 1.5rem; justify-content:space-between; align-items:center; background:var(--surface); border:1px solid var(--border); border-left:5px solid var(--border-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.15rem 1.35rem; margin:0 0 1.1rem;}
+  .cockpit-hero-main{flex:1 1 20rem; min-width:0;}
+  .cockpit-hero-lead{display:block; font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:700;}
+  .cockpit-hero-state{display:block; font-size:1.55rem; line-height:1.2; font-weight:720; color:var(--text-strong); letter-spacing:-.01em; margin-top:.15rem;}
+  .cockpit-hero-detail{margin:.5rem 0 0; color:var(--muted); font-size:.92rem; max-width:44rem;}
+  .cockpit-hero-cta{flex:0 1 auto;}
+  .cockpit-hero.cockpit-done{border-left-color:var(--ok);}
+  .cockpit-hero.cockpit-active{border-left-color:var(--accent);}
+  .cockpit-hero.cockpit-warn{border-left-color:var(--warn);}
+  .cockpit-hero.cockpit-error{border-left-color:var(--danger);}
+  .cockpit-hero.cockpit-draft{border-left-color:var(--border-strong);}
+  .cockpit-cta-btn{display:inline-block; font-size:1rem; padding:.7rem 1.3rem; font-weight:640;}
+  .cockpit-cta-wait{background:var(--warn-bg); border:1px solid var(--warn-border); border-radius:var(--radius-sm); padding:.7rem 1rem; font-weight:640; color:var(--warn);}
+  .cockpit-start-form{display:flex; flex-direction:column; gap:.5rem; align-items:flex-start;}
+  .cockpit-start-form input[type=text]{margin-top:.2rem;}
+
+  .cockpit-steps{display:flex; gap:0; overflow-x:auto; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:.6rem .3rem; margin:0 0 1.4rem;}
+  .cockpit-step{flex:1 1 0; min-width:6.6rem; display:flex; flex-direction:column; align-items:center; text-align:center; gap:.28rem; padding:.45rem .3rem; color:var(--text); position:relative;}
+  .cockpit-step:hover{text-decoration:none;}
+  .cockpit-step::before{content:""; position:absolute; top:1.15rem; left:-50%; width:100%; height:2px; background:var(--border); z-index:0;}
+  .cockpit-step:first-child::before{display:none;}
+  .cockpit-step-dot{position:relative; z-index:1;}
+  .cockpit-step-label{font-weight:620; font-size:.85rem; color:var(--text-strong); line-height:1.15;}
+  .cockpit-step-cap{font-size:.7rem; color:var(--muted); line-height:1.1;}
+  .cockpit-step.cockpit-current{background:var(--accent-soft); border-radius:var(--radius-sm);}
+  .cockpit-step.cockpit-current .cockpit-step-label{color:var(--accent);}
+  .cockpit-step.cockpit-warn .cockpit-step-cap{color:var(--warn); font-weight:600;}
+  .cockpit-step.cockpit-done .cockpit-step-cap{color:var(--ok);}
+
+  .cockpit-plan-grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(15rem,1fr)); gap:1rem;}
+  .cockpit-plan-card{border:1px solid var(--border); border-top:3px solid var(--border-strong); border-radius:var(--radius-sm); padding:.85rem 1rem; background:var(--surface-2);}
+  .cockpit-plan-card h3{margin:.1rem 0 .5rem; font-size:.95rem;}
+  .cockpit-plan-card ul.stack li{display:flex; flex-direction:column; gap:.1rem; padding:.3rem 0; border-bottom:1px solid var(--border);}
+  .cockpit-plan-card ul.stack li:last-child{border-bottom:none;}
+  .cockpit-plan-card ul.stack li .muted{font-size:.82rem;}
+  .cockpit-plan-auto{border-top-color:var(--ok);}
+  .cockpit-plan-manual{border-top-color:var(--warn);}
+  .cockpit-plan-excluded{border-top-color:var(--border-strong);}
+  .cockpit-plan-link{margin:.9rem 0 0; text-align:right;}
+
+  .cockpit-phases{display:grid; grid-template-columns:repeat(auto-fit,minmax(16rem,1fr)); gap:.7rem;}
+  .cockpit-phase{display:flex; gap:.6rem; align-items:flex-start; border:1px solid var(--border); border-radius:var(--radius-sm); padding:.6rem .75rem; background:var(--surface-2);}
+  .cockpit-phase .badge{flex:none;}
+  .cockpit-phase .muted{font-size:.82rem; margin-top:.15rem;}
+
+  @media (max-width:640px){
+    .cockpit-hero{flex-direction:column; align-items:stretch;}
+    .cockpit-hero-cta{width:100%;}
+    .cockpit-cta-btn{display:block; text-align:center;}
+  }
 </style>{{end}}
 
 {{/* appHeader — shared top bar with brand + primary navigation. The passed

@@ -114,17 +114,14 @@
   <div class="warnbox">Lo scope non è più modificabile: una migrazione è già stata avviata o è in corso.</div>
   {{end}}
 
-  {{/* Fase 3 — Avvio migrazione automatica: una sola conferma forte. */}}
+  {{/* Fase 3 — Avvio migrazione automatica: una sola conferma forte. Il form
+       è condiviso col cockpit (define startMigrationForm) per non duplicare la
+       logica di conferma pericolosa. */}}
   {{if .Plan.StartEnabled}}
   <div class="card">
     <h3>Avvia migrazione</h3>
     <p class="muted">Avvieremo automaticamente le aree selezionate e sicure, una fase dopo l'altra. Il DNS non verrà modificato automaticamente. La migrazione si fermerà al primo errore e le fasi già completate resteranno registrate. Non verrà eseguito alcun rollback automatico.</p>
-    <form method="post" action="/workbench/session/{{.Session.ID}}/start-migration">
-      <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <label>Per confermare, digita il nome dell'account (<code>{{.Session.Name}}</code>):<br>
-        <input type="text" name="confirm_account" size="24" autocomplete="off" required></label>
-      <button type="submit">Avvia migrazione</button>
-    </form>
+    {{template "startMigrationForm" .}}
   </div>
   {{else}}
   <p><span class="badge draft">{{.Plan.CTALabel}}</span></p>
@@ -133,14 +130,16 @@
 </section>
 
 {{if .Coverage}}
+<details class="section"><summary><strong>Coverage tecnica</strong> — ogni area gestita dal tool e il suo stato</summary>
 <p class="muted">✅ automatico · 🟡 richiede una conferma operatore · ⚪ non gestito dal tool (con il motivo).</p>
-<table>
+<div class="tablewrap"><table>
 <thead><tr><th>Area</th><th>Stato</th><th>Nota</th></tr></thead>
 <tbody>
 {{range .Coverage}}<tr><td>{{.Area}}</td><td>{{.Glyph}} {{.Label}}</td><td class="muted">{{.Note}}</td></tr>{{end}}
 </tbody>
-</table>
+</table></div>
 {{if .Facts.Checklist.ApplyBlocked}}<div class="warnbox">&#9888; Ci sono problemi che <strong>impediscono di applicare</strong> ora: vanno risolti (rigenera l'analisi), non accettati.</div>{{end}}
+</details>
 {{else}}
 <div class="warnbox">Nessuna verifica migrazione disponibile: esegui l'analisi per generarla.</div>
 {{end}}
@@ -184,8 +183,9 @@
 
 {{define "screen_applica"}}
 {{template "wbHead" .}}
-<h1>Applica e verifica <span class="muted">— {{.Session.Name}}</span></h1>
+<h1>Azioni avanzate <span class="muted">— {{.Session.Name}}</span></h1>
 {{template "nextActionBox" .}}
+<div class="banner">Percorso esperto. Il flusso principale è <strong>Piano &rarr; Avvia migrazione &rarr; Monitor</strong> (dalla Panoramica). Qui trovi le <strong>azioni singole</strong> per applicare o verificare una sola area, utili per interventi manuali o ripetere una fase.</div>
 <p class="muted">Ogni applicazione crea un <strong>backup automatico</strong> prima di scrivere ed è atomica (nessuna applicazione parziale). Le scritture richiedono di digitare il nome dell'account; annullare le modifiche richiede la doppia conferma.</p>
 
 {{if .Scope.HasSetup}}<p class="muted">Questa migrazione applica solo le aree selezionate nel wizard iniziale. Le aree non selezionate risultano «non incluse».</p>{{end}}

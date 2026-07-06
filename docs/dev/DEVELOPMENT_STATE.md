@@ -240,6 +240,18 @@ coerente e usabile, DNS spiegato e mai in auto-run. Buco non colmabile senza mig
 reale: il monitor d'esecuzione (Fase 4) è il prerequisito per un apply reale su sacrificale
 (Scenario A). Nessun bug bloccante. Report: `DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md`.
 
+## Fase 4 — Modern Migration Cockpit + Execution Monitor (2026-07-07) — IMPLEMENTATA
+
+Panoramica trasformata in **cabina di regia** (presentation-only, `internal/webui/workbench_cockpit.go`):
+hero-state + CTA dominante, stepper orizzontale, comparativa src↔dst (solo da `checklist.Sections`,
+conteggi per-area onesti, mai messaggi/tabelle inventati), piano in 3 card, execution monitor
+(`loadRunMonitor`/`events.jsonl` ora cablato nel workbench, prima solo dashboard legacy; item-level
+solo per `migrate_content`, degrada onestamente). Chiusi i due attriti del dogfooding #4:
+`reconcileNextAction` allinea readiness↔next-action (§6.1) e `buildRiskBadge` distingue «Bloccante
+migrazione» vs «Bloccante cutover» (§6.2). `screen_applica` → «Azioni avanzate» (percorso esperto);
+dettagli tecnici collassati. Nessun writer/CLI/`migration_plan.json`, nessuna SSE. Gate: gofmt/vet/race
+puliti, Docker LINUX_ALL_GREEN (go1.25.11). Prossima: **Fase 5 — Comparative Manual Tasks**.
+
 ## Dogfooding #2 (2026-07-04) — verdetto e follow-up
 
 Ciclo UI-only di giorginisposi (report completo:

@@ -63,14 +63,17 @@ func TestScreenRoutesAllRender(t *testing.T) {
 	}
 }
 
-// TestPanoramicaNextActionAndSemafori: base route shows the guidance blocks.
-func TestPanoramicaNextActionAndSemafori(t *testing.T) {
+// TestPanoramicaIsCockpit: the base route renders the Fase 4 cockpit — hero
+// state, the journey stepper, the comparison and plan blocks — while the
+// engineering surfaces (Stato per fase) remain reachable in the collapsed
+// technical details. "Bozza" confirms the persistent status badge still shows.
+func TestPanoramicaIsCockpit(t *testing.T) {
 	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	_, body := getBody(t, h, "/workbench/session/"+sess.ID)
-	for _, want := range []string{"Prossima azione consigliata", "Stato per fase", "Bozza"} {
+	for _, want := range []string{"Stato migrazione", "Comparativa account", "Piano di migrazione", "Bozza", "Stato per fase"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("panoramica missing %q", want)
+			t.Errorf("cockpit panoramica missing %q", want)
 		}
 	}
 }
