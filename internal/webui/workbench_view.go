@@ -678,7 +678,12 @@ func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBu
 	// state-aware CTA copy (the button itself stays disabled until Fase 3).
 	v.Plan.ScopeConfirmed = sess.Setup != nil && sess.Setup.ScopeConfirmedAt != nil
 	v.Plan.CanEditScope = canEditScope(f, v.JobLive)
-	v.Plan.CTALabel = migrationCTALabel(v.Plan)
+	// Fase 3: the one-click orchestrator may run only when the plan is startable,
+	// the scope is confirmed and no job is live (JobLive freezes the CTA into
+	// "Migrazione in corso"). This is a presentation hint; the handler recomputes
+	// every precondition server-side before touching anything.
+	v.Plan.StartEnabled = v.Plan.CanStartMigration && v.Plan.ScopeConfirmed && !v.JobLive
+	v.Plan.CTALabel = migrationCTALabel(v.Plan, v.JobLive)
 	if f.Checklist != nil {
 		v.OverallLabel = overallLabelIT(f.Checklist.OverallStatus)
 	}

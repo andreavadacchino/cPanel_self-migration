@@ -114,7 +114,21 @@
   <div class="warnbox">Lo scope non è più modificabile: una migrazione è già stata avviata o è in corso.</div>
   {{end}}
 
+  {{/* Fase 3 — Avvio migrazione automatica: una sola conferma forte. */}}
+  {{if .Plan.StartEnabled}}
+  <div class="card">
+    <h3>Avvia migrazione</h3>
+    <p class="muted">Avvieremo automaticamente le aree selezionate e sicure, una fase dopo l'altra. Il DNS non verrà modificato automaticamente. La migrazione si fermerà al primo errore e le fasi già completate resteranno registrate. Non verrà eseguito alcun rollback automatico.</p>
+    <form method="post" action="/workbench/session/{{.Session.ID}}/start-migration">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <label>Per confermare, digita il nome dell'account (<code>{{.Session.Name}}</code>):<br>
+        <input type="text" name="confirm_account" size="24" autocomplete="off" required></label>
+      <button type="submit">Avvia migrazione</button>
+    </form>
+  </div>
+  {{else}}
   <p><span class="badge draft">{{.Plan.CTALabel}}</span></p>
+  {{end}}
   {{end}}
 </section>
 

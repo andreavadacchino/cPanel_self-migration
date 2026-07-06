@@ -616,6 +616,12 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
 			s.wbExec.handleExec(w, r, sessionID)
 		})
+	case action == "start-migration":
+		// Fase 3: one strong confirmation runs the automatic, in-scope, safe
+		// phases in sequence (DNS excluded), stop-on-first-failure.
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.wbExec.handleStartMigration(w, r, sessionID)
+		})
 	case action == "scope":
 		// Fase 2: confirm/refine the migration scope after the preflight, then
 		// return to the plan screen. Metadata mutation only, no migration write.

@@ -451,8 +451,13 @@ migrare» in `screen_migrazione` (preset + custom + DNS manuale); `Store.Confirm
 `SetupMeta.ScopeConfirmedAt`; edit-gate `canEditScope` (scope congelato dopo apply/job live); CTA
 state-aware. Metadata only, nessun writer/CLI, DNS mai automatico, orchestratore non implementato.
 
-**Prossima: Fase 3 — Smart Migration Orchestrator** — bottone «Avvia» + esecuzione aree safe
-in-scope in sequenza con verify per fase (gate server-side dell'orchestratore).
+**Fase 3 — Smart Migration Orchestrator — ✅ IMPLEMENTATA.** `internal/webui/workbench_orchestrator.go`:
+una sola strong-confirmation esegue in sequenza le aree automatiche/safe/in-scope, gate checklist
+ricontrollato per fase, verify per fase (email/cron `--fail-on-drift`), stop-on-first-failure, DNS
+escluso dall'auto-run, `contentScope` reso gate server-side per l'orchestratore. Nessun nuovo
+writer/CLI, nessun `migration_plan.json`, nessuna SSE.
+
+**Prossima: Fase 4 — Progress + Execution Monitor.**
 
 La Fase 1 costruisce il contratto dati/UI (read-only) che risponde a "cosa succederà premendo
 Avvia migrazione": cosa è automatico, manuale verificabile, bloccante, escluso,

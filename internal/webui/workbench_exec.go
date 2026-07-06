@@ -109,24 +109,17 @@ var actionRegistry = map[string]actionDef{
 		name: "email verify", writeOp: false,
 		artifact: &artifactOutput{"email_verify_report.json", workbench.ArtifactEmailVerifyReport},
 		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
-			return []string{"email", "verify",
-				"--plan", filepath.Join(dir, "email_apply_plan.json"),
-				"--config", filepath.Join(dir, "host.yaml"),
-				"--output-json", filepath.Join(dir, "email_verify_report.json"),
-				"--output-md", filepath.Join(dir, "email_verify_report.md"),
-			}, nil
+			// The standalone verify action only REPORTS drift (exit 0), so it
+			// never passes --fail-on-drift; the orchestrator asks for the gating
+			// variant (see emailVerifyArgv).
+			return emailVerifyArgv(dir, false), nil
 		},
 	},
 	"cron_verify": {
 		name: "cron verify", writeOp: false,
 		artifact: &artifactOutput{"cron_verify_report.json", workbench.ArtifactCronVerifyReport},
 		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
-			return []string{"cron", "verify",
-				"--plan", filepath.Join(dir, "cron_apply_plan.json"),
-				"--config", filepath.Join(dir, "host.yaml"),
-				"--output-json", filepath.Join(dir, "cron_verify_report.json"),
-				"--output-md", filepath.Join(dir, "cron_verify_report.md"),
-			}, nil
+			return cronVerifyArgv(dir, false), nil
 		},
 	},
 	"dns_apply": {
@@ -147,28 +140,14 @@ var actionRegistry = map[string]actionDef{
 		name: "email apply", writeOp: true,
 		artifact: &artifactOutput{"email_apply_report.json", workbench.ArtifactEmailApplyReport},
 		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
-			return []string{"email", "apply",
-				"--plan", filepath.Join(dir, "email_apply_plan.json"),
-				"--config", filepath.Join(dir, "host.yaml"),
-				"--yes-apply-writes",
-				"--backup", filepath.Join(dir, "email_backup.json"),
-				"--output-json", filepath.Join(dir, "email_apply_report.json"),
-				"--output-md", filepath.Join(dir, "email_apply_report.md"),
-			}, nil
+			return emailApplyArgv(dir), nil
 		},
 	},
 	"cron_apply": {
 		name: "cron apply", writeOp: true,
 		artifact: &artifactOutput{"cron_apply_report.json", workbench.ArtifactCronApplyReport},
 		buildArgv: func(sess *workbench.Session, r *http.Request, dir string) ([]string, error) {
-			return []string{"cron", "apply",
-				"--plan", filepath.Join(dir, "cron_apply_plan.json"),
-				"--config", filepath.Join(dir, "host.yaml"),
-				"--yes-apply-writes",
-				"--backup", filepath.Join(dir, "cron_backup.json"),
-				"--output-json", filepath.Join(dir, "cron_apply_report.json"),
-				"--output-md", filepath.Join(dir, "cron_apply_report.md"),
-			}, nil
+			return cronApplyArgv(dir), nil
 		},
 	},
 	"migrate_content": {
@@ -181,25 +160,7 @@ var actionRegistry = map[string]actionDef{
 			if !mail && !file && !db {
 				return nil, fmt.Errorf("at least one scope (mail/file/db) must be selected")
 			}
-			argv := []string{"--apply",
-				"--config", filepath.Join(dir, "host.yaml"),
-				"--output-dir", dir,
-				"--report-json",
-				"--json-events",
-			}
-			if mail {
-				argv = append(argv, "--mail")
-			}
-			if file {
-				argv = append(argv, "--file")
-			}
-			if db {
-				argv = append(argv, "--db")
-			}
-			if domain := strings.TrimSpace(r.FormValue("scope_domain")); domain != "" {
-				argv = append(argv, "--domain", domain)
-			}
-			return argv, nil
+			return migrateContentArgv(dir, mail, file, db, strings.TrimSpace(r.FormValue("scope_domain"))), nil
 		},
 	},
 	"dns_rollback": {
@@ -243,6 +204,95 @@ var actionRegistry = map[string]actionDef{
 			}, nil
 		},
 	},
+}
+
+// ---------------------------------------------------------------------------
+// Shared argv builders
+//
+// These construct the SAME argv the individual /exec actions run, but as pure
+// functions of (dir, flags) so the Fase 3 orchestrator can compose the exact
+// same write/verify invocations without fabricating a fragile *http.Request.
+// The dangerous parts (--yes-apply-writes, --backup, --apply) live here ONCE,
+// so the single-action path and the orchestrator can never drift apart.
+// ---------------------------------------------------------------------------
+
+// migrateContentArgv builds the `--apply` content-migration argv. mail/file/db
+// map 1:1 to the wizard scope; domain is optional (empty = whole account).
+func migrateContentArgv(dir string, mail, file, db bool, domain string) []string {
+	argv := []string{"--apply",
+		"--config", filepath.Join(dir, "host.yaml"),
+		"--output-dir", dir,
+		"--report-json",
+		"--json-events",
+	}
+	if mail {
+		argv = append(argv, "--mail")
+	}
+	if file {
+		argv = append(argv, "--file")
+	}
+	if db {
+		argv = append(argv, "--db")
+	}
+	if domain != "" {
+		argv = append(argv, "--domain", domain)
+	}
+	return argv
+}
+
+// emailApplyArgv builds the email-config apply argv (backup-gated write).
+func emailApplyArgv(dir string) []string {
+	return []string{"email", "apply",
+		"--plan", filepath.Join(dir, "email_apply_plan.json"),
+		"--config", filepath.Join(dir, "host.yaml"),
+		"--yes-apply-writes",
+		"--backup", filepath.Join(dir, "email_backup.json"),
+		"--output-json", filepath.Join(dir, "email_apply_report.json"),
+		"--output-md", filepath.Join(dir, "email_apply_report.md"),
+	}
+}
+
+// cronApplyArgv builds the cron apply argv (backup-gated write).
+func cronApplyArgv(dir string) []string {
+	return []string{"cron", "apply",
+		"--plan", filepath.Join(dir, "cron_apply_plan.json"),
+		"--config", filepath.Join(dir, "host.yaml"),
+		"--yes-apply-writes",
+		"--backup", filepath.Join(dir, "cron_backup.json"),
+		"--output-json", filepath.Join(dir, "cron_apply_report.json"),
+		"--output-md", filepath.Join(dir, "cron_apply_report.md"),
+	}
+}
+
+// emailVerifyArgv builds the email verify argv. failOnDrift asks the verifier
+// to EXIT NON-ZERO unless the verdict is clean (exit 3): the orchestrator uses
+// this so a post-apply drift stops the run, while the standalone verify action
+// only reports (failOnDrift=false).
+func emailVerifyArgv(dir string, failOnDrift bool) []string {
+	argv := []string{"email", "verify",
+		"--plan", filepath.Join(dir, "email_apply_plan.json"),
+		"--config", filepath.Join(dir, "host.yaml"),
+		"--output-json", filepath.Join(dir, "email_verify_report.json"),
+		"--output-md", filepath.Join(dir, "email_verify_report.md"),
+	}
+	if failOnDrift {
+		argv = append(argv, "--fail-on-drift")
+	}
+	return argv
+}
+
+// cronVerifyArgv builds the cron verify argv (see emailVerifyArgv for failOnDrift).
+func cronVerifyArgv(dir string, failOnDrift bool) []string {
+	argv := []string{"cron", "verify",
+		"--plan", filepath.Join(dir, "cron_apply_plan.json"),
+		"--config", filepath.Join(dir, "host.yaml"),
+		"--output-json", filepath.Join(dir, "cron_verify_report.json"),
+		"--output-md", filepath.Join(dir, "cron_verify_report.md"),
+	}
+	if failOnDrift {
+		argv = append(argv, "--fail-on-drift")
+	}
+	return argv
 }
 
 // workbenchExecServer handles the /workbench/session/<id>/exec route.
