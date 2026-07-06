@@ -5,12 +5,30 @@ Stai lavorando sul tool Go **cpanel-self-migration**, directory locale abituale:
 
 ## Leggi PRIMA
 
-1. `docs/dev/FRONTEND_FLIGHT_DIRECTOR_ROADMAP.md`
-2. `docs/dev/PR69_JOB_JOURNAL_DESIGN.md` (spec della fase Job Journal — **IMPLEMENTATA**, GitHub PR #70)
-3. `docs/dev/DEVELOPMENT_STATE.md`
-4. `docs/dev/DOGFOODING_2_REPORT.md`
-5. `docs/dev/DOGFOODING_3_UX_WALK.md`
-6. `docs/dev/CUTOVER_RUNBOOK.md`
+1. **`docs/dev/PLATFORM_MIGRATION_ROADMAP.md`** ⭐ — direzione prodotto attuale (tool → piattaforma smart) + roadmap PR #76-#82
+2. `docs/dev/FRONTEND_FLIGHT_DIRECTOR_ROADMAP.md`
+3. `docs/dev/PR69_JOB_JOURNAL_DESIGN.md` (spec della fase Job Journal — **IMPLEMENTATA**, GitHub PR #70)
+4. `docs/dev/DEVELOPMENT_STATE.md`
+5. `docs/dev/DOGFOODING_2_REPORT.md`
+6. `docs/dev/DOGFOODING_3_UX_WALK.md`
+7. `docs/dev/CUTOVER_RUNBOOK.md`
+
+## Direzione prodotto — decisioni bloccate (2026-07-06, PLATFORM_MIGRATION_ROADMAP)
+
+Trasformazione da workbench tecnico a **piattaforma smart di migrazione**. Scoperta
+chiave: **il motore è maturo e live-proven** — il gap è **orchestrazione + contratto
+Plan→Scope→Execution**, non il motore. Tre decisioni bloccate (tutte Opzione 1):
+
+1. **Orchestratore (PR #78):** una sola conferma forte → esegue in sequenza le aree
+   safe E in-scope, stop-on-first-failure, verify per fase, report unico. **DNS mai
+   nell'auto-run.** Riusa `pipelineSteps` + gate esistenti.
+2. **DNS:** flusso primario = fotografa → classifica (5 categorie) → task manuali
+   verificabili. `dns_apply` resta azione avanzata / Danger Zone, nessuna regressione.
+3. **Migration Plan (PR #76):** read-model aggregato sopra artifact esistenti
+   (riusa `readArtifactFacts`), nessun nuovo writer/CLI. `migration_plan.json`
+   persistente rimandato finché lo schema non è product-validated.
+
+**Prossima PR di codice consigliata: #76 — Platform Migration Plan / Readiness** (read-only).
 
 ## PR #70 — In-Flight Job Rehydration Journal — COMPLETATA (2026-07-06)
 
