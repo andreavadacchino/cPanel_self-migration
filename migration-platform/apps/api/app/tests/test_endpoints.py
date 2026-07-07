@@ -129,7 +129,7 @@ def test_test_connection_failure_mock_when_host_contains_fail(
     assert body["last_error"]
 
 
-def test_endpoint_response_never_exposes_secret(client: TestClient) -> None:
+def test_endpoint_accepts_opaque_auth_ref(client: TestClient) -> None:
     migration_id = _new_migration(client)
     payload = _source_payload()
     payload["auth_type"] = "token_ref"
@@ -139,6 +139,42 @@ def test_endpoint_response_never_exposes_secret(client: TestClient) -> None:
     )
     assert created.status_code == 201
     body = created.json()
-    # auth_ref is an opaque reference, never a secret; and no secret field leaks.
-    for forbidden in ("password", "token", "secret", "auth_secret"):
-        assert forbidden not in body
+    # The opaque reference round-trips verbatim...
+    assert body["auth_ref"] == "vault://secret/ref-only"
+    # ...and the response schema has no secret-bearing field at all.
+    assert set(body) & {"password", "token", "secret", "auth_secret"} == set()
+
+
+def test_endpoint_rejects_raw_secret_auth_ref(client: TestClient) -> None:
+    """A bare (non-reference) auth_ref must be rejected, not stored/echoed."""
+    migration_id = _new_migration(client)
+    payload = _source_payload()
+    payload["auth_type"] = "token_ref"
+    payload["auth_ref"] = "hunter2-raw-password"
+    resp = client.post(
+        f"/api/migrations/{migration_id}/endpoints", json=payload
+    )
+    assert resp.status_code == 422
+
+
+def test_endpoint_rejects_auth_ref_with_mock(client: TestClient) -> None:
+    """auth_ref must be null for mock/none auth types (coherence guard)."""
+    migration_id = _new_migration(client)
+    payload = _source_payload()
+    payload["auth_type"] = "mock"
+    payload["auth_ref"] = "vault://whatever"
+    resp = client.post(
+        f"/api/migrations/{migration_id}/endpoints", json=payload
+    )
+    assert resp.status_code == 422
+
+
+def test_token_ref_without_auth_ref_is_rejected(client: TestClient) -> None:
+    migration_id = _new_migration(client)
+    payload = _source_payload()
+    payload["auth_type"] = "password_ref"
+    payload["auth_ref"] = None
+    resp = client.post(
+        f"/api/migrations/{migration_id}/endpoints", json=payload
+    )
+    assert resp.status_code == 422
