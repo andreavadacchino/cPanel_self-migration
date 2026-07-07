@@ -36,7 +36,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-migration}:${POSTGRES_PASSWORD:-migration}@postgres:5432/${POSTGRES_DB:-migration}
       REDIS_URL: redis://redis:6379/0
-      CORS_ORIGINS: http://localhost:5173
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -63,7 +63,7 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
     environment:
-      VITE_API_BASE_URL: http://localhost:8000
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
     ports:
       - "${WEB_PORT:-5173}:5173"
     depends_on:
