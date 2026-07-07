@@ -1,8 +1,11 @@
 package webui
 
 import (
+	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -111,5 +114,60 @@ func TestHandleSessionEventsNotFound(t *testing.T) {
 	}
 	if rr := doReq(h, http.MethodGet, "/platform/migrations/nonexistent/events", nil); rr.Code != http.StatusNotFound {
 		t.Errorf("events for missing session = %d, want 404", rr.Code)
+	}
+}
+
+// A RUNNING job keeps the stream open (done:false), and the handler must return
+// promptly when the client disconnects (ctx cancel) — the ticker/ctx.Done()
+// paths that httptest.ResponseRecorder can't reach. Uses a real server+client.
+func TestHandleSessionEventsStaysOpenAndClosesOnDisconnect(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	h, err := New(Options{Dir: dir, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write the running journal AFTER New(): New() runs recoverJobJournal once at
+	// startup, which flips a pre-existing running journal to interrupted (its
+	// in-memory slot is free). Written now, readJobJournal sees running. Plus
+	// FRESH events (ts near now) so run.Live is true → the snapshot is not Done.
+	startJobJournal(dir, sess.ID, orchestratorAction, time.Now().UTC())
+	now := time.Now().UTC()
+	writeMonitorEvents(t, dir,
+		events.Event{RunID: "r", TS: now.Add(-2 * time.Second), Level: events.LevelInfo, Type: events.EventRunStarted, Message: "started"},
+		events.Event{RunID: "r", TS: now.Add(-1 * time.Second), Level: events.LevelInfo, Phase: events.PhaseCopyFiles, Type: events.EventPhaseStarted},
+	)
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/platform/migrations/"+sess.ID+"/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("stream request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// First push proves the stream is open and the running job is NOT done.
+	buf := make([]byte, 1024)
+	n, _ := resp.Body.Read(buf)
+	first := string(buf[:n])
+	if !strings.Contains(first, "data:") {
+		t.Fatalf("no initial SSE push: %q", first)
+	}
+	if strings.Contains(first, `"done":true`) {
+		t.Fatalf("running job must not report done: %q", first)
+	}
+
+	// Disconnecting the client must make the handler return promptly.
+	done := make(chan struct{})
+	go func() { _, _ = io.Copy(io.Discard, resp.Body); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SSE handler did not return after client disconnect")
 	}
 }
