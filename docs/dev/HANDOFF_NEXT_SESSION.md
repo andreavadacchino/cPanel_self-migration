@@ -42,7 +42,8 @@ avanzate spostati fuori dal percorso principale.** Presentation-only: `workbench
 modalità operatore governance/artifact/SHA/attach/definizione/«Stato per fase»/cronologia NON sono
 renderizzati (dietro `{{if .Expert}}`); `host.yaml` nascosto dal copy operatore («Connessioni non
 configurate»); `screen_migrazione` con 3 card semplici. `startAllowed`/gate CTA e tutti i controlli
-safety-critical invariati. Nessun writer/CLI/SSE/`migration_plan.json`.
+safety-critical invariati. Nessun writer/CLI/SSE/`migration_plan.json`. Design completo:
+`docs/dev/OPERATOR_FIRST_UX_RESET.md`.
 
 **Dogfooding #4 (2026-07-07, `DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md`):** UI-walk in browser
 reale + suite test (43/43) + una esecuzione reale dell'orchestratore osservata end-to-end (fallita al

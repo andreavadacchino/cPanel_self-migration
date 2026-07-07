@@ -265,7 +265,8 @@ l'operatore (il nome-file resta solo in esperto, anche su `screen_preflight`). `
 mostra le 3 card semplici (Automatico / Manuale-verificabile / Escluso). Nessun controllo
 safety-critical rimosso: `startAllowed`/gate CTA intatto (hero↔CTA sempre coerenti, indipendenti da
 Expert), CSRF/strong-confirmation/DNS Danger Zone/rollback gated-by-backup invariati. Gate:
-gofmt/vet/race puliti, Docker LINUX_ALL_GREEN (go1.25.11), suite webui verde.
+gofmt/vet/race puliti, Docker LINUX_ALL_GREEN (go1.25.11), suite webui verde, go-reviewer APPROVE.
+Design completo: `docs/dev/OPERATOR_FIRST_UX_RESET.md`.
 
 ## Dogfooding #2 (2026-07-04) — verdetto e follow-up
 
