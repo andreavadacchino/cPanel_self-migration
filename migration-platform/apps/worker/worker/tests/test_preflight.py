@@ -32,7 +32,9 @@ def engine():
         eng.dispose()
 
 
-def _insert_queued_job(engine) -> int:
+def _insert_queued_job(engine, *, with_endpoints: bool = True) -> int:
+    """Insert a queued preflight job (migration 1) and, by default, a pair of
+    mock endpoints so the actor can drive the read-only inventory to success."""
     from worker import db
 
     with engine.begin() as conn:
@@ -46,7 +48,21 @@ def _insert_queued_job(engine) -> int:
                 created_at=datetime.now(timezone.utc),
             )
         )
-        return int(result.inserted_primary_key[0])
+        job_id = int(result.inserted_primary_key[0])
+        if with_endpoints:
+            for role in ("source", "destination"):
+                conn.execute(
+                    insert(db.endpoints).values(
+                        migration_id=1,
+                        role=role,
+                        host=f"{role}.example.com",
+                        port=2083,
+                        username=f"{role}user",
+                        auth_type="mock",
+                        connection_status="unknown",
+                    )
+                )
+    return job_id
 
 
 def test_actor_importable_and_registered() -> None:
@@ -116,12 +132,15 @@ def test_execute_preflight_missing_job_is_noop(engine) -> None:
     assert count == []
 
 
-def test_actor_module_uses_no_network_client() -> None:
-    """The preflight actor must not pull in an HTTP/cPanel client."""
-    import worker.actors.preflight as mod
+def test_execute_preflight_without_endpoints_fails(engine) -> None:
+    from worker import db
+    from worker.actors.preflight import execute_preflight
 
-    source = mod.__file__
-    with open(source, "r", encoding="utf-8") as fh:
-        text = fh.read()
-    for forbidden in ("requests", "httpx", "urllib", "socket", "cpanel"):
-        assert forbidden not in text
+    job_id = _insert_queued_job(engine, with_endpoints=False)
+    execute_preflight(job_id, engine=engine)
+
+    with engine.connect() as conn:
+        status = conn.execute(
+            select(db.jobs.c.status).where(db.jobs.c.id == job_id)
+        ).scalar_one()
+    assert status == "failed"

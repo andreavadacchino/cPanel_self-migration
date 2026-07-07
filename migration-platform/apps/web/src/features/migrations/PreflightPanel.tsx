@@ -17,7 +17,7 @@ export default function PreflightPanel({
         <div className="panel__title">Preflight</div>
         <p className="hint">
           {ready
-            ? 'Sorgente e destinazione configurate. Puoi avviare il preflight.'
+            ? 'Sorgente e destinazione configurate. Il preflight legge l’inventario (sola lettura) di entrambe.'
             : 'Configura sorgente e destinazione per abilitare il preflight.'}
         </p>
         {error && <div className="state-msg state-msg--error">{error}</div>}

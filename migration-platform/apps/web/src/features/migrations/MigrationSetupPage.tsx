@@ -4,9 +4,11 @@ import {
   fetchCurrentJob,
   fetchEndpoints,
   fetchEvents,
+  fetchInventory,
   fetchMigration,
   startPreflight,
   type Endpoint,
+  type InventoryOverview,
   type Job,
   type JobEvent,
   type Migration,
@@ -14,6 +16,7 @@ import {
 import EndpointCard from './EndpointCard'
 import PreflightPanel from './PreflightPanel'
 import JobStatusPanel from './JobStatusPanel'
+import InventorySummaryPanel from './InventorySummaryPanel'
 
 function isTerminal(job: Job | null): boolean {
   return job != null && (job.status === 'succeeded' || job.status === 'failed')
@@ -27,6 +30,7 @@ export default function MigrationSetupPage() {
   const [endpoints, setEndpoints] = useState<Endpoint[]>([])
   const [job, setJob] = useState<Job | null>(null)
   const [events, setEvents] = useState<JobEvent[]>([])
+  const [inventory, setInventory] = useState<InventoryOverview | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [preflightError, setPreflightError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
@@ -36,12 +40,14 @@ export default function MigrationSetupPage() {
   const ready = Boolean(source) && Boolean(destination)
 
   const refreshJob = useCallback(async () => {
-    const [currentJob, currentEvents] = await Promise.all([
+    const [currentJob, currentEvents, currentInventory] = await Promise.all([
       fetchCurrentJob(migrationId),
       fetchEvents(migrationId),
+      fetchInventory(migrationId),
     ])
     setJob(currentJob)
     setEvents(currentEvents)
+    setInventory(currentInventory)
   }, [migrationId])
 
   useEffect(() => {
@@ -55,13 +61,15 @@ export default function MigrationSetupPage() {
       fetchEndpoints(migrationId),
       fetchCurrentJob(migrationId),
       fetchEvents(migrationId),
+      fetchInventory(migrationId),
     ])
-      .then(([mig, eps, currentJob, currentEvents]) => {
+      .then(([mig, eps, currentJob, currentEvents, currentInventory]) => {
         if (!active) return
         setMigration(mig)
         setEndpoints(eps)
         setJob(currentJob)
         setEvents(currentEvents)
+        setInventory(currentInventory)
       })
       .catch((err: unknown) => {
         if (active)
@@ -152,6 +160,8 @@ export default function MigrationSetupPage() {
       />
 
       <JobStatusPanel job={job} events={events} />
+
+      <InventorySummaryPanel overview={inventory} />
     </>
   )
 }

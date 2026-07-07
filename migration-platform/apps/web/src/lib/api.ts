@@ -14,6 +14,20 @@ export interface Migration {
   updated_at: string
 }
 
+export interface Capabilities {
+  source: string
+  can_connect: boolean
+  can_authenticate: boolean
+  can_read_account_info: boolean
+  can_read_domains: boolean
+  can_read_email: boolean
+  can_read_databases: boolean
+  can_read_cron: boolean
+  can_read_dns: boolean
+  can_read_ssl: boolean
+  limitations: string[]
+}
+
 export interface Endpoint {
   id: number
   migration_id: number
@@ -23,11 +37,12 @@ export interface Endpoint {
   port: number
   username: string
   auth_type: AuthType
-  auth_ref: string | null
+  // Sprint 2: the opaque auth_ref is never returned — only this flag.
+  has_auth_ref: boolean
   connection_status: ConnectionStatus
   last_checked_at: string | null
   last_error: string | null
-  capabilities: Record<string, unknown> | null
+  capabilities: Capabilities | null
   created_at: string
   updated_at: string
 }
@@ -63,6 +78,35 @@ export interface JobEvent {
   message: string
   progress: number | null
   created_at: string
+}
+
+export interface InventorySummary {
+  domains_count: number | null
+  email_accounts_count: number | null
+  databases_count: number | null
+  cron_jobs_count: number | null
+  dns_records_count: number | null
+  ssl_items_count: number | null
+  warnings_count: number
+}
+
+export interface InventorySnapshot {
+  id: number
+  migration_id: number
+  endpoint_id: number
+  endpoint_role: EndpointRole
+  status: string
+  captured_at: string | null
+  summary: InventorySummary | null
+  data: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface InventoryOverview {
+  source: InventorySnapshot | null
+  destination: InventorySnapshot | null
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -142,4 +186,9 @@ export async function fetchCurrentJob(migrationId: number): Promise<Job | null> 
 
 export function fetchEvents(migrationId: number): Promise<JobEvent[]> {
   return request<JobEvent[]>(`/api/migrations/${migrationId}/events`)
+}
+
+// Inventory
+export function fetchInventory(migrationId: number): Promise<InventoryOverview> {
+  return request<InventoryOverview>(`/api/migrations/${migrationId}/inventory`)
 }

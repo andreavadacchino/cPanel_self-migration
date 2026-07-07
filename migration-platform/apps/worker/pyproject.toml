@@ -1,7 +1,7 @@
 [project]
 name = "migration-platform-worker"
 version = "0.1.0"
-description = "Dramatiq worker for the migration platform (Sprint 0)."
+description = "Dramatiq worker for the migration platform (read-only preflight)."
 requires-python = ">=3.11"
 dependencies = [
     "dramatiq[redis]>=1.16",
@@ -9,6 +9,9 @@ dependencies = [
     # The worker owns a minimal DB layer to update jobs/job_events in Postgres.
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.1",
+    # Sprint 2: read-only cPanel inventory via the shared adapters package
+    # (installed from packages/adapters — see the Dockerfile / dev setup).
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]

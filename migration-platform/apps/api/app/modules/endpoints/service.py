@@ -7,8 +7,14 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.errors import NotFoundError
-from app.modules.endpoints.mock_connection import probe_connection
+from adapters.credentials import (
+    CredentialError,
+    CredentialNotFound,
+    CredentialResolverNotImplemented,
+    resolve_credential,
+)
+from adapters.inventory import build_inventory_source
+from app.core.errors import NotFoundError, UnprocessableError
 from app.modules.endpoints.models import ConnectionStatus, Endpoint
 from app.modules.endpoints.schemas import EndpointCreate
 from app.modules.migrations.service import get_migration
@@ -53,18 +59,51 @@ def get_endpoint(db: Session, endpoint_id: int) -> Endpoint:
     return endpoint
 
 
-def test_connection(db: Session, endpoint_id: int) -> Endpoint:
-    """Run the mock probe and persist the outcome on the endpoint."""
-    endpoint = get_endpoint(db, endpoint_id)
-    result = probe_connection(endpoint.host, endpoint.port, endpoint.username)
+def _probe_endpoint(endpoint: Endpoint) -> tuple[str, str | None, dict | None]:
+    """Build the right inventory source and run a minimal connect/auth probe.
 
-    endpoint.connection_status = (
+    ``mock`` uses the offline source; ``token_ref`` resolves the credential
+    (only ``env://`` in Sprint 2) and calls the real cPanel UAPI. A missing env
+    var is a recorded failure; an unimplemented resolver (vault://) is a 422.
+    """
+    try:
+        source = build_inventory_source(
+            auth_type=endpoint.auth_type,
+            host=endpoint.host,
+            port=endpoint.port,
+            username=endpoint.username,
+            auth_ref=endpoint.auth_ref,
+            resolver=resolve_credential,
+        )
+    except CredentialResolverNotImplemented as exc:
+        raise UnprocessableError(str(exc)) from exc
+    except CredentialNotFound as exc:
+        # Missing env var → failed connection, not a 4xx. Names the var, not
+        # the value (the value never existed).
+        return ConnectionStatus.FAILED.value, str(exc), None
+    except CredentialError as exc:
+        raise UnprocessableError(str(exc)) from exc
+
+    try:
+        outcome = source.probe()
+    finally:
+        source.close()  # release the httpx client / socket promptly
+    status = (
         ConnectionStatus.CONNECTED.value
-        if result.ok
+        if outcome.connected and outcome.authenticated
         else ConnectionStatus.FAILED.value
     )
-    endpoint.last_error = result.error
-    endpoint.capabilities = result.capabilities
+    return status, outcome.error, outcome.capabilities.model_dump()
+
+
+def test_connection(db: Session, endpoint_id: int) -> Endpoint:
+    """Probe the endpoint (mock or real cPanel) and persist the outcome."""
+    endpoint = get_endpoint(db, endpoint_id)
+    status, last_error, capabilities = _probe_endpoint(endpoint)
+
+    endpoint.connection_status = status
+    endpoint.last_error = last_error
+    endpoint.capabilities = capabilities
     endpoint.last_checked_at = datetime.now(timezone.utc)
 
     db.add(endpoint)

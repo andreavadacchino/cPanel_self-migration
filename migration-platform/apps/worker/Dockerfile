@@ -8,9 +8,12 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /srv
 
 COPY packages/domain /srv/packages/domain
+COPY packages/adapters /srv/packages/adapters
 COPY apps/worker /srv/apps/worker
 
-RUN pip install -e packages/domain -e apps/worker
+# Sprint 2: the preflight actor reads real cPanel inventory via the shared
+# adapters package (not the FastAPI app).
+RUN pip install -e packages/domain -e packages/adapters -e apps/worker
 
 WORKDIR /srv/apps/worker
 
