@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cockpit — {{.Header.Brand}}</title>
+{{if .Cockpit.Monitor.JobLive}}<meta http-equiv="refresh" content="10">{{end}}
+{{template "platformCSS" .}}
+</head>
+<body>
+<div class="sess">
+  {{template "platformSessionHead" .}}
+  {{template "platformStepper" .}}
+  {{template "platformFlash" .}}
+
+  <div class="grid cockpit-cols" style="align-items:start">
+
+    {{/* ---- Left: migration status + phases ---- */}}
+    <div class="card">
+      <div class="card-h"><span class="ttl">📈 Stato migrazione</span></div>
+      <div class="muted" style="font-size:.82rem">Stato corrente</div>
+      <div><span class="badge b-{{.Cockpit.StateClass}} plain" style="font-size:.92rem; font-weight:660">{{.Cockpit.StateLabel}}</span></div>
+
+      <div class="muted" style="font-size:.82rem; margin-top:.9rem">Prossimo passo</div>
+      <div style="font-weight:600">{{.Cockpit.CTA.Label}}</div>
+      {{if .Cockpit.CTA.Detail}}<div class="sub">{{.Cockpit.CTA.Detail}}</div>{{end}}
+
+      <div class="muted" style="font-size:.82rem; margin-top:.9rem">Avanzamento (passo {{.CurrentStepIndex}} di {{len .Steps}})</div>
+      <div class="prog" style="margin-top:.35rem"><span style="width:{{stepPct .CurrentStepIndex (len .Steps)}}%"></span></div>
+
+      {{/* Single dominant CTA — start delegates to the tested workbench form */}}
+      <div style="margin-top:1rem">
+        {{if eq .Cockpit.CTA.Kind "wait"}}
+          <button class="btn btn-lg is-disabled" style="width:100%; justify-content:center" disabled>{{.Cockpit.CTA.Label}}</button>
+        {{else if eq .Cockpit.CTA.Kind "start"}}
+          <a class="btn btn-primary btn-lg" style="width:100%; justify-content:center" href="{{.HeroCTAURL}}">Avvia migrazione →</a>
+          <p class="faint" style="font-size:.78rem; text-align:center; margin-top:.4rem">La conferma avviene sullo schermo di avvio (forte conferma).</p>
+        {{else}}
+          <a class="btn btn-primary btn-lg" style="width:100%; justify-content:center" href="{{.HeroCTAURL}}">{{.Cockpit.CTA.Label}} →</a>
+        {{end}}
+      </div>
+
+      <hr class="sep">
+      <div class="muted" style="font-size:.82rem; margin-bottom:.4rem">Fasi della migrazione</div>
+      <div class="stack" style="gap:.35rem">
+        {{range .Steps}}
+        <div style="display:flex; align-items:center; gap:.5rem; font-size:.88rem">
+          <span class="badge b-{{if eq .State "done"}}done{{else if eq .State "doing"}}active{{else if eq .State "warn"}}warn{{else}}archived{{end}} plain" style="width:1.2rem; height:1.2rem; padding:0; justify-content:center">{{if eq .State "done"}}✓{{else}}{{.Index}}{{end}}</span>
+          <span style="flex:1">{{.Label}}</span>
+          <span class="sub">{{.Caption}}</span>
+        </div>
+        {{end}}
+      </div>
+    </div>
+
+    {{/* ---- Center: comparison + plan buckets ---- */}}
+    <div class="stack" style="gap:1rem">
+      <div class="card">
+        <div class="card-h"><span class="ttl">⚖ Comparativa account</span></div>
+        {{if .Compare}}
+        <div class="tablewrap"><table>
+          <thead><tr><th>Elemento</th><th>cPanel sorgente</th><th>cPanel destinazione</th><th>Stato</th></tr></thead>
+          <tbody>
+          {{range .Compare}}
+          <tr>
+            <td><strong>{{.Label}}</strong></td>
+            <td>{{if .HasCount}}{{.Source}}{{else}}<span class="faint">—</span>{{end}}</td>
+            <td>{{if .HasCount}}{{.Dest}}{{else}}<span class="faint">—</span>{{end}}</td>
+            <td><span class="badge b-{{.StateClass}}">{{.State}}</span></td>
+          </tr>
+          {{end}}
+          </tbody>
+        </table></div>
+        {{else}}
+        <p class="muted">Comparativa non ancora disponibile. Esegui il preflight.</p>
+        {{end}}
+      </div>
+
+      <div class="card">
+        <div class="card-h"><span class="ttl">📦 Cosa verrà migrato</span></div>
+        <div class="grid g-3">
+          <div><div style="font-weight:660; color:var(--ok-2)">✓ Automatico</div><ul style="padding-left:1.1rem; font-size:.84rem; color:var(--text-2)">{{range .Cockpit.Plan.Automatic}}<li>{{.Label}}</li>{{else}}<li class="muted">Nessuno</li>{{end}}</ul></div>
+          <div><div style="font-weight:660; color:var(--warn)">! Manuale / verificabile</div><ul style="padding-left:1.1rem; font-size:.84rem; color:var(--text-2)">{{range .Cockpit.Plan.Manual}}<li>{{.Label}}</li>{{else}}<li class="muted">Nessuno</li>{{end}}</ul></div>
+          <div><div style="font-weight:660; color:var(--muted)">– Escluso</div><ul style="padding-left:1.1rem; font-size:.84rem; color:var(--text-2)">{{range .Cockpit.Plan.Excluded}}<li>{{.Label}}</li>{{else}}<li class="muted">Nessuno</li>{{end}}</ul></div>
+        </div>
+        <div class="callout info" style="margin-top:.7rem">Tutti i dati vengono migrati mantenendo permessi e proprietà originali. Il DNS non viene applicato automaticamente.</div>
+      </div>
+    </div>
+
+    {{/* ---- Right: execution monitor + log + open tasks ---- */}}
+    <div class="stack" style="gap:1rem">
+      <div class="card">
+        <div class="card-h"><span class="ttl">📡 Monitor esecuzione</span></div>
+        {{if .Cockpit.Monitor.Active}}
+          <div class="stack" style="gap:.55rem">
+          {{range .Cockpit.Monitor.Phases}}
+            <div style="display:flex; align-items:center; gap:.5rem">
+              <span style="flex:1; font-size:.88rem; font-weight:550">{{.Label}}</span>
+              <span class="badge b-{{.StateClass}}">{{.StateLabel}}</span>
+            </div>
+          {{end}}
+          </div>
+          {{if .Cockpit.Monitor.RunPhases}}
+          <hr class="sep">
+          <div class="muted" style="font-size:.82rem; margin-bottom:.3rem">Dettaglio esecuzione</div>
+          {{range .Cockpit.Monitor.RunPhases}}
+          <div style="display:flex; align-items:center; gap:.5rem; font-size:.84rem">
+            <span style="flex:1">{{.Label}}</span><span class="badge b-{{.StateClass}}">{{.StateLabel}}</span>
+          </div>
+          {{if .Summary}}<div class="sub mono" style="margin:.1rem 0 .4rem">{{.Summary}}</div>{{end}}
+          {{end}}
+          {{end}}
+        {{else}}
+        <p class="muted">Monitor non attivo: la migrazione automatica non è ancora partita.</p>
+        {{end}}
+      </div>
+
+      {{if .Cockpit.Monitor.Log}}
+      <div class="card">
+        <div class="card-h"><span class="ttl">🧾 Log</span></div>
+        <div class="log">{{range .Cockpit.Monitor.Log}}<div>{{.}}</div>{{end}}</div>
+      </div>
+      {{end}}
+
+      <div class="card">
+        <div class="card-h"><span class="ttl">☑ Task manuali aperti</span><a class="act sub" href="/platform/migrations/{{.Session.ID}}/tasks">Vedi tutti</a></div>
+        {{if .Tasks}}
+        <div class="stack" style="gap:.5rem">
+          {{range .Tasks}}
+          <div style="display:flex; align-items:flex-start; gap:.5rem">
+            <span class="badge {{if .BlockingCutover}}b-error{{else}}b-warn{{end}} plain" style="margin-top:.2rem">•</span>
+            <div style="flex:1"><div style="font-weight:600; font-size:.88rem">{{manualTitleIT .}}</div><div class="sub">{{.Section}}</div></div>
+            {{if .Accepted}}<span class="badge b-done">Confermato</span>{{else if .BlockingCutover}}<span class="badge b-error">Bloccante cutover</span>{{else}}<span class="badge b-warn">Da fare</span>{{end}}
+          </div>
+          {{end}}
+        </div>
+        {{else}}
+        <p class="muted">Nessun task manuale aperto.</p>
+        {{end}}
+      </div>
+    </div>
+
+  </div>
+
+  {{if .Cockpit.Monitor.JobLive}}<div class="lastupd">🔄 Aggiornamento automatico attivo (10s)</div>{{end}}
+</div>
+</body>
+</html>

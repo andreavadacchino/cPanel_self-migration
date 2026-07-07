@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Migrazioni — cPanel Migrazioni</title>
+{{template "platformCSS" .}}
+</head>
+<body>
+<div class="app">
+  {{template "platformSidebar" .}}
+  <div class="main">
+    {{template "platformTopbar" .}}
+    <div class="content">
+
+      <div class="sess-head" style="margin-bottom:1.2rem">
+        <div>
+          <h1>Migrazioni</h1>
+          <p class="muted">{{.Header.Subtitle}}</p>
+        </div>
+        <div class="sess-actions">
+          <a class="btn btn-primary btn-lg" href="/platform/migrations/new">+ Nuova migrazione</a>
+        </div>
+      </div>
+
+      {{/* KPI tiles — counts derived from real session statuses */}}
+      <div class="grid g-4" style="margin-bottom:1.3rem">
+        {{range .Stats}}
+        <div class="stat">
+          <div class="ico {{.Class}}" aria-hidden="true">{{if eq .Key "active"}}⟳{{else if eq .Key "waiting"}}⏱{{else if eq .Key "done"}}✓{{else}}☑{{end}}</div>
+          <div class="n">{{.Count}}</div>
+          <div class="l">{{.Label}}</div>
+        </div>
+        {{end}}
+      </div>
+
+      <div class="grid" style="grid-template-columns:1fr 340px; align-items:start;">
+        {{/* Migrations table */}}
+        <div class="card">
+          <div class="card-h"><span class="ttl">Tutte le migrazioni</span></div>
+          {{if .Migrations}}
+          <div class="tablewrap">
+          <table>
+            <thead><tr>
+              <th>Dominio / Migrazione</th><th>Sorgente</th><th>Destinazione</th>
+              <th>Stato</th><th>Prossima azione</th><th>Aggiornato</th>
+            </tr></thead>
+            <tbody>
+            {{range .Migrations}}
+            <tr>
+              <td>
+                <a href="/platform/migrations/{{.ID}}"><strong>{{.Domain}}</strong></a>
+                <div class="sub mono">{{.ID}}</div>
+              </td>
+              <td>{{.Source}}</td>
+              <td>{{.Dest}}</td>
+              <td>
+                <span class="badge b-{{.StatusClass}}">{{.StatusLabel}}</span>
+                <div class="prog mini" style="margin-top:.4rem" title="Passo {{.StepIndex}} di {{.StepTotal}}"><span style="width:{{stepPct .StepIndex .StepTotal}}%"></span></div>
+              </td>
+              <td><a href="{{.NextURL}}">{{.NextAction}}</a></td>
+              <td class="sub">{{.Updated}}</td>
+            </tr>
+            {{end}}
+            </tbody>
+          </table>
+          </div>
+          {{else}}
+          <div class="empty">
+            <p style="font-weight:600; color:var(--text)">Nessuna migrazione</p>
+            <p>Crea la prima migrazione per iniziare.</p>
+            <p style="margin-top:1rem"><a class="btn btn-primary" href="/platform/migrations/new">+ Nuova migrazione</a></p>
+          </div>
+          {{end}}
+        </div>
+
+        {{/* Recent activity rail */}}
+        <div class="card">
+          <div class="card-h"><span class="ttl">Attività recenti</span></div>
+          {{if .Activity}}
+          <div class="stack" style="gap:.9rem">
+            {{range .Activity}}
+            <div style="display:flex; gap:.6rem; align-items:flex-start">
+              <span class="badge b-{{.Class}} plain" style="margin-top:.15rem">•</span>
+              <div>
+                <div style="font-weight:600; font-size:.9rem">{{.Title}}</div>
+                <div class="sub">{{.Detail}}</div>
+                <div class="faint" style="font-size:.78rem">{{.When}}</div>
+              </div>
+            </div>
+            {{end}}
+          </div>
+          {{else}}
+          <p class="muted">Nessuna attività registrata.</p>
+          {{end}}
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</body>
+</html>

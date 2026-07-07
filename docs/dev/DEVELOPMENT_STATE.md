@@ -7,6 +7,20 @@ Snapshot for starting a fresh development session. Last updated after
 6D = `dns apply` — both merged); the 7x series is the migration checklist
 / final verification track.
 
+## Platform UI V2 (2026-07-07, `feat/platform-ui-v2`) — operator-first SaaS shell
+
+A NEW product UI added **in parallel** to the workbench, faithful to the 14
+approved mockups in `screenshot/`. Routes `/platform/*` (Dashboard, New-migration
+Wizard, Preflight/Plan, Cockpit + initial Task/Report/Comparison). Dedicated
+read-model `platformPage` (`internal/webui/platform_view.go`) that ADAPTS
+`buildWorkbenchView` + `store.List()` — no duplication of the readiness/start gate.
+Presentation-only: no new writer/CLI/SSE, engine untouched; every mutating CTA
+delegates to the existing workbench POST handlers (the wizard reuses the shared
+`parseWizardSubmission`). The old workbench (`/workbench/*`) stays the **expert
+mode / fallback** (SHA, artifacts, governance, DNS Danger Zone, single apply/verify,
+rollback). Only real artifact data + honest fallbacks — no invented numbers. Spec:
+`docs/dev/PLATFORM_UI_V2_DESIGN.md`.
+
 ## What this tool is
 
 A CLI (`cpanel-self-migration`) that migrates email, website files and

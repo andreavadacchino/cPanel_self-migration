@@ -1,0 +1,226 @@
+package webui
+
+// Platform UI V2 — operator-first SaaS shell (routing + handlers).
+//
+// The /platform surface is a NEW presentation layer parallel to /workbench: a
+// product shell that renders the platformPage read-model (platform_view.go).
+// It never writes and never gates. Every mutating call — create a migration,
+// confirm scope, start migration, register a confirmation, run a single
+// apply/verify, rollback, DNS — is delegated to the EXISTING, tested workbench
+// POST handlers; the platform templates simply point their forms/links there.
+// The only exception is the platform wizard, which reuses parseWizardSubmission
+// (the same validation the workbench wizard uses) and redirects into /platform.
+//
+// Request-level security (loopback + anti-rebinding Host + Origin + CSRF on
+// POST) is inherited unchanged from server.route()/server.post().
+
+import (
+	"bytes"
+	"embed"
+	"errors"
+	"fmt"
+	"html/template"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
+)
+
+//go:embed templates/platform_theme.html templates/platform_dashboard.html templates/platform_wizard.html templates/platform_plan.html templates/platform_cockpit.html templates/platform_tasks.html templates/platform_report.html templates/platform_compare.html
+var platformTemplatesFS embed.FS
+
+// platformServer renders the /platform screens. It shares the store, artifact
+// dir, CSRF token and the live-slot probe with the rest of the ui.
+type platformServer struct {
+	store   *workbench.Store
+	tpl     *template.Template
+	csrf    string
+	dir     string
+	jobBusy func() bool
+}
+
+func newPlatformServer(store *workbench.Store, dir, csrf string, jobBusy func() bool) (*platformServer, error) {
+	funcMap := template.FuncMap{
+		"manualTitleIT":    manualTitleIT,
+		"manualActionIT":   manualActionIT,
+		"statusBadgeClass": statusClassPlatform,
+		"statusLabel":      statusLabelIT,
+		"stepPct":          stepPct,
+		"list":             func(args ...any) []any { return args },
+		"sub":              func(a, b int) int { return a - b },
+	}
+	tpl, err := template.New("").Funcs(funcMap).ParseFS(platformTemplatesFS,
+		"templates/platform_theme.html",
+		"templates/platform_dashboard.html",
+		"templates/platform_wizard.html",
+		"templates/platform_plan.html",
+		"templates/platform_cockpit.html",
+		"templates/platform_tasks.html",
+		"templates/platform_report.html",
+		"templates/platform_compare.html",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("parse platform templates: %w", err)
+	}
+	return &platformServer{store: store, tpl: tpl, csrf: csrf, dir: dir, jobBusy: jobBusy}, nil
+}
+
+// platformScreenTemplates maps a session screen segment to its template.
+var platformScreenTemplates = map[string]string{
+	"cockpit": "platform_cockpit.html",
+	"plan":    "platform_plan.html",
+	"tasks":   "platform_tasks.html",
+	"report":  "platform_report.html",
+	"compare": "platform_compare.html",
+}
+
+// routePlatform dispatches the /platform/* routes. Returns true if it handled
+// the request. Kept on *server (like routeWorkbench) so it can reuse s.post for
+// the CSRF-gated wizard POST.
+func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
+	path := r.URL.Path
+
+	if path == "/platform" || path == "/platform/" {
+		http.Redirect(w, r, "/platform/migrations", http.StatusSeeOther)
+		return true
+	}
+
+	if path == "/platform/migrations" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, "GET")
+			return true
+		}
+		s.platform.handleDashboard(w, r)
+		return true
+	}
+
+	if path == "/platform/migrations/new" {
+		switch r.Method {
+		case http.MethodGet:
+			s.platform.handleWizardForm(w, r)
+		case http.MethodPost:
+			s.post(w, r, s.platform.handleWizardCreate)
+		default:
+			methodNotAllowed(w, "GET, POST")
+		}
+		return true
+	}
+
+	const prefix = "/platform/migrations/"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	rest := path[len(prefix):]
+	var id, screen string
+	if idx := strings.IndexByte(rest, '/'); idx >= 0 {
+		id = rest[:idx]
+		screen = rest[idx+1:]
+	} else {
+		id = rest
+	}
+	if id == "" {
+		http.NotFound(w, r)
+		return true
+	}
+	if screen == "" {
+		screen = "cockpit"
+	}
+	if _, ok := platformScreenTemplates[screen]; !ok {
+		http.NotFound(w, r)
+		return true
+	}
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, "GET")
+		return true
+	}
+	s.platform.handleSession(w, r, id, screen)
+	return true
+}
+
+func methodNotAllowed(w http.ResponseWriter, allow string) {
+	w.Header().Set("Allow", allow)
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+}
+
+func (ps *platformServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	page, err := buildPlatformDashboard(ps.store, ps.csrf)
+	if err != nil {
+		http.Error(w, "internal error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	ps.render(w, "platform_dashboard.html", page)
+}
+
+// defaultPlatformWizardView is the fresh platform wizard form. The common
+// content areas are pre-selected for a smoother operator flow; DNS is
+// DELIBERATELY left off — touching DNS must always be an explicit choice (same
+// posture as workbench.ContentSelection).
+func defaultPlatformWizardView(csrf string) wizardView {
+	v := defaultWizardView(csrf)
+	v.Content = wizardContentForm{Files: true, Databases: true, Email: true, EmailConfig: true, Cron: true, DNS: false}
+	return v
+}
+
+func (ps *platformServer) handleWizardForm(w http.ResponseWriter, r *http.Request) {
+	ps.render(w, "platform_wizard.html", defaultPlatformWizardView(ps.csrf))
+}
+
+// handleWizardCreate validates via the SHARED parseWizardSubmission (identical
+// to the workbench wizard) and, on success, creates the session and redirects
+// into the platform cockpit. On error it re-renders the platform wizard (400).
+func (ps *platformServer) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
+	sub, v, ok := parseWizardSubmission(r, ps.csrf)
+	if !ok {
+		ps.renderCode(w, "platform_wizard.html", v, http.StatusBadRequest)
+		return
+	}
+	sess, err := ps.store.CreateWithSetup(sub.Name, sub.SrcProfile, sub.DstProfile, sub.Setup, time.Now().UTC())
+	if err != nil {
+		http.Error(w, "create session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/platform/migrations/"+sess.ID, http.StatusSeeOther)
+}
+
+func (ps *platformServer) handleSession(w http.ResponseWriter, r *http.Request, id, screen string) {
+	tplName := platformScreenTemplates[screen]
+	sess, err := ps.store.Get(id)
+	if err != nil {
+		if errors.Is(err, workbench.ErrSessionNotFound) || errors.Is(err, workbench.ErrInvalidSessionID) {
+			http.Error(w, "migrazione non trovata", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "internal error: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	busy := false
+	if ps.jobBusy != nil {
+		busy = ps.jobBusy()
+	}
+	page := buildPlatformSession(ps.dir, ps.csrf, sess, busy, screen)
+	// One-shot flashes from a redirect round-trip through the workbench POST
+	// handlers (scope confirm / orchestrator outcome), same query contract.
+	page.Flash = scopeFlash(r.URL.Query().Get("scope"))
+	if m := migrateFlash(r.URL.Query().Get("migrate")); m != "" {
+		page.Flash = m
+	}
+	ps.render(w, tplName, page)
+}
+
+func (ps *platformServer) render(w http.ResponseWriter, name string, data any) {
+	ps.renderCode(w, name, data, http.StatusOK)
+}
+
+// renderCode renders into a buffer first so a template failure yields a clean
+// 500 (headers not yet written) instead of a partial page under a wrong status.
+func (ps *platformServer) renderCode(w http.ResponseWriter, name string, data any, code int) {
+	var buf bytes.Buffer
+	if err := ps.tpl.ExecuteTemplate(&buf, name, data); err != nil {
+		http.Error(w, "template error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(code)
+	_, _ = w.Write(buf.Bytes())
+}
