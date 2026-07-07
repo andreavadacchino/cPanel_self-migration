@@ -210,11 +210,11 @@
   <a class="side-brand" href="/platform/migrations"><span aria-hidden="true">☁️</span> Migrazioni cPanel</a>
   <nav class="side-nav">
     <a href="/platform/migrations" class="{{if eq .Nav.Active "migrations"}}active{{end}}"><span class="ic" aria-hidden="true">▤</span> Migrazioni</a>
-    <a href="{{.Nav.ExpertURL}}"><span class="ic" aria-hidden="true">⚙</span> Dettagli tecnici</a>
+    <a href="{{.Nav.ExpertURL}}"><span class="ic" aria-hidden="true">⚙</span> Modalità avanzata</a>
   </nav>
   <div class="side-foot">
-    <div class="t">Dettagli tecnici</div>
-    <p>Azioni avanzate e report grezzi restano nella <a href="{{.Nav.ExpertURL}}">vista tecnica</a>.</p>
+    <div class="t">Modalità avanzata</div>
+    <p>Azioni tecniche e report grezzi restano nella <a href="{{.Nav.ExpertURL}}">vista esperto</a> o nella <a href="/advanced">console tecnica</a>.</p>
   </div>
 </aside>
 {{end}}
@@ -252,7 +252,7 @@
       </div>
       <div class="hero-rail">
         <a class="btn btn-primary" href="/platform/migrations/new">+ Nuova migrazione</a>
-        <a class="btn btn-ghost" href="/workbench">Dettagli tecnici</a>
+        <a class="btn btn-ghost" href="/workbench">Modalità avanzata</a>
       </div>
     </div>
   </div>
@@ -279,7 +279,7 @@
         <div class="faint" style="font-size:.88rem">{{.Cockpit.CTA.Detail}}</div>
       </div>
       <div class="hero-rail">
-        <a class="btn btn-ghost" href="{{.ExpertURL}}">Dettagli tecnici</a>
+        <a class="btn btn-ghost" href="{{.ExpertURL}}">Modalità avanzata</a>
         {{if .HeroCTAURL}}<a class="btn btn-primary" href="{{.HeroCTAURL}}">{{.Cockpit.CTA.Label}}</a>{{end}}
       </div>
     </div>
@@ -302,7 +302,7 @@
   <div class="sess-actions">
     <span class="badge b-{{.Risk.Class}} plain">{{.Risk.Label}}</span>
     <span class="badge b-{{statusBadgeClass .Session.Status}} plain">{{.Header.Subtitle}}</span>
-    <a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}">Dettagli tecnici</a>
+    <a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}">Modalità avanzata</a>
   </div>
 </div>
 {{end}}

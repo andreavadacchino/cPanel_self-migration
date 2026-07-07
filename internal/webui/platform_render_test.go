@@ -236,10 +236,16 @@ func TestWorkbenchNotBrokenByPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/", "/workbench", "/workbench/session/" + sess.ID, "/workbench/new"} {
+	for _, path := range []string{"/advanced", "/workbench", "/workbench/session/" + sess.ID, "/workbench/new"} {
 		if rr := doReq(h, http.MethodGet, path, nil); rr.Code != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200 (workbench must keep working)", path, rr.Code)
 		}
+	}
+	// "/" is now the operator landing: with the platform shell mounted it
+	// 303-redirects to the platform; the raw phase-1 console moved to /advanced.
+	if rr := doReq(h, http.MethodGet, "/", nil); rr.Code != http.StatusSeeOther ||
+		rr.Header().Get("Location") != "/platform/migrations" {
+		t.Errorf("GET / = %d loc=%q, want 303 → /platform/migrations", rr.Code, rr.Header().Get("Location"))
 	}
 	// The workbench wizard still redirects into /workbench (refactor regression).
 	csrf := fetchCSRF(t, h)

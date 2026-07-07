@@ -25,7 +25,7 @@ const acceptTimeout = 2 * time.Minute
 // serialized under cfgMu and refused (409) while a full analysis job runs,
 // since both write migration_checklist.json.
 func (s *server) saveAccept(w http.ResponseWriter, r *http.Request) {
-	s.saveAcceptTo(w, r, "/")
+	s.saveAcceptTo(w, r, "/advanced")
 }
 
 // saveAcceptTo is saveAccept parameterized on the post-success redirect target:

@@ -192,7 +192,9 @@ func New(o Options) (http.Handler, error) {
 	// No ServeMux on purpose: its path canonicalization would answer
 	// traversal-looking requests with a 307 redirect instead of a plain
 	// 404. route() serves fixed paths and nothing else — no redirects
-	// besides the post-action 303, no file serving.
+	// besides the post-action 303 and the operator-landing 303 at "/"
+	// (→ /platform/migrations when the platform shell is mounted), no
+	// file serving.
 	return http.HandlerFunc(s.route), nil
 }
 
@@ -218,6 +220,21 @@ func (s *server) route(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/":
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Operator landing: when the platform shell is mounted (production has a
+		// SessionStore, so s.platform != nil), "/" IS the operator platform. The
+		// raw phase-1 console stays reachable at /advanced. Read-only phase-1
+		// builds (NewHandler, no store) keep serving the console at "/" unchanged.
+		if s.platform != nil {
+			http.Redirect(w, r, "/platform/migrations", http.StatusSeeOther)
+			return
+		}
+		s.index(w, r)
+	case "/advanced":
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -369,7 +386,7 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid configuration: "+err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/advanced", http.StatusSeeOther)
 }
 
 // writeValidatedConfig writes the candidate to a UNIQUE temp file, lets
@@ -424,7 +441,7 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/advanced", http.StatusSeeOther)
 }
 
 // ---------------------------------------------------------------------------

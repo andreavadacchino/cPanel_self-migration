@@ -14,7 +14,11 @@
     <div class="content">
       {{template "platformDashboardHero" .}}
 
-      {{/* KPI tiles — counts derived from real session statuses */}}
+      {{/* KPI tiles — hidden on the mono-account landing (≤1 migration): the
+           fleet dashboard is not the operator's product. Shown, with counts
+           derived from real session statuses, only when more than one
+           migration exists in the shared dir. */}}
+      {{if gt (len .Migrations) 1}}
       <div class="grid g-4" style="margin-bottom:1.3rem">
         {{range .Stats}}
         <div class="stat">
@@ -24,8 +28,9 @@
         </div>
         {{end}}
       </div>
+      {{end}}
 
-      <div class="grid" style="grid-template-columns:1.1fr .9fr; align-items:start;">
+      <div class="grid" style="grid-template-columns:{{if gt (len .Migrations) 1}}1.1fr .9fr{{else}}1fr{{end}}; align-items:start;">
         {{/* Migrations table */}}
         <div class="card">
           <div class="card-h"><span class="ttl">Tutte le migrazioni</span></div>
@@ -65,7 +70,10 @@
           {{end}}
         </div>
 
-        {{/* Recent activity rail */}}
+        {{/* Recent activity rail — part of the fleet view; hidden on the
+             mono-account landing (≤1 migration) so the operator sees only
+             the single migration and its next action. */}}
+        {{if gt (len .Migrations) 1}}
         <div class="card" style="background:linear-gradient(180deg, rgba(15,118,110,.05), #fff)">
           <div class="card-h"><span class="ttl">Attività recenti</span></div>
           {{if .Activity}}
@@ -85,6 +93,7 @@
           <p class="muted">Nessuna attività registrata.</p>
           {{end}}
         </div>
+        {{end}}
       </div>
 
     </div>
