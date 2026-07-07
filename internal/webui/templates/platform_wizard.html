@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nuova migrazione — cPanel Migrazioni</title>
+{{template "platformCSS" .}}
+</head>
+<body>
+<div class="sess">
+  <div class="sess-head" style="margin-bottom:.4rem">
+    <div class="sess-title" style="font-size:1.35rem">Nuova migrazione</div>
+    <div class="sess-actions"><a class="btn btn-ghost btn-sm" href="/platform/migrations">Annulla e torna alle migrazioni</a></div>
+  </div>
+
+  {{/* Wizard stepper — single-page form (the phases below are all present) */}}
+  <div class="stepper" style="margin-top:.8rem">
+    <div class="step doing"><div class="dot">1</div><div><div class="lab">Nome migrazione</div><div class="cap">in corso</div></div></div>
+    <div class="bar"></div>
+    <div class="step todo"><div class="dot">2</div><div><div class="lab">Sorgente</div><div class="cap">da configurare</div></div></div>
+    <div class="bar"></div>
+    <div class="step todo"><div class="dot">3</div><div><div class="lab">Destinazione</div><div class="cap">da configurare</div></div></div>
+    <div class="bar"></div>
+    <div class="step todo"><div class="dot">4</div><div><div class="lab">Contenuti</div><div class="cap">da selezionare</div></div></div>
+    <div class="bar"></div>
+    <div class="step todo"><div class="dot">5</div><div><div class="lab">Riepilogo</div><div class="cap">da confermare</div></div></div>
+  </div>
+
+  {{if .Errors}}
+  <div class="callout err" style="margin-bottom:1rem">
+    <strong>Controlla i dati inseriti:</strong>
+    <ul style="margin:.4rem 0 0; padding-left:1.2rem">{{range .Errors}}<li>{{.}}</li>{{end}}</ul>
+  </div>
+  {{end}}
+
+  <form method="POST" action="/platform/migrations/new">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <div class="grid" style="grid-template-columns:1.4fr 1fr .9fr; align-items:start;">
+
+    {{/* Column 1 — name + endpoints */}}
+    <div class="stack" style="gap:1rem">
+      <div class="card">
+        <h2>Dai un nome alla migrazione</h2>
+        <p class="muted" style="font-size:.86rem">Un nome descrittivo per riconoscerla facilmente.</p>
+        <input class="search" style="width:100%; color:var(--text); background:#fff; margin-top:.5rem" type="text" name="name" value="{{.Name}}" placeholder="Es. Migrazione esempio.it" required>
+        <div style="margin-top:.7rem; display:grid; grid-template-columns:1fr 1fr; gap:.6rem">
+          <label>Dominio principale (facoltativo)<input class="search" style="width:100%; color:var(--text); background:#fff; margin-top:.25rem" type="text" name="primary_domain" value="{{.PrimaryDomain}}" placeholder="esempio.it"></label>
+          <label>Note (facoltative)<input class="search" style="width:100%; color:var(--text); background:#fff; margin-top:.25rem" type="text" name="notes" value="{{.Notes}}"></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Sorgente (cPanel di partenza)</h2>
+        <p class="muted" style="font-size:.86rem">Account cPanel da cui migrare i dati.</p>
+        <div style="display:grid; grid-template-columns:2fr 1fr 1.4fr; gap:.6rem; margin-top:.5rem">
+          <label>Indirizzo IP o host<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="src_host" value="{{.Src.Host}}" placeholder="185.x.x.x o host.dominio.com" required></label>
+          <label>Porta SSH<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="src_port" value="{{.Src.Port}}" placeholder="22"></label>
+          <label>Account cPanel<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="src_account" value="{{.Src.Account}}" placeholder="account" required></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Destinazione (cPanel di arrivo)</h2>
+        <p class="muted" style="font-size:.86rem">Account cPanel di destinazione.</p>
+        <div style="display:grid; grid-template-columns:2fr 1fr 1.4fr; gap:.6rem; margin-top:.5rem">
+          <label>Indirizzo IP o host<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="dst_host" value="{{.Dst.Host}}" placeholder="185.x.x.x o host.dominio.com" required></label>
+          <label>Porta SSH<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="dst_port" value="{{.Dst.Port}}" placeholder="22"></label>
+          <label>Account cPanel<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="dst_account" value="{{.Dst.Account}}" placeholder="account" required></label>
+        </div>
+        <div class="callout info" style="margin-top:.7rem">🔒 Le credenziali (password SSH) non si inseriscono qui: si configurano separatamente e non vengono mai mostrate. Il preflight non modifica nulla.</div>
+      </div>
+    </div>
+
+    {{/* Column 2 — content toggles */}}
+    <div class="card">
+      <h2>Cosa vuoi migrare?</h2>
+      <p class="muted" style="font-size:.86rem">Scegli i contenuti da includere.</p>
+      <div class="stack" style="gap:.5rem; margin-top:.6rem">
+        {{template "wizardToggle" (list "content_files" "📁 File sito" "File, cartelle e file del sito" .Content.Files)}}
+        {{template "wizardToggle" (list "content_databases" "🗄 Database" "Tutti i database e gli utenti associati" .Content.Databases)}}
+        {{template "wizardToggle" (list "content_email" "✉ Email" "Caselle di posta e messaggi" .Content.Email)}}
+        {{template "wizardToggle" (list "content_email_config" "⚙ Configurazioni email" "Filtri, inoltri, autorisponditori" .Content.EmailConfig)}}
+        {{template "wizardToggle" (list "content_cron" "⏱ Cron" "Attività pianificate (cron job)" .Content.Cron)}}
+        {{template "wizardToggle" (list "content_dns" "🌐 DNS manuale / verificabile" "Zone DNS gestite manualmente" .Content.DNS)}}
+      </div>
+      <div class="callout" style="margin-top:.7rem">Il DNS non viene mai applicato automaticamente: resta un task manuale verificabile.</div>
+    </div>
+
+    {{/* Column 3 — what happens next + CTA */}}
+    <div class="card" style="background:linear-gradient(180deg,var(--accent-soft),#fff)">
+      <h2>Cosa succede dopo?</h2>
+      <p class="muted" style="font-size:.86rem">Dopo aver creato la migrazione, esegui il preflight: il sistema</p>
+      <ol style="padding-left:1.1rem; font-size:.88rem; color:var(--text-2); line-height:1.5">
+        <li>Verifica la connessione a sorgente e destinazione.</li>
+        <li>Analizza i contenuti (file, database, email, configurazioni).</li>
+        <li>Esegue controlli intelligenti (spazio, compatibilità, criticità).</li>
+        <li>Crea il piano di migrazione con riepilogo e raccomandazioni.</li>
+      </ol>
+      <div class="callout ok" style="margin:.6rem 0">I tuoi dati sono al sicuro: nulla viene modificato durante il preflight.</div>
+      <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center">Crea migrazione →</button>
+    </div>
+
+  </div>
+  </form>
+</div>
+</body>
+</html>
+
+{{/* wizardToggle: (list name label desc checked) — a labelled checkbox */}}
+{{define "wizardToggle"}}
+{{- $name := index . 0}}{{$label := index . 1}}{{$desc := index . 2}}{{$checked := index . 3 -}}
+<label style="display:flex; align-items:center; gap:.6rem; border:1px solid var(--border); border-radius:12px; padding:.6rem .75rem; cursor:pointer">
+  <input type="checkbox" name="{{$name}}" value="1" {{if $checked}}checked{{end}} style="width:1.1rem; height:1.1rem; accent-color:var(--accent)">
+  <span><span style="font-weight:600; font-size:.9rem">{{$label}}</span><br><span class="sub">{{$desc}}</span></span>
+</label>
+{{end}}

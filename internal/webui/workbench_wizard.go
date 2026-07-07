@@ -83,13 +83,27 @@ func (ws *workbenchServer) renderWizard(w http.ResponseWriter, v wizardView, cod
 	_, _ = w.Write(buf.Bytes())
 }
 
-// handleWizardCreate validates the wizard submission and, when valid, creates a
-// session carrying the non-secret setup metadata. On any validation error it
-// re-renders the form with readable Italian messages and the submitted values,
-// returning 400 — no session is created.
-func (ws *workbenchServer) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
+// wizardSubmission is the validated, non-secret result of a wizard POST: the
+// setup metadata plus the derived legacy profile labels, ready to hand to
+// store.CreateWithSetup.
+type wizardSubmission struct {
+	Name       string
+	SrcProfile string
+	DstProfile string
+	Setup      *workbench.SetupMeta
+}
+
+// parseWizardSubmission reads and validates a wizard POST. On success it returns
+// ok=true with the submission ready to persist. On any validation error it
+// returns ok=false and a view carrying the submitted values + Italian errors so
+// the caller can re-render the form with 400. Shared by the workbench wizard
+// (workbenchServer.handleWizardCreate) and the platform wizard
+// (platformServer.handleWizardCreate) so both entry points validate and build
+// the session IDENTICALLY — the platform UI is presentation only, never a
+// second validation path.
+func parseWizardSubmission(r *http.Request, csrf string) (wizardSubmission, wizardView, bool) {
 	v := wizardView{
-		CSRF:          ws.csrf,
+		CSRF:          csrf,
 		Name:          strings.TrimSpace(r.FormValue("name")),
 		PrimaryDomain: strings.TrimSpace(r.FormValue("primary_domain")),
 		Notes:         strings.TrimSpace(r.FormValue("notes")),
@@ -144,26 +158,40 @@ func (ws *workbenchServer) handleWizardCreate(w http.ResponseWriter, r *http.Req
 
 	if len(errs) > 0 {
 		v.Errors = errs
+		return wizardSubmission{}, v, false
+	}
+
+	sub := wizardSubmission{
+		Name: v.Name,
+		// Legacy profile fields keep the list/detail views meaningful: a compact,
+		// non-secret "account@host" label derived from the wizard.
+		SrcProfile: endpointLabel(v.Src.Account, v.Src.Host),
+		DstProfile: endpointLabel(v.Dst.Account, v.Dst.Host),
+		Setup: &workbench.SetupMeta{
+			PrimaryDomain: v.PrimaryDomain,
+			Notes:         v.Notes,
+			Source:        workbench.Endpoint{Host: v.Src.Host, Port: srcPort, Account: v.Src.Account},
+			Destination:   workbench.Endpoint{Host: v.Dst.Host, Port: dstPort, Account: v.Dst.Account},
+			Content: workbench.ContentSelection{
+				Files: c.Files, Databases: c.Databases, Email: c.Email,
+				EmailConfig: c.EmailConfig, Cron: c.Cron, DNS: c.DNS,
+			},
+		},
+	}
+	return sub, v, true
+}
+
+// handleWizardCreate validates the wizard submission and, when valid, creates a
+// session carrying the non-secret setup metadata. On any validation error it
+// re-renders the form with readable Italian messages and the submitted values,
+// returning 400 — no session is created.
+func (ws *workbenchServer) handleWizardCreate(w http.ResponseWriter, r *http.Request) {
+	sub, v, ok := parseWizardSubmission(r, ws.csrf)
+	if !ok {
 		ws.renderWizard(w, v, http.StatusBadRequest)
 		return
 	}
-
-	setup := &workbench.SetupMeta{
-		PrimaryDomain: v.PrimaryDomain,
-		Notes:         v.Notes,
-		Source:        workbench.Endpoint{Host: v.Src.Host, Port: srcPort, Account: v.Src.Account},
-		Destination:   workbench.Endpoint{Host: v.Dst.Host, Port: dstPort, Account: v.Dst.Account},
-		Content: workbench.ContentSelection{
-			Files: c.Files, Databases: c.Databases, Email: c.Email,
-			EmailConfig: c.EmailConfig, Cron: c.Cron, DNS: c.DNS,
-		},
-	}
-	// Legacy profile fields keep the list/detail views meaningful: a compact,
-	// non-secret "account@host" label derived from the wizard.
-	srcProfile := endpointLabel(v.Src.Account, v.Src.Host)
-	dstProfile := endpointLabel(v.Dst.Account, v.Dst.Host)
-
-	sess, err := ws.store.CreateWithSetup(v.Name, srcProfile, dstProfile, setup, time.Now().UTC())
+	sess, err := ws.store.CreateWithSetup(sub.Name, sub.SrcProfile, sub.DstProfile, sub.Setup, time.Now().UTC())
 	if err != nil {
 		http.Error(w, "create session: "+err.Error(), http.StatusInternalServerError)
 		return

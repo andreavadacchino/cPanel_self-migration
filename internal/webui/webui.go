@@ -112,6 +112,7 @@ type server struct {
 	cfgMu     sync.Mutex // serializes config writes (shared host.yaml target)
 	workbench *workbenchServer
 	wbExec    *workbenchExecServer
+	platform  *platformServer
 }
 
 // New returns the workstation handler for the given options.
@@ -178,6 +179,15 @@ func New(o Options) (http.Handler, error) {
 			job:    s.job,
 			dir:    o.Dir,
 		}
+		// Platform UI V2: the operator-first product shell (/platform/*). It is a
+		// read-only presentation layer over the same store + shared artifact dir;
+		// mutating actions delegate to the workbench POST handlers above. The old
+		// workbench (/workbench/*) remains the expert/fallback surface.
+		ps, err := newPlatformServer(o.SessionStore, o.Dir, s.csrf, s.job.running)
+		if err != nil {
+			return nil, err
+		}
+		s.platform = ps
 	}
 	// No ServeMux on purpose: its path canonicalization would answer
 	// traversal-looking requests with a 307 redirect instead of a plain
@@ -221,6 +231,9 @@ func (s *server) route(w http.ResponseWriter, r *http.Request) {
 	case "/accept":
 		s.post(w, r, s.saveAccept)
 	default:
+		if s.platform != nil && strings.HasPrefix(r.URL.Path, "/platform") && s.routePlatform(w, r) {
+			return
+		}
 		if s.workbench != nil && s.routeWorkbench(w, r) {
 			return
 		}
@@ -620,7 +633,7 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		// Fase 3: one strong confirmation runs the automatic, in-scope, safe
 		// phases in sequence (DNS excluded), stop-on-first-failure.
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.wbExec.handleStartMigration(w, r, sessionID)
+			s.wbExec.handleStartMigration(w, r, sessionID, "/workbench/session/"+sessionID+"/"+screenMigrazione)
 		})
 	case action == "scope":
 		// Fase 2: confirm/refine the migration scope after the preflight, then

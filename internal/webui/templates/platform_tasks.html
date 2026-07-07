@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task manuali — {{.Header.Brand}}</title>
+{{template "platformCSS" .}}
+</head>
+<body>
+<div class="sess">
+  {{template "platformSessionHead" .}}
+  {{template "platformStepper" .}}
+  {{template "platformFlash" .}}
+
+  <div class="grid" style="grid-template-columns:280px 1fr; align-items:start">
+
+    {{/* Left summary */}}
+    <div class="card" style="text-align:center">
+      <div class="muted" style="font-size:.85rem">Restano</div>
+      <div style="font-size:3rem; font-weight:760; color:var(--accent); line-height:1">{{.TasksPending}}</div>
+      <div style="font-weight:640; color:var(--accent)">task manuali</div>
+      <p class="muted" style="font-size:.84rem">Verifica e completa i task manuali per finalizzare la migrazione.</p>
+      <div class="prog" style="margin:.6rem 0"><span style="width:{{stepPct (sub .TasksTotal .TasksPending) .TasksTotal}}%"></span></div>
+      <div class="sub">{{sub .TasksTotal .TasksPending}} / {{.TasksTotal}} completati</div>
+      <hr class="sep">
+      <div class="callout" style="text-align:left">Conferma ogni task «verificabile» qui a fianco con «Conferma fatto». I task «Bloccante cutover» non-accettabili vanno risolti (Modalità esperto), non semplicemente confermati.</div>
+    </div>
+
+    {{/* Task table */}}
+    <div class="card">
+      <div class="card-h"><span class="ttl">☑ Task manuali / Verifica finale</span></div>
+      {{if .Tasks}}
+      <div class="tablewrap"><table>
+        <thead><tr><th>Task</th><th>Tipo</th><th>Dettaglio</th><th>Stato</th><th>Azione</th></tr></thead>
+        <tbody>
+        {{range .Tasks}}
+        <tr>
+          <td><strong>{{manualTitleIT .}}</strong><div class="sub">{{manualActionIT .}}</div></td>
+          <td>{{if .BlockingCutover}}<span class="badge b-error">Bloccante cutover</span>{{else if .Acceptable}}<span class="badge b-warn">Verificabile</span>{{else}}<span class="badge b-draft">Manuale</span>{{end}}</td>
+          <td class="detail-cell">{{if .Detail}}<span class="mono" style="user-select:all">{{.Detail}}</span>{{else}}<span class="faint">—</span>{{end}}</td>
+          <td>{{if .Accepted}}<span class="badge b-done">Confermato</span>{{else}}<span class="badge b-draft">Da verificare</span>{{end}}</td>
+          <td>
+            {{if .Accepted}}
+              <span class="badge b-done plain">✓ Confermato</span>
+            {{else if .Acceptable}}
+              <details>
+                <summary class="btn btn-ghost btn-sm as-btn">Conferma fatto</summary>
+                <form method="POST" action="/platform/migrations/{{$.Session.ID}}/accept" class="stack" style="gap:.35rem; margin-top:.45rem; min-width:210px">
+                  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+                  <input type="hidden" name="action_key" value="{{.Key}}">
+                  <input class="finput" type="text" name="operator" placeholder="Il tuo nome" required>
+                  <input class="finput" type="text" name="reason" placeholder="Come l'hai verificata" required>
+                  <button type="submit" class="btn btn-primary btn-sm" style="justify-content:center">Conferma</button>
+                </form>
+              </details>
+            {{else}}
+              <a class="btn btn-ghost btn-sm" href="{{$.ExpertURL}}/applica">Da risolvere (esperto)</a>
+            {{end}}
+          </td>
+        </tr>
+        {{end}}
+        </tbody>
+      </table></div>
+      <div class="callout info" style="margin-top:.8rem">I task «Bloccante cutover» devono essere completati prima di poter attivare il sito. La conferma si registra dalla Modalità esperto.</div>
+      {{else}}
+      <div class="empty"><p style="font-weight:600; color:var(--text)">Nessun task manuale</p><p>Non ci sono attività manuali aperte. Esegui il preflight per popolare questa sezione, se non l'hai già fatto.</p></div>
+      {{end}}
+    </div>
+  </div>
+</div>
+</body>
+</html>

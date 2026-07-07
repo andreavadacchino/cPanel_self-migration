@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Comparativa dettagliata — {{.Header.Brand}}</title>
+{{template "platformCSS" .}}
+</head>
+<body>
+<div class="sess">
+  {{template "platformSessionHead" .}}
+  {{template "platformStepper" .}}
+  {{template "platformFlash" .}}
+
+  <div class="sess-head" style="margin-bottom:1rem">
+    <div><h1 style="font-size:1.3rem">Dettaglio comparativa sorgente vs destinazione</h1>
+    <p class="muted">Confronto area per area rilevato dal preflight.</p></div>
+  </div>
+
+  {{/* Source / destination servers */}}
+  <div class="grid g-2" style="margin-bottom:1.3rem">
+    <div class="card"><div class="muted" style="font-size:.78rem; text-transform:uppercase; letter-spacing:.04em">Sorgente</div><div style="font-weight:680; font-size:1.05rem; margin-top:.2rem">{{.SrcDst.Source}}</div></div>
+    <div class="card" style="background:linear-gradient(180deg,var(--ok-bg),#fff)"><div class="muted" style="font-size:.78rem; text-transform:uppercase; letter-spacing:.04em">Destinazione</div><div style="font-weight:680; font-size:1.05rem; margin-top:.2rem">{{.SrcDst.Dest}}</div></div>
+  </div>
+
+  <div class="grid compare-cols" style="align-items:start">
+    {{/* Areas list */}}
+    <div class="card">
+      <div class="card-h"><span class="ttl">Aree di confronto</span></div>
+      {{if .Compare}}
+      <div class="stack" style="gap:.15rem">
+        {{range .Compare}}
+        <div style="display:flex; align-items:center; gap:.5rem; padding:.4rem .3rem; border-radius:8px">
+          <span style="flex:1; font-weight:550; font-size:.9rem">{{.Label}}</span>
+          {{if .HasCount}}<span class="badge b-archived plain">{{.Source}}</span>{{end}}
+        </div>
+        {{end}}
+      </div>
+      {{else}}<p class="muted" style="font-size:.86rem">Nessuna area.</p>{{end}}
+    </div>
+
+    {{/* Comparison table */}}
+    <div class="card">
+      <div class="card-h"><span class="ttl">Confronto per area</span></div>
+      {{if .Compare}}
+      <div class="tablewrap"><table>
+        <thead><tr><th>Elemento</th><th>Sorgente</th><th>Destinazione</th><th>Stato</th></tr></thead>
+        <tbody>
+        {{range .Compare}}
+        <tr><td><strong>{{.Label}}</strong></td>
+          <td>{{if .HasCount}}{{.Source}}{{else}}<span class="faint">—</span>{{end}}</td>
+          <td>{{if .HasCount}}{{.Dest}}{{else}}<span class="faint">—</span>{{end}}</td>
+          <td><span class="badge b-{{.StateClass}}">{{.State}}</span></td></tr>
+        {{end}}
+        </tbody>
+      </table></div>
+      {{else}}
+      <p class="muted">Confronto non ancora disponibile. Esegui il preflight per popolare questa sezione.</p>
+      {{end}}
+    </div>
+
+    {{/* Detail panel — honest degradation: no file-level diff exists */}}
+    <div class="card">
+      <div class="card-h"><span class="ttl">Dettaglio differenza</span></div>
+      <div class="callout" style="margin-bottom:.6rem">Il confronto a livello di singolo file/record (diff di contenuto) non è disponibile in questa versione: l'analisi produce differenze per area, non per file.</div>
+      <p class="muted" style="font-size:.86rem">Per l'ispezione tecnica dettagliata (inventory diff, policy, artifact) usa la <a href="{{.ExpertURL}}">Modalità esperto</a>.</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

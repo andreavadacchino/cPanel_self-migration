@@ -276,13 +276,19 @@ func (ws *workbenchExecServer) journalPhaseRunning(sessionID, phase string, star
 // strong confirmation, recomputes the plan server-side, reserves the shared
 // single-writer slot, runs the phases, records the outcome and redirects to the
 // migration screen with a human flash.
-func (ws *workbenchExecServer) handleStartMigration(w http.ResponseWriter, r *http.Request, sessionID string) {
+// handleStartMigration runs the one-click orchestrator behind a single strong
+// confirmation. destBase is the URL to redirect to (without query): the
+// workbench passes its Piano screen, the platform passes its cockpit — every
+// ?migrate= outcome lands on the caller's own surface. All gates, the strong
+// confirmation, the single-writer slot and the server-side recompute are
+// IDENTICAL regardless of destBase (presentation-only difference).
+func (ws *workbenchExecServer) handleStartMigration(w http.ResponseWriter, r *http.Request, sessionID, destBase string) {
 	sess, err := ws.store.Get(sessionID)
 	if err != nil {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
-	dest := "/workbench/session/" + sessionID + "/" + screenMigrazione
+	dest := destBase
 
 	// A legacy/advanced session (no wizard Setup) is never auto-startable: the
 	// orchestrator needs a confirmed scope, which lives on Setup.

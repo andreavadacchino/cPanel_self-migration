@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Piano migrazione — {{.Header.Brand}}</title>
+{{template "platformCSS" .}}
+</head>
+<body>
+<div class="sess">
+  {{template "platformSessionHead" .}}
+  {{template "platformStepper" .}}
+  {{template "platformFlash" .}}
+
+  <div class="sess-head" style="margin-bottom:1rem">
+    <div><h1 style="font-size:1.3rem">Piano migrazione</h1>
+    <p class="muted">Ecco cosa verrà migrato, cosa richiede attenzione e cosa è escluso.</p></div>
+    <div class="sess-actions"><a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}/preflight">Dettagli preflight</a></div>
+  </div>
+
+  {{if not .Plan.Ready}}
+  <div class="callout warn" style="margin-bottom:1rem">{{.Plan.NotReadyMessage}}</div>
+  {{end}}
+
+  {{/* 3 semantic buckets */}}
+  <div class="grid g-3" style="margin-bottom:1.3rem">
+    <div class="bucket auto">
+      <div class="top"><div class="circle" aria-hidden="true">✓</div><div><div class="ttl">Automatico</div><div class="muted" style="font-size:.84rem">Elementi idonei alla migrazione automatica.</div></div></div>
+      <div style="margin-top:.6rem"><span class="n">{{len .Cockpit.Plan.Automatic}}</span> <span class="muted">elementi</span></div>
+      <ul>{{range .Cockpit.Plan.Automatic}}<li>{{.Label}}</li>{{else}}<li class="muted">Nessuno</li>{{end}}</ul>
+    </div>
+    <div class="bucket man">
+      <div class="top"><div class="circle" aria-hidden="true">!</div><div><div class="ttl">Manuale / verificabile</div><div class="muted" style="font-size:.84rem">Richiede azione manuale o verifica post-migrazione.</div></div></div>
+      <div style="margin-top:.6rem"><span class="n">{{len .Cockpit.Plan.Manual}}</span> <span class="muted">elementi</span></div>
+      <ul>{{range .Cockpit.Plan.Manual}}<li>{{.Label}}</li>{{else}}<li class="muted">Nessuno</li>{{end}}</ul>
+    </div>
+    <div class="bucket exc">
+      <div class="top"><div class="circle" aria-hidden="true">–</div><div><div class="ttl">Escluso o non pronto</div><div class="muted" style="font-size:.84rem">Elementi non inclusi nella migrazione.</div></div></div>
+      <div style="margin-top:.6rem"><span class="n">{{len .Cockpit.Plan.Excluded}}</span> <span class="muted">elementi</span></div>
+      <ul>{{range .Cockpit.Plan.Excluded}}<li>{{.Label}}</li>{{else}}<li class="muted">Nessuno</li>{{end}}</ul>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1.3fr .8fr .9fr; align-items:start;">
+    {{/* Comparison table */}}
+    <div class="card">
+      <div class="card-h"><span class="ttl">Confronto sorgente vs destinazione</span></div>
+      {{if .Compare}}
+      <div class="tablewrap"><table>
+        <thead><tr><th>Elemento</th><th>Sorgente</th><th>Destinazione</th><th>Stato</th></tr></thead>
+        <tbody>
+        {{range .Compare}}
+        <tr>
+          <td><strong>{{.Label}}</strong></td>
+          <td>{{if .HasCount}}{{.Source}}{{else}}<span class="faint">—</span>{{end}}</td>
+          <td>{{if .HasCount}}{{.Dest}}{{else}}<span class="faint">—</span>{{end}}</td>
+          <td><span class="badge b-{{.StateClass}}">{{.State}}</span></td>
+        </tr>
+        {{end}}
+        </tbody>
+      </table></div>
+      {{else}}
+      <p class="muted">Confronto non ancora disponibile. Esegui il preflight per popolarlo.</p>
+      {{end}}
+    </div>
+
+    {{/* Blockers */}}
+    <div class="stack" style="gap:1rem">
+      <div class="card">
+        <div class="card-h"><span class="ttl" style="color:var(--danger)">⚠ Bloccanti migrazione ({{len .Plan.Blockers}})</span></div>
+        {{if .Plan.Blockers}}
+        <ul style="margin:0; padding-left:1.1rem; font-size:.86rem; color:var(--text-2)">{{range .Plan.Blockers}}<li><strong>{{.Area}}:</strong> {{.Detail}}</li>{{end}}</ul>
+        {{else}}<p class="muted" style="font-size:.86rem">Nessun problema che blocca l'avvio.</p>{{end}}
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="ttl" style="color:var(--danger)">⚠ Bloccanti cutover ({{len .Cutover.BlockersCutover}})</span></div>
+        {{if .Cutover.BlockersCutover}}
+        <ul style="margin:0; padding-left:1.1rem; font-size:.86rem; color:var(--text-2)">{{range .Cutover.BlockersCutover}}<li>{{.}}</li>{{end}}</ul>
+        {{else}}<p class="muted" style="font-size:.86rem">Nessun problema che blocca il cutover.</p>{{end}}
+      </div>
+    </div>
+
+    {{/* Scope confirm — in-platform form (metadata mutation, reuses the shared
+         workbench core; the operator stays on /platform). */}}
+    <div class="card" style="background:linear-gradient(180deg,var(--accent-soft),#fff)">
+      <div class="card-h"><span class="ttl" style="color:var(--accent)">Conferma scope</span></div>
+      <p class="muted" style="font-size:.86rem">Scegli e conferma cosa includere nella migrazione.</p>
+      {{if not .Plan.Ready}}
+        <div class="callout" style="margin:.5rem 0">Esegui prima il preflight per poter confermare lo scope.</div>
+      {{else if not .Plan.CanEditScope}}
+        <div class="callout ok" style="margin:.5rem 0">Scope confermato e bloccato: la migrazione è già stata avviata.</div>
+      {{else}}
+        {{if .Plan.ScopeConfirmed}}<div class="callout ok" style="margin:.5rem 0">Scope già confermato — puoi rivederlo.</div>{{end}}
+        <form method="POST" action="/platform/migrations/{{.Session.ID}}/scope">
+          <input type="hidden" name="csrf" value="{{.CSRF}}">
+          <div class="stack" style="gap:.4rem; margin:.5rem 0">
+            <label class="scope-opt"><input type="radio" name="preset" value="all_safe" checked> <span><strong>Tutto il migrabile</strong><br><span class="sub">File, Database, Email, Configurazioni, Cron</span></span></label>
+            <label class="scope-opt"><input type="radio" name="preset" value="site"> <span><strong>Solo sito</strong><br><span class="sub">File e Database</span></span></label>
+            <label class="scope-opt"><input type="radio" name="preset" value="email"> <span><strong>Solo email</strong><br><span class="sub">Email e configurazioni</span></span></label>
+            <label class="scope-opt"><input type="radio" name="preset" value="custom"> <span><strong>Personalizzato</strong><br><span class="sub">Scegli le aree qui sotto</span></span></label>
+          </div>
+          <details style="margin:.2rem 0 .5rem">
+            <summary class="sub">Aree per «Personalizzato»</summary>
+            <div class="stack" style="gap:.3rem; margin-top:.45rem; font-size:.86rem">
+              <label><input type="checkbox" name="files" value="1"> File del sito</label>
+              <label><input type="checkbox" name="databases" value="1"> Database</label>
+              <label><input type="checkbox" name="email" value="1"> Email / Maildir</label>
+              <label><input type="checkbox" name="email_config" value="1"> Configurazioni email</label>
+              <label><input type="checkbox" name="cron" value="1"> Cron</label>
+            </div>
+          </details>
+          <label style="display:flex; gap:.5rem; align-items:center; font-size:.86rem; margin:.3rem 0"><input type="checkbox" name="dns" value="1"> Includi DNS <span class="sub">(resta task manuale verificabile)</span></label>
+          <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center">Conferma scope →</button>
+        </form>
+        <p class="faint" style="font-size:.78rem; text-align:center; margin-top:.5rem">Potrai rivederlo finché la migrazione non parte.</p>
+      {{end}}
+    </div>
+  </div>
+
+  <div class="lastupd">Il piano usa solo dati reali dagli artifact. Dove un dato manca, viene mostrato «—» o un avviso onesto.</div>
+</div>
+</body>
+</html>

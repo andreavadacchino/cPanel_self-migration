@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Report finale — {{.Header.Brand}}</title>
+{{template "platformCSS" .}}
+</head>
+<body>
+<div class="sess">
+  {{template "platformSessionHead" .}}
+  {{template "platformStepper" .}}
+  {{template "platformFlash" .}}
+
+  {{if .Report.Completed}}
+  <div class="banner-ok" style="margin-bottom:1.3rem">
+    <div class="ck" aria-hidden="true">✓</div>
+    <div style="flex:1">
+      <h2 style="font-size:1.25rem">Migrazione completata</h2>
+      <p class="muted">{{.Report.CompletedLabel}}</p>
+    </div>
+    <dl class="kv" style="grid-template-columns:auto auto auto auto; gap:.2rem 1.2rem">
+      <dt>Dominio</dt><dt>Sorgente</dt><dt>Destinazione</dt><dt>Durata</dt>
+      <dd>{{.Report.Domain}}</dd><dd>{{.Report.Source}}</dd><dd>{{.Report.Dest}}</dd><dd>{{if .Report.Duration}}{{.Report.Duration}}{{else}}—{{end}}</dd>
+    </dl>
+  </div>
+  {{else}}
+  <div class="callout warn" style="margin-bottom:1.3rem">La migrazione non è ancora completata. Stato attuale: <strong>{{.Header.Subtitle}}</strong>. Il report finale sarà disponibile dopo il cutover.</div>
+  {{end}}
+
+  {{/* Per-area outcome cards */}}
+  {{if .Report.Areas}}
+  <div class="grid g-5" style="margin-bottom:1.3rem">
+    {{range .Report.Areas}}
+    <div class="card">
+      <div style="font-weight:660">{{.Label}}</div>
+      <div class="sub" style="margin:.3rem 0">{{if .HasCount}}{{.Source}} → {{.Dest}}{{else}}—{{end}}</div>
+      <span class="badge b-{{.StateClass}}">{{.State}}</span>
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+
+  <div class="grid" style="grid-template-columns:1.2fr 1fr .9fr; align-items:start">
+    {{/* Final comparison */}}
+    <div class="card">
+      <div class="card-h"><span class="ttl">⚖ Confronto finale: Sorgente vs Destinazione</span></div>
+      {{if .Compare}}
+      <div class="tablewrap"><table>
+        <thead><tr><th>Elemento</th><th>Sorgente</th><th>Destinazione</th><th>Stato</th></tr></thead>
+        <tbody>
+        {{range .Compare}}
+        <tr><td><strong>{{.Label}}</strong></td>
+          <td>{{if .HasCount}}{{.Source}}{{else}}<span class="faint">—</span>{{end}}</td>
+          <td>{{if .HasCount}}{{.Dest}}{{else}}<span class="faint">—</span>{{end}}</td>
+          <td><span class="badge b-{{.StateClass}}">{{.State}}</span></td></tr>
+        {{end}}
+        </tbody>
+      </table></div>
+      {{else}}<p class="muted">Confronto non disponibile.</p>{{end}}
+    </div>
+
+    {{/* Timeline */}}
+    <div class="card">
+      <div class="card-h"><span class="ttl">⏱ Timeline della migrazione</span></div>
+      {{if .Report.Timeline}}
+      <div class="stack" style="gap:.4rem">
+        {{range .Report.Timeline}}
+        <div style="display:flex; gap:.6rem; align-items:baseline; font-size:.86rem">
+          <span class="badge b-{{.Class}} plain" style="margin-top:.1rem">•</span>
+          <span class="faint mono">{{.When}}</span><span style="flex:1">{{.Label}}</span>
+        </div>
+        {{end}}
+      </div>
+      {{else}}<p class="muted">Nessun evento registrato.</p>{{end}}
+    </div>
+
+    {{/* Report + archive */}}
+    <div class="stack" style="gap:1rem">
+      <div class="card">
+        <div class="card-h"><span class="ttl">📄 Report tecnico</span></div>
+        {{if .Report.HasTechReport}}
+        <p class="muted" style="font-size:.86rem">Il report tecnico completo (report.json e artifact) è disponibile in Modalità esperto.</p>
+        <a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}">Apri gli artifact →</a>
+        {{else}}
+        <p class="muted" style="font-size:.86rem">Nessun report di applicazione ancora presente. Sarà disponibile dopo la migrazione automatica.</p>
+        {{end}}
+      </div>
+      <div class="card">
+        <div class="card-h"><span class="ttl">📦 Follow-up consigliati</span></div>
+        <ul style="margin:0; padding-left:1.1rem; font-size:.86rem; color:var(--text-2); line-height:1.5">
+          <li>Mantieni attivo il vecchio server per 48h (rollback rapido).</li>
+          <li>Monitora la posta elettronica nei prossimi giorni.</li>
+          <li>La propagazione DNS può richiedere fino a 24–48 ore.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

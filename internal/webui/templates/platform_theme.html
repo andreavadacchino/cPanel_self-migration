@@ -1,0 +1,251 @@
+{{/* platform_theme.html — design system for the Platform UI V2 (operator-first
+     SaaS shell). Self-contained: inline CSS, no external asset. Parsed into the
+     platform template set only; independent from the workbench _theme.html so
+     restyling the product never touches the expert surface. */}}
+
+{{define "platformCSS"}}<style>
+  :root{
+    color-scheme: light;
+    --bg:#f1f5f9; --surface:#ffffff; --surface-2:#f8fafc; --surface-3:#f1f5f9;
+    --border:#e2e8f0; --border-strong:#cbd5e1;
+    --text:#0f172a; --text-2:#334155; --muted:#64748b; --faint:#94a3b8;
+    --accent:#2563eb; --accent-hover:#1d4ed8; --accent-soft:#eff6ff; --accent-border:#bfdbfe;
+    --ok:#16a34a; --ok-2:#15803d; --ok-bg:#f0fdf4; --ok-border:#bbf7d0;
+    --warn:#d97706; --warn-bg:#fffbeb; --warn-border:#fde68a;
+    --danger:#dc2626; --danger-bg:#fef2f2; --danger-border:#fecaca;
+    --manual:#7c3aed; --manual-bg:#f5f3ff; --manual-border:#ddd6fe;
+    --radius:16px; --radius-sm:12px; --radius-xs:8px;
+    --shadow-sm:0 1px 2px rgba(15,23,42,.06);
+    --shadow:0 1px 3px rgba(15,23,42,.08),0 1px 2px rgba(15,23,42,.04);
+    --shadow-lg:0 10px 30px rgba(15,23,42,.08);
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--text); background:var(--bg); -webkit-font-smoothing:antialiased;}
+  a{color:var(--accent); text-decoration:none; font-weight:550;}
+  a:hover{text-decoration:underline;}
+  h1,h2,h3{color:var(--text); letter-spacing:-.01em; margin:0;}
+  h1{font-size:1.75rem; font-weight:720;}
+  h2{font-size:1.05rem; font-weight:660;}
+  h3{font-size:.95rem; font-weight:640;}
+  p{margin:.35rem 0;}
+  .muted{color:var(--muted);} .faint{color:var(--faint);}
+  .mono{font-family:var(--mono); font-size:.85em;}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);}
+
+  /* ---- App shell (dashboard): sidebar + main ---------------------------- */
+  .app{display:grid; grid-template-columns:250px 1fr; min-height:100vh;}
+  .side{background:var(--surface); border-right:1px solid var(--border); display:flex; flex-direction:column; padding:1.1rem .85rem; position:sticky; top:0; height:100vh;}
+  .side-brand{display:flex; align-items:center; gap:.6rem; font-weight:720; font-size:1.05rem; color:var(--text); padding:.35rem .5rem 1rem;}
+  .side-nav{display:flex; flex-direction:column; gap:.15rem;}
+  .side-nav a{display:flex; align-items:center; gap:.7rem; padding:.55rem .7rem; border-radius:10px; color:var(--text-2); font-weight:550; font-size:.93rem;}
+  .side-nav a:hover{background:var(--surface-3); text-decoration:none;}
+  .side-nav a.active{background:var(--accent-soft); color:var(--accent);}
+  .side-nav a.active .ic{color:var(--accent);}
+  .side-foot{margin-top:auto; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:.85rem;}
+  .side-foot .t{font-weight:640; font-size:.9rem;} .side-foot p{font-size:.82rem; color:var(--muted);}
+  .main{min-width:0; display:flex; flex-direction:column;}
+  .topbar{display:flex; align-items:center; gap:1rem; padding:.85rem 1.6rem; border-bottom:1px solid var(--border); background:var(--surface);}
+  .search{flex:1; max-width:34rem; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:.5rem .8rem; color:var(--faint); font-size:.9rem;}
+  .userchip{display:flex; align-items:center; gap:.55rem; margin-left:auto;}
+  .userchip .av{width:2rem; height:2rem; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:grid; place-items:center; font-weight:700; font-size:.85rem;}
+  .userchip .nm{font-weight:600; font-size:.9rem; line-height:1.1;} .userchip .rl{font-size:.78rem; color:var(--muted);}
+  .content{padding:1.6rem; max-width:1400px; width:100%;}
+
+  /* ---- Session shell (screens 3-7): full width, no sidebar ------------- */
+  .sess{max-width:1400px; margin:0 auto; padding:1.4rem 1.6rem 3rem;}
+  .crumb{font-size:.85rem; color:var(--muted); margin-bottom:.7rem;}
+  .crumb a{color:var(--accent);}
+  .sess-head{display:flex; align-items:flex-start; gap:1rem; flex-wrap:wrap; margin-bottom:.4rem;}
+  .sess-title{font-size:1.5rem; font-weight:720; display:flex; align-items:center; gap:.5rem;}
+  .chips{display:flex; align-items:center; gap:.5rem; flex-wrap:wrap;}
+  .chip{display:inline-flex; align-items:center; gap:.4rem; background:var(--surface); border:1px solid var(--border); border-radius:9px; padding:.3rem .6rem; font-size:.82rem; color:var(--text-2);}
+  .chip .lb{color:var(--faint); font-size:.74rem; text-transform:uppercase; letter-spacing:.03em;}
+  .sess-actions{margin-left:auto; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;}
+  .sess-sub{color:var(--muted); font-size:.9rem; margin:.1rem 0 1.1rem;}
+
+  /* ---- Buttons --------------------------------------------------------- */
+  .btn{display:inline-flex; align-items:center; gap:.45rem; padding:.55rem .95rem; border-radius:10px; font-weight:600; font-size:.9rem; border:1px solid transparent; cursor:pointer; background:var(--surface); color:var(--text-2); border-color:var(--border);}
+  .btn:hover{text-decoration:none; background:var(--surface-2);}
+  .btn-primary{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .btn-primary:hover{background:var(--accent-hover); color:#fff;}
+  .btn-ghost{background:transparent; border-color:var(--border);}
+  .btn-sm{padding:.35rem .65rem; font-size:.82rem; border-radius:8px;}
+  .btn[disabled],.btn.is-disabled{opacity:.55; cursor:not-allowed; pointer-events:none;}
+  .btn-lg{padding:.8rem 1.2rem; font-size:1rem; border-radius:12px;}
+
+  /* ---- Cards ----------------------------------------------------------- */
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:1.1rem 1.25rem; min-width:0;}
+  .card h2,.card h3{margin-bottom:.15rem;}
+  .card-h{display:flex; align-items:center; gap:.5rem; margin-bottom:.9rem;}
+  .card-h .ttl{font-weight:660; font-size:1rem;}
+  .card-h .act{margin-left:auto;}
+  .stack{display:flex; flex-direction:column; gap:.6rem;}
+  .grid{display:grid; gap:1rem;}
+  /* min-width:0 lets a grid/flex child (a wide table card) shrink instead of
+     blowing the track past the container — otherwise the side rail is clipped. */
+  .grid > *,.stack > *{min-width:0;}
+  .g-2{grid-template-columns:1fr 1fr;} .g-3{grid-template-columns:repeat(3,1fr);}
+  .g-4{grid-template-columns:repeat(4,1fr);} .g-5{grid-template-columns:repeat(5,1fr);}
+  .cockpit-cols{grid-template-columns:340px 1fr 360px;}
+  .tasks-cols{grid-template-columns:280px 1fr 380px;}
+  .compare-cols{grid-template-columns:220px 1fr 420px;}
+
+  /* ---- Stat tiles (dashboard) ------------------------------------------ */
+  .stat{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:1rem 1.1rem; display:flex; flex-direction:column; gap:.15rem;}
+  .stat .ico{width:2.6rem; height:2.6rem; border-radius:12px; display:grid; place-items:center; font-size:1.2rem; margin-bottom:.4rem;}
+  .stat .n{font-size:2rem; font-weight:740; line-height:1;}
+  .stat .l{color:var(--muted); font-size:.9rem; font-weight:550;}
+  .ico.active{background:var(--accent-soft); color:var(--accent);}
+  .ico.waiting{background:var(--warn-bg); color:var(--warn);}
+  .ico.done{background:var(--ok-bg); color:var(--ok);}
+  .ico.manual{background:var(--manual-bg); color:var(--manual);}
+
+  /* ---- Badges ---------------------------------------------------------- */
+  .badge{display:inline-flex; align-items:center; gap:.35rem; padding:.2rem .55rem; border-radius:999px; font-size:.78rem; font-weight:640; border:1px solid var(--border); background:var(--surface-2); color:var(--text-2); white-space:nowrap;}
+  .badge::before{content:""; width:.5rem; height:.5rem; border-radius:50%; background:currentColor; opacity:.9;}
+  .badge.plain::before{display:none;}
+  .b-done,.b-ok{color:var(--ok-2); background:var(--ok-bg); border-color:var(--ok-border);}
+  .b-active{color:var(--accent); background:var(--accent-soft); border-color:var(--accent-border);}
+  .b-waiting,.b-draft{color:var(--warn); background:var(--warn-bg); border-color:var(--warn-border);}
+  .b-manual,.b-warn{color:var(--manual); background:var(--manual-bg); border-color:var(--manual-border);}
+  .b-error{color:var(--danger); background:var(--danger-bg); border-color:var(--danger-border);}
+  .b-archived{color:var(--muted); background:var(--surface-3); border-color:var(--border);}
+
+  /* ---- Tables ---------------------------------------------------------- */
+  .tablewrap{overflow-x:auto;}
+  table{width:100%; border-collapse:collapse; font-size:.9rem;}
+  thead th{text-align:left; font-weight:600; color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; padding:.55rem .7rem; border-bottom:1px solid var(--border);}
+  tbody td{padding:.75rem .7rem; border-bottom:1px solid var(--border); vertical-align:middle;}
+  tbody tr:last-child td{border-bottom:0;}
+  tbody tr:hover{background:var(--surface-2);}
+  td .sub{color:var(--muted); font-size:.8rem;}
+
+  /* ---- Stepper (7 nodes) ----------------------------------------------- */
+  .stepper{display:flex; align-items:flex-start; gap:0; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:1rem 1.1rem; margin:1rem 0 1.3rem; overflow-x:auto;}
+  .step{display:flex; align-items:flex-start; gap:.55rem; flex:1; min-width:120px;}
+  .step .dot{width:1.7rem; height:1.7rem; border-radius:50%; display:grid; place-items:center; font-weight:700; font-size:.82rem; flex:none; background:var(--surface-3); color:var(--muted); border:2px solid var(--border);}
+  .step .lab{font-weight:600; font-size:.9rem; line-height:1.1;}
+  .step .cap{font-size:.78rem; color:var(--muted);}
+  .step .bar{height:2px; background:var(--border); flex:1; margin:.85rem .4rem 0; min-width:20px;}
+  .step.done .dot{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .step.done .lab{color:var(--text);}
+  .step.doing .dot{background:#fff; color:var(--accent); border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft);}
+  .step.doing .lab{color:var(--accent);}
+  .step.warn .dot{background:#fff; color:var(--warn); border-color:var(--warn-border);}
+  .step.todo .lab{color:var(--muted);}
+  .step a{color:inherit;}
+
+  /* ---- Plan buckets (3 semantic cards) --------------------------------- */
+  .bucket{border-radius:var(--radius); padding:1.1rem 1.2rem; border:1px solid var(--border); background:var(--surface);}
+  .bucket .top{display:flex; align-items:center; gap:.7rem;}
+  .bucket .circle{width:3rem; height:3rem; border-radius:50%; display:grid; place-items:center; font-size:1.35rem; flex:none;}
+  .bucket .n{font-size:1.9rem; font-weight:740; line-height:1;}
+  .bucket.auto{background:linear-gradient(180deg,var(--ok-bg),#fff);} .bucket.auto .circle{background:var(--ok-bg); color:var(--ok);} .bucket.auto .ttl{color:var(--ok-2);}
+  .bucket.man{background:linear-gradient(180deg,var(--warn-bg),#fff);} .bucket.man .circle{background:var(--warn-bg); color:var(--warn);} .bucket.man .ttl{color:var(--warn);}
+  .bucket.exc .circle{background:var(--surface-3); color:var(--muted);} .bucket.exc .ttl{color:var(--text-2);}
+  .bucket .ttl{font-weight:680; font-size:1.05rem;}
+  .bucket ul{margin:.6rem 0 0; padding-left:1.1rem; color:var(--text-2); font-size:.86rem;}
+  .bucket li{margin:.15rem 0;}
+
+  /* ---- Progress bars --------------------------------------------------- */
+  .prog{height:8px; border-radius:99px; background:var(--surface-3); overflow:hidden;}
+  .prog > span{display:block; height:100%; background:var(--accent); border-radius:99px;}
+  .prog.mini{height:6px; width:120px;}
+
+  /* ---- Misc blocks ----------------------------------------------------- */
+  .kv{display:grid; grid-template-columns:auto 1fr; gap:.3rem .8rem; font-size:.88rem;}
+  .kv dt{color:var(--muted);} .kv dd{margin:0; font-weight:600;}
+  .callout{border-radius:var(--radius-sm); padding:.85rem 1rem; font-size:.88rem; border:1px solid var(--border); background:var(--surface-2);}
+  .callout.err{background:var(--danger-bg); border-color:var(--danger-border); color:var(--danger);}
+  .callout.warn{background:var(--warn-bg); border-color:var(--warn-border); color:var(--warn);}
+  .callout.ok{background:var(--ok-bg); border-color:var(--ok-border); color:var(--ok-2);}
+  .callout.info{background:var(--accent-soft); border-color:var(--accent-border); color:var(--accent);}
+  .flash{border-radius:var(--radius-sm); padding:.7rem 1rem; margin-bottom:1rem; background:var(--accent-soft); border:1px solid var(--accent-border); color:var(--accent); font-weight:550;}
+  .scope-opt{display:flex; gap:.55rem; align-items:flex-start; border:1px solid var(--border); border-radius:10px; padding:.5rem .65rem; cursor:pointer; background:#fff; font-size:.88rem;}
+  .scope-opt input{margin-top:.2rem;}
+  .scope-opt:hover{border-color:var(--accent-border);}
+  .finput{width:100%; padding:.4rem .55rem; border:1px solid var(--border); border-radius:7px; font-size:.84rem; background:#fff;}
+  .detail-cell{max-width:280px; overflow-wrap:anywhere; word-break:break-word;}
+  .detail-cell .mono{white-space:normal; display:block; max-height:6.5em; overflow:auto;}
+  summary.as-btn{cursor:pointer; list-style:none;}
+  summary.as-btn::-webkit-details-marker{display:none;}
+  summary.as-btn::marker{content:"";}
+  .empty{background:var(--surface); border:1px dashed var(--border-strong); border-radius:var(--radius); padding:2.5rem 1.5rem; text-align:center; color:var(--muted);}
+  .log{font-family:var(--mono); font-size:.8rem; color:var(--text-2); max-height:15rem; overflow:auto;}
+  .log div{padding:.15rem 0; border-bottom:1px solid var(--surface-3);}
+  .banner-ok{display:flex; align-items:center; gap:1rem; background:linear-gradient(180deg,var(--ok-bg),#fff); border:1px solid var(--ok-border); border-radius:var(--radius); padding:1.2rem 1.4rem;}
+  .banner-ok .ck{width:3rem; height:3rem; border-radius:50%; background:var(--ok); color:#fff; display:grid; place-items:center; font-size:1.4rem; flex:none;}
+  .lastupd{display:flex; align-items:center; gap:.5rem; color:var(--muted); font-size:.82rem; padding:1rem 0 0;}
+  hr.sep{border:0; border-top:1px solid var(--border); margin:1rem 0;}
+
+  @media (max-width:1100px){
+    .app{grid-template-columns:1fr;} .side{position:static; height:auto; flex-direction:row; align-items:center; overflow-x:auto;}
+    .side-nav{flex-direction:row;} .side-foot{display:none;} .side-brand{padding:0 1rem 0 0;}
+    .cockpit-cols,.tasks-cols,.compare-cols,.g-3,.g-4,.g-5,.g-2{grid-template-columns:1fr;}
+  }
+  @media (max-width:760px){ .content,.sess{padding:1rem;} }
+</style>{{end}}
+
+{{/* ---- Sidebar (dashboard) — .Nav.Active drives the highlight ---------- */}}
+{{define "platformSidebar"}}
+<aside class="side">
+  <a class="side-brand" href="/platform/migrations"><span aria-hidden="true">☁️</span> Migrazioni cPanel</a>
+  <nav class="side-nav">
+    <a href="/platform/migrations" class="{{if eq .Nav.Active "migrations"}}active{{end}}"><span class="ic" aria-hidden="true">▤</span> Migrazioni</a>
+    <a href="/platform/migrations" class="{{if eq .Nav.Active "tasks"}}active{{end}}"><span class="ic" aria-hidden="true">☑</span> Task manuali</a>
+    <a href="/platform/migrations" class="{{if eq .Nav.Active "report"}}active{{end}}"><span class="ic" aria-hidden="true">▦</span> Report</a>
+    <a href="{{.Nav.ExpertURL}}"><span class="ic" aria-hidden="true">⚙</span> Modalità esperto</a>
+  </nav>
+  <div class="side-foot">
+    <div class="t">Modalità esperto</div>
+    <p>I dettagli tecnici e le azioni avanzate restano nella <a href="{{.Nav.ExpertURL}}">workbench</a>.</p>
+  </div>
+</aside>
+{{end}}
+
+{{/* ---- Topbar (dashboard) ---------------------------------------------- */}}
+{{define "platformTopbar"}}
+<div class="topbar">
+  <div class="search" aria-hidden="true">Cerca migrazioni, domini, account…</div>
+  <div class="userchip">
+    <div style="text-align:right"><div class="nm">Operatore</div><div class="rl">Amministratore</div></div>
+    <div class="av">OP</div>
+  </div>
+</div>
+{{end}}
+
+{{/* ---- Session header (screens 3-7) ------------------------------------ */}}
+{{define "platformSessionHead"}}
+<div class="crumb"><a href="/platform/migrations">‹ Migrazioni</a></div>
+<div class="sess-head">
+  <div>
+    <div class="sess-title">{{.Header.Brand}}</div>
+  </div>
+  <div class="chips">
+    <span class="chip"><span class="lb">Sorgente</span> {{.SrcDst.Source}}</span>
+    <span aria-hidden="true" class="faint">→</span>
+    <span class="chip"><span class="lb">Destinazione</span> {{.SrcDst.Dest}}</span>
+  </div>
+  <div class="sess-actions">
+    <span class="badge b-{{statusBadgeClass .Session.Status}} plain">{{.Header.Subtitle}}</span>
+    <a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}">Modalità esperto</a>
+  </div>
+</div>
+{{end}}
+
+{{/* ---- 7-node stepper -------------------------------------------------- */}}
+{{define "platformStepper"}}
+<div class="stepper">
+  {{range $i, $s := .Steps}}
+    {{if $i}}<div class="bar"></div>{{end}}
+    <div class="step {{$s.State}}">
+      <div class="dot">{{if eq $s.State "done"}}✓{{else}}{{$s.Index}}{{end}}</div>
+      <div><div class="lab">{{if $s.URL}}<a href="{{$s.URL}}">{{$s.Label}}</a>{{else}}{{$s.Label}}{{end}}</div><div class="cap">{{$s.Caption}}</div></div>
+    </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "platformFlash"}}{{if .Flash}}<div class="flash">{{.Flash}}</div>{{end}}{{end}}

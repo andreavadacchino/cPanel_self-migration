@@ -14,6 +14,26 @@ Stai lavorando sul tool Go **cpanel-self-migration**, directory locale abituale:
 7. `docs/dev/DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md` (dogfooding Fase 3 — verdetto 🔵 «serve Fase 4»)
 8. `docs/dev/CUTOVER_RUNBOOK.md`
 
+## Novità (2026-07-07): Platform UI V2 operator-first — `feat/platform-ui-v2`
+
+Introdotta **in parallelo** alla workbench una nuova esperienza prodotto SaaS,
+fedele ai 14 mockup approvati in `screenshot/`. Spec: `docs/dev/PLATFORM_UI_V2_DESIGN.md`.
+
+- Route `/platform/*` (Dashboard, Wizard, Preflight/Piano, Cockpit + Task/Report/
+  Comparativa iniziali). Read-model dedicato `platformPage` (`platform_view.go`)
+  che **adatta** `buildWorkbenchView` + `store.List()` — zero duplicazione di gate/
+  readiness. Template `templates/platform_*.html` con design system SaaS proprio.
+- **Presentation-only:** nessun writer/CLI/SSE nuovo, motore intatto. Le mutazioni
+  (crea, conferma scope, avvio, accept, exec) **riusano gli handler workbench**
+  esistenti. Il wizard riusa `parseWizardSubmission` (estratto da `handleWizardCreate`,
+  comportamento workbench invariato).
+- La **vecchia workbench (`/workbench/*`) resta la Modalità esperto / fallback**
+  (SHA, artifact, governance, DNS Danger Zone, apply/verify singoli, rollback).
+- Dati SOLO reali dagli artifact + fallback onesti; nessun numero inventato
+  (metriche aggregate, %/ETA/MB-s, PDF, diff file-level → omessi o «non disponibile»).
+- Gate: gofmt · go test webui/workbench/config · `-race` · vet · git diff --check ·
+  **Docker LINUX_ALL_GREEN** (go1.25.11) — tutti verdi.
+
 ## Direzione prodotto — decisioni bloccate (2026-07-06, PLATFORM_MIGRATION_ROADMAP)
 
 Trasformazione da workbench tecnico a **piattaforma smart di migrazione**. Scoperta
