@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.errors import register_error_handlers
+from app.modules.comparison.router import router as comparison_router
 from app.modules.endpoints.router import (
     endpoints_router,
     migration_endpoints_router,
@@ -44,6 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(inventory_router)
     app.include_router(capabilities_router)
+    app.include_router(comparison_router)
 
     return app
 
