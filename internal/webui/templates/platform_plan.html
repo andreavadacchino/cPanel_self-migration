@@ -80,17 +80,40 @@
       </div>
     </div>
 
-    {{/* Scope confirm — CTA delegates to the tested workbench screen */}}
+    {{/* Scope confirm — in-platform form (metadata mutation, reuses the shared
+         workbench core; the operator stays on /platform). */}}
     <div class="card" style="background:linear-gradient(180deg,var(--accent-soft),#fff)">
       <div class="card-h"><span class="ttl" style="color:var(--accent)">Conferma scope</span></div>
       <p class="muted" style="font-size:.86rem">Scegli e conferma cosa includere nella migrazione.</p>
-      {{if .Plan.ScopeConfirmed}}
-        <div class="callout ok" style="margin:.5rem 0">Scope confermato.</div>
+      {{if not .Plan.Ready}}
+        <div class="callout" style="margin:.5rem 0">Esegui prima il preflight per poter confermare lo scope.</div>
+      {{else if not .Plan.CanEditScope}}
+        <div class="callout ok" style="margin:.5rem 0">Scope confermato e bloccato: la migrazione è già stata avviata.</div>
       {{else}}
-        <div class="callout" style="margin:.5rem 0">{{.Plan.StartSummary}}</div>
+        {{if .Plan.ScopeConfirmed}}<div class="callout ok" style="margin:.5rem 0">Scope già confermato — puoi rivederlo.</div>{{end}}
+        <form method="POST" action="/platform/migrations/{{.Session.ID}}/scope">
+          <input type="hidden" name="csrf" value="{{.CSRF}}">
+          <div class="stack" style="gap:.4rem; margin:.5rem 0">
+            <label class="scope-opt"><input type="radio" name="preset" value="all_safe" checked> <span><strong>Tutto il migrabile</strong><br><span class="sub">File, Database, Email, Configurazioni, Cron</span></span></label>
+            <label class="scope-opt"><input type="radio" name="preset" value="site"> <span><strong>Solo sito</strong><br><span class="sub">File e Database</span></span></label>
+            <label class="scope-opt"><input type="radio" name="preset" value="email"> <span><strong>Solo email</strong><br><span class="sub">Email e configurazioni</span></span></label>
+            <label class="scope-opt"><input type="radio" name="preset" value="custom"> <span><strong>Personalizzato</strong><br><span class="sub">Scegli le aree qui sotto</span></span></label>
+          </div>
+          <details style="margin:.2rem 0 .5rem">
+            <summary class="sub">Aree per «Personalizzato»</summary>
+            <div class="stack" style="gap:.3rem; margin-top:.45rem; font-size:.86rem">
+              <label><input type="checkbox" name="files" value="1"> File del sito</label>
+              <label><input type="checkbox" name="databases" value="1"> Database</label>
+              <label><input type="checkbox" name="email" value="1"> Email / Maildir</label>
+              <label><input type="checkbox" name="email_config" value="1"> Configurazioni email</label>
+              <label><input type="checkbox" name="cron" value="1"> Cron</label>
+            </div>
+          </details>
+          <label style="display:flex; gap:.5rem; align-items:center; font-size:.86rem; margin:.3rem 0"><input type="checkbox" name="dns" value="1"> Includi DNS <span class="sub">(resta task manuale verificabile)</span></label>
+          <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center">Conferma scope →</button>
+        </form>
+        <p class="faint" style="font-size:.78rem; text-align:center; margin-top:.5rem">Potrai rivederlo finché la migrazione non parte.</p>
       {{end}}
-      <a class="btn btn-primary btn-lg" style="width:100%; justify-content:center" href="{{.ExpertURL}}/migrazione">{{if .Plan.ScopeConfirmed}}Rivedi scope →{{else}}Conferma scope →{{end}}</a>
-      <p class="faint" style="font-size:.78rem; text-align:center; margin-top:.5rem">Potrai rivedere e modificare dopo.</p>
     </div>
   </div>
 

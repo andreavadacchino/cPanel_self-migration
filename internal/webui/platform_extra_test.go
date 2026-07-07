@@ -221,6 +221,90 @@ func TestPlatformCockpitCTANoSelfLoop(t *testing.T) {
 	}
 }
 
+// Operator-first: confirming the scope from the platform Piano screen keeps the
+// operator ON /platform (returns to /plan), never bouncing to the expert
+// workbench, and actually persists the confirmation.
+func TestPlatformConfirmScopeStaysInPlatform(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
+	writeChecklist(t, dir, countingChecklist())
+	h, err := New(Options{Dir: dir, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/scope",
+		url.Values{"csrf": {csrf}, "preset": {"all_safe"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("scope POST = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"/plan?scope=updated" {
+		t.Errorf("scope redirect = %q, want the platform Piano screen (not the workbench)", loc)
+	}
+	got, _ := store.Get(sess.ID)
+	if got.Setup == nil || got.Setup.ScopeConfirmedAt == nil {
+		t.Error("scope confirmation must be persisted")
+	}
+}
+
+// A DNS-only scope is not an automatic migration: the platform bounces back to
+// /plan with a human flash and makes no confirmation (reuses the shared rule).
+func TestPlatformConfirmScopeNeedArea(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	h, err := New(Options{Dir: dir, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/scope",
+		url.Values{"csrf": {csrf}, "preset": {"custom"}, "dns": {"1"}})
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"/plan?scope=need_area" {
+		t.Errorf("DNS-only scope redirect = %q, want ...plan?scope=need_area", loc)
+	}
+	if got, _ := store.Get(sess.ID); got.Setup != nil && got.Setup.ScopeConfirmedAt != nil {
+		t.Error("a DNS-only scope must not be confirmed")
+	}
+}
+
+// CSRF-negative + wrong-method parity for the platform scope POST.
+func TestPlatformConfirmScopeGuards(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	h, err := New(Options{Dir: dir, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/scope",
+		url.Values{"csrf": {"wrong"}, "preset": {"all_safe"}}); rr.Code != http.StatusForbidden {
+		t.Errorf("scope POST bad csrf = %d, want 403", rr.Code)
+	}
+	if rr := doReq(h, http.MethodGet, "/platform/migrations/"+sess.ID+"/scope", nil); rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET on scope action = %d, want 405", rr.Code)
+	}
+}
+
+// The Piano screen renders the scope form in-platform (posting to the platform
+// scope endpoint), not a link out to the workbench.
+func TestPlatformPlanRendersScopeForm(t *testing.T) {
+	dir := t.TempDir()
+	ps, store := newPlatformTest(t, dir, false)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	writeChecklist(t, dir, countingChecklist())
+	body := platformSessionBody(t, ps, sess.ID, "plan")
+	for _, want := range []string{
+		`action="/platform/migrations/` + sess.ID + `/scope"`,
+		`name="preset"`, `name="csrf"`, "Tutto il migrabile",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/plan scope form missing %q", want)
+		}
+	}
+}
+
 // Guard: the platform never renders a raw 5xx template error to the client.
 func TestPlatformSessionNotFound(t *testing.T) {
 	dir := t.TempDir()

@@ -123,6 +123,19 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 		http.NotFound(w, r)
 		return true
 	}
+	// Mutating operator action kept inside the platform: scope confirmation is a
+	// CSRF-gated METADATA mutation (no migration write) that reuses the shared
+	// workbench core and returns to the platform Piano screen.
+	if screen == "scope" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return true
+		}
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.platform.handleConfirmScope(w, r, id)
+		})
+		return true
+	}
 	if screen == "" {
 		screen = "cockpit"
 	}
@@ -181,6 +194,31 @@ func (ps *platformServer) handleWizardCreate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	http.Redirect(w, r, "/platform/migrations/"+sess.ID, http.StatusSeeOther)
+}
+
+// jobLiveNow mirrors workbenchServer.jobLiveNow: an exec is genuinely in flight
+// (journal running after reconciliation against the live slot).
+func (ps *platformServer) jobLiveNow() bool {
+	busy := false
+	if ps.jobBusy != nil {
+		busy = ps.jobBusy()
+	}
+	job := reconcileJobJournal(ps.dir, busy)
+	return job != nil && job.State == jobStateRunning
+}
+
+// handleConfirmScope confirms the migration scope from the platform Piano
+// screen and returns to it — reusing the SAME shared core as the workbench
+// (applyScopeConfirm): identical edit gate, preset resolution and metadata
+// mutation, only the redirect stays in /platform so the operator is never
+// bounced into the expert workbench.
+func (ps *platformServer) handleConfirmScope(w http.ResponseWriter, r *http.Request, sessionID string) {
+	query, code, msg := applyScopeConfirm(ps.store, ps.dir, ps.jobLiveNow(), r, sessionID)
+	if code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
+	http.Redirect(w, r, "/platform/migrations/"+sessionID+"/plan"+query, http.StatusSeeOther)
 }
 
 func (ps *platformServer) handleSession(w http.ResponseWriter, r *http.Request, id, screen string) {

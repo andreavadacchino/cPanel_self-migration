@@ -106,46 +106,52 @@ func (ws *workbenchServer) jobLiveNow() bool {
 	return job != nil && job.State == jobStateRunning
 }
 
-// handleConfirmScope updates the migration content selection after the preflight
-// and marks the scope confirmed. CSRF is enforced by the caller (server.post).
-func (ws *workbenchServer) handleConfirmScope(w http.ResponseWriter, r *http.Request, sessionID string) {
-	if _, err := ws.store.Get(sessionID); err != nil {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
+// applyScopeConfirm is the SHARED core of the scope-confirmation step: the edit
+// gate, preset resolution and the "at least one automatic area" rule, then the
+// metadata mutation store.ConfirmScope. It decides NO redirect base, so the
+// workbench and the platform can each return to their own screen while
+// validating and mutating IDENTICALLY (the platform UI is presentation only,
+// never a second validation path). On success/soft-bounce it returns the query
+// suffix ("?scope=updated" | "?scope=need_area") with code 0; on a hard failure
+// it returns a non-zero HTTP code and message for the caller to render.
+func applyScopeConfirm(store *workbench.Store, dir string, jobLive bool, r *http.Request, sessionID string) (query string, code int, msg string) {
+	if _, err := store.Get(sessionID); err != nil {
+		return "", http.StatusNotFound, "session not found"
 	}
 	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
-		return
+		return "", http.StatusBadRequest, "bad form"
 	}
-
 	// Edit gate: frozen once a write has run or a job is live. Note: this reads
 	// the facts outside the store flock, so a narrow TOCTOU exists if a write
 	// started between here and ConfirmScope. Acceptable for this single-operator,
 	// single-session tool — the real write gate remains the strong per-account
 	// confirmation, and a stale scope confirmation is a metadata-only race.
-	f := readArtifactFacts(ws.dir)
-	if !canEditScope(f, ws.jobLiveNow()) {
-		http.Error(w, "Lo scope non è più modificabile: una migrazione è già stata avviata o è in corso.", http.StatusForbidden)
-		return
+	f := readArtifactFacts(dir)
+	if !canEditScope(f, jobLive) {
+		return "", http.StatusForbidden, "Lo scope non è più modificabile: una migrazione è già stata avviata o è in corso."
 	}
-
 	content, ok := presetContent(r.FormValue("preset"), r.Form)
 	if !ok {
-		http.Error(w, "preset non valido", http.StatusBadRequest)
-		return
+		return "", http.StatusBadRequest, "preset non valido"
 	}
-
-	dest := "/workbench/session/" + sessionID + "/" + screenMigrazione
 	// A confirmed scope must contain at least one automatic area — DNS-only is
 	// not an automatic migration. Bounce back with a human flash, no mutation.
 	if !hasAutomaticArea(content) {
-		http.Redirect(w, r, dest+"?scope=need_area", http.StatusSeeOther)
-		return
+		return "?scope=need_area", 0, ""
 	}
+	if _, err := store.ConfirmScope(sessionID, content, time.Now().UTC()); err != nil {
+		return "", http.StatusInternalServerError, "internal error: " + err.Error()
+	}
+	return "?scope=updated", 0, ""
+}
 
-	if _, err := ws.store.ConfirmScope(sessionID, content, time.Now().UTC()); err != nil {
-		http.Error(w, "internal error: "+err.Error(), http.StatusInternalServerError)
+// handleConfirmScope updates the migration content selection after the preflight
+// and marks the scope confirmed. CSRF is enforced by the caller (server.post).
+func (ws *workbenchServer) handleConfirmScope(w http.ResponseWriter, r *http.Request, sessionID string) {
+	query, code, msg := applyScopeConfirm(ws.store, ws.dir, ws.jobLiveNow(), r, sessionID)
+	if code != 0 {
+		http.Error(w, msg, code)
 		return
 	}
-	http.Redirect(w, r, dest+"?scope=updated", http.StatusSeeOther)
+	http.Redirect(w, r, "/workbench/session/"+sessionID+"/"+screenMigrazione+query, http.StatusSeeOther)
 }
