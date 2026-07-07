@@ -1,12 +1,14 @@
 """Preflight orchestration tests (job creation + read side).
 
 The worker is not running under pytest; POST /preflight only has to create a
-queued Job and enqueue it. Actual execution is covered by the worker tests and
-the Docker smoke test.
+queued Job and enqueue it (against a StubBroker). Actual worker execution is
+covered by the worker suite (apps/worker) and was verified end-to-end by a
+manual Docker Compose smoke run — there is no automated CI smoke test yet.
 """
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -74,6 +76,37 @@ def test_preflight_creates_queued_job(client: TestClient) -> None:
     assert body["migration_id"] == migration_id
     assert body["type"] == "preflight"
     assert body["status"] == "queued"
+
+
+def test_preflight_is_idempotent_while_active(client: TestClient) -> None:
+    migration_id = _migration_with_endpoints(client)
+    first = client.post(f"/api/migrations/{migration_id}/preflight")
+    assert first.status_code == 201
+    # A second start while the first is still queued/running must be refused.
+    second = client.post(f"/api/migrations/{migration_id}/preflight")
+    assert second.status_code == 409
+
+
+def test_preflight_marks_job_failed_if_enqueue_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.modules.preflight import service as pf_service
+
+    def _boom(_job_id: int) -> None:
+        raise RuntimeError("redis down")
+
+    monkeypatch.setattr(pf_service, "enqueue_preflight", _boom)
+    migration_id = _migration_with_endpoints(client)
+
+    with pytest.raises(RuntimeError):
+        client.post(f"/api/migrations/{migration_id}/preflight")
+
+    # The job must not be left orphaned as 'queued'.
+    current = client.get(f"/api/migrations/{migration_id}/jobs/current")
+    assert current.status_code == 200
+    body = current.json()
+    assert body["status"] == "failed"
+    assert body["error"]
 
 
 def test_get_current_job(client: TestClient) -> None:

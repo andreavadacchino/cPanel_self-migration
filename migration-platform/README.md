@@ -52,6 +52,27 @@ All'avvio l'API esegue `alembic upgrade head` e poi serve le route.
 | GET    | `/api/migrations/{id}`   | dettaglio migrazione           |
 | GET    | `/api/jobs`              | elenco job                     |
 
+## Endpoint disponibili (Sprint 1 — setup & preflight)
+
+| Metodo | Path                                          | Descrizione                          |
+|--------|-----------------------------------------------|--------------------------------------|
+| GET    | `/api/migrations/{id}/endpoints`              | elenco endpoint della migrazione     |
+| POST   | `/api/migrations/{id}/endpoints`              | crea endpoint source/destination     |
+| GET    | `/api/endpoints/{id}`                         | dettaglio endpoint                   |
+| POST   | `/api/endpoints/{id}/test-connection`         | test connessione **mock** (no rete)  |
+| POST   | `/api/migrations/{id}/preflight`              | avvia il job preflight skeleton      |
+| GET    | `/api/migrations/{id}/jobs/current`           | job corrente della migrazione        |
+| GET    | `/api/migrations/{id}/events`                 | eventi dei job della migrazione      |
+
+> **Nessun segreto nel DB.** L'endpoint ha `auth_type` (`none`/`token_ref`/`password_ref`/`mock`)
+> e `auth_ref`, che è **solo un riferimento opaco** (es. `vault://…`), mai una
+> credenziale reale. L'API rifiuta (422) un `auth_ref` che non sia un riferimento.
+
+> **Worker entrypoint.** L'unico comando corretto è `dramatiq worker.main`.
+> **Non** eseguire `dramatiq app.core.queue`: nell'API `run_preflight` è solo un
+> *producer stub* (il suo body solleva di proposito), serve a fare `.send(job_id)`;
+> l'implementazione reale vive nel worker con lo stesso actor-name.
+
 ## Sviluppo locale (senza Docker)
 
 ### API
