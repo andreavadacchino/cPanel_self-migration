@@ -7,6 +7,14 @@ Piattaforma di migrazione cPanel **greenfield, API-first, operator-first**.
 > L'obiettivo è un monorepo che parte con `docker compose up` ed espone API,
 > frontend, PostgreSQL, Redis e un worker Dramatiq.
 
+## Documentazione
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architettura V2: stack, layout,
+  topologia runtime, invarianti, modello dati, modello di esecuzione async.
+- [`docs/SPRINT_1_SETUP_PREFLIGHT.md`](docs/SPRINT_1_SETUP_PREFLIGHT.md) — record
+  dello Sprint 1: modello dati, contratto API, mock connection, ciclo preflight,
+  test, gate, review, rischi aperti.
+
 ## Struttura
 
 ```text
