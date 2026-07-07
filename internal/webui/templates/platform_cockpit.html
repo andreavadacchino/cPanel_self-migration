@@ -96,6 +96,13 @@
       <div class="card">
         <div class="card-h"><span class="ttl">📡 Monitor esecuzione</span></div>
         {{if .Cockpit.Monitor.Active}}
+          {{/* Live migration bar — width/percent/phase are driven by the SSE
+               stream (mig-bar/mig-pct/mig-phase); they start neutral and the
+               stream paints them on connect. Without EventSource the phase rows
+               below and the meta-refresh remain the (honest) fallback. */}}
+          <div class="muted" style="font-size:.82rem">Avanzamento migrazione<span id="mig-pct" style="float:right; font-weight:660">—</span></div>
+          <div class="prog" style="margin:.35rem 0 .55rem"><span id="mig-bar" style="width:0%"></span></div>
+          <div class="sub" id="mig-phase" style="margin-bottom:.55rem"></div>
           <div class="stack" style="gap:.55rem">
           {{range .Cockpit.Monitor.Phases}}
             <div style="display:flex; align-items:center; gap:.5rem">
@@ -123,7 +130,7 @@
       <div class="card">
         <details>
           <summary class="as-btn"><div class="card-h"><span class="ttl">🧾 Dettagli esecuzione</span></div></summary>
-          <div class="log">{{range .Cockpit.Monitor.Log}}<div>{{.}}</div>{{end}}</div>
+          <div class="log" id="mig-log">{{range .Cockpit.Monitor.Log}}<div>{{.}}</div>{{end}}</div>
         </details>
       </div>
       {{end}}
@@ -148,7 +155,54 @@
 
   </div>
 
-  {{if .Cockpit.Monitor.JobLive}}<div class="lastupd">🔄 Aggiornamento automatico attivo (10s)</div>{{end}}
+  {{if .Cockpit.Monitor.JobLive}}<div class="lastupd" id="mig-badge">🔄 Aggiornamento automatico attivo (10s)</div>{{end}}
 </div>
+<script>
+(function () {
+  if (!window.EventSource) return; // no SSE support → keep the meta-refresh fallback
+  var bar = document.getElementById('mig-bar'),
+      pct = document.getElementById('mig-pct'),
+      phase = document.getElementById('mig-phase'),
+      log = document.getElementById('mig-log'),
+      badge = document.getElementById('mig-badge');
+  // Take over from the meta-refresh so the page doesn't full-reload under the
+  // live stream; if the stream fails we restore a periodic reload below.
+  var mr = document.querySelector('meta[http-equiv="refresh"]');
+  if (mr && mr.parentNode) mr.parentNode.removeChild(mr);
+  if (badge) badge.textContent = '🟢 Avanzamento in tempo reale';
+  var sawLive = false, closed = false;
+  var es = new EventSource('/platform/migrations/{{.Session.ID}}/events');
+  function stop(reload, delay) {
+    if (closed) return;
+    closed = true;
+    es.close();
+    if (reload) setTimeout(function () { location.reload(); }, delay);
+  }
+  es.onmessage = function (ev) {
+    var s;
+    try { s = JSON.parse(ev.data); } catch (e) { return; }
+    if (s.live || s.state === 'running') sawLive = true;
+    if (bar && typeof s.pct === 'number') bar.style.width = s.pct + '%';
+    if (pct && typeof s.pct === 'number') pct.textContent = s.pct + '%';
+    if (phase) phase.textContent = s.currentPhase || '';
+    if (log && s.log && s.log.length) {
+      log.innerHTML = '';
+      s.log.forEach(function (line) {
+        var d = document.createElement('div');
+        d.textContent = line;
+        log.appendChild(d);
+      });
+    }
+    // When the run settles, reload ONCE to render the full server-side cockpit
+    // (outcome flash, task list, final phase states) — but only if we actually
+    // watched it run, so an already-finished job at page load does not loop.
+    if (s.done) stop(sawLive, 500);
+  };
+  es.onerror = function () {
+    // Stream dropped: fall back to a periodic reload so progress still advances.
+    stop(true, 5000);
+  };
+})();
+</script>
 </body>
 </html>

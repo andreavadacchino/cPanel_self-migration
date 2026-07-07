@@ -168,6 +168,15 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 			s.saveAcceptTo(w, r, "/platform/migrations/"+id+"/tasks")
 		})
 		return true
+	case "events":
+		// Live progress stream (SSE). GET only, no mutation → no CSRF; the
+		// loopback + Host/Origin gate in route() already applies.
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, "GET")
+			return true
+		}
+		s.platform.handleSessionEvents(w, r, id)
+		return true
 	}
 	if screen == "" {
 		screen = "cockpit"
