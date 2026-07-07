@@ -44,6 +44,12 @@ func readyChecklist() accountinventory.MigrationChecklist {
 // caller writes any area plans (email_apply_plan.json / cron_apply_plan.json)
 // it needs BEFORE posting — facts are re-read per request.
 func newOrchEnv(t *testing.T, content workbench.ContentSelection) *orchEnv {
+	return newOrchEnvRunner(t, content, &fakeRunner{})
+}
+
+// newOrchEnvRunner is newOrchEnv with a caller-supplied runner (e.g. one scripted
+// to panic), so tests can exercise the sync start-migration failure paths.
+func newOrchEnvRunner(t *testing.T, content workbench.ContentSelection, fr *fakeRunner) *orchEnv {
 	t.Helper()
 	dir := t.TempDir()
 	storeDir := filepath.Join(dir, "migrations")
@@ -76,7 +82,6 @@ func newOrchEnv(t *testing.T, content workbench.ContentSelection) *orchEnv {
 	}
 	writeChecklist(t, dir, readyChecklist())
 
-	fr := &fakeRunner{}
 	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +135,28 @@ func waitJobSettled(t *testing.T, dir string) *jobJournal {
 	}
 	t.Fatalf("async smart-start never settled in %s", dir)
 	return nil
+}
+
+// A panic in the SYNCHRONOUS workbench start-migration must close the journal as
+// failed (not a dishonest "completed") and return 500 — mirroring the async path.
+func TestWorkbenchStartMigrationPanicMarksJournalFailed(t *testing.T) {
+	fr := &fakeRunner{onCall: func(name string) {
+		if name == "migrate content" {
+			panic("boom in migrate content")
+		}
+	}}
+	env := newOrchEnvRunner(t, workbench.ContentSelection{Files: true, Databases: true}, fr)
+	rr := env.start("giorginisposi") // strong confirmation = account name
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("panic in sync start = %d, want 500", rr.Code)
+	}
+	jj, ok := readJobJournal(env.dir)
+	if !ok {
+		t.Fatal("no job journal after a panicking start")
+	}
+	if jj.State != jobStateFailed {
+		t.Errorf("journal state after panic = %q, want failed", jj.State)
+	}
 }
 
 func argvFor(fr *fakeRunner, name string) []string {

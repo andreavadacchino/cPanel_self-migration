@@ -368,8 +368,20 @@ func (ws *workbenchExecServer) handleStartMigration(w http.ResponseWriter, r *ht
 	var runErr error
 	stopPhase := orchestratorAction
 	defer func() {
+		// Without this recover a panic here would run the defer with runErr==nil,
+		// closing the journal as "completed" — a dishonest terminal state for a
+		// run that actually died. Recover it into a failed journal and a plain
+		// 500, consistent with the async smart-start path. (net/http recovers the
+		// panic per-connection anyway; we just make the journal tell the truth.)
+		rec := recover()
+		if rec != nil && runErr == nil {
+			runErr = fmt.Errorf("errore interno durante la migrazione: %v", rec)
+		}
 		finishJobJournal(ws.dir, sessionID, orchestratorAction, stopPhase, startedAt, time.Now().UTC(), runErr, "")
 		ws.job.release()
+		if rec != nil {
+			http.Error(w, "errore interno durante la migrazione", http.StatusInternalServerError)
+		}
 	}()
 
 	// Each phase step gets its own execTimeout inside runOrchestration (mirroring
