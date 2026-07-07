@@ -21,6 +21,7 @@ package webui
 // into Italian product UI data, exactly like workbench_view.go.
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -152,7 +153,7 @@ type platformPage struct {
 	Cockpit          cockpitModel
 	Cutover          cutoverVerdict
 	Tasks            []accountinventory.ManualAction
-	TasksPending     int // acceptable & not accepted
+	TasksPending     int // not yet accepted (still to resolve) — see buildPlatformSession
 	TasksTotal       int
 	Compare          []platformCompareRow
 	Report           platformReport
@@ -189,7 +190,17 @@ func platformCTAURL(id, expertURL string, cta cockpitCTA) string {
 	case "start":
 		return expertURL + "/migrazione"
 	default:
-		return platformSessionURL(id, platformScreenForWorkbench(cta.Screen))
+		seg := platformScreenForWorkbench(cta.Screen)
+		if seg == "" {
+			// The prescribed action (governance/unblock, run analysis, single
+			// apply/verify) has no control on the platform primary path — its
+			// workbench screen is the Panoramica/Azioni avanzate. Routing to the
+			// mapped "" segment would self-loop back to this very cockpit page (a
+			// dead end whose CTA text asks for a governance action that isn't
+			// here). Send the operator to Modalità esperto, where it lives.
+			return expertURL
+		}
+		return platformSessionURL(id, seg)
 	}
 }
 
@@ -409,7 +420,7 @@ func activityTitle(te workbench.TimelineEvent) (string, string) {
 		return "Stato: " + statusLabelIT(te.ToStatus), statusClassPlatform(te.ToStatus)
 	case "scope_confirmed":
 		return "Scope confermato", "active"
-	case "artifact_attached":
+	case "attach_artifact":
 		return "Report allegato", "waiting"
 	default:
 		return "Aggiornamento migrazione", "waiting"
@@ -492,7 +503,7 @@ func buildReportTimeline(events []workbench.TimelineEvent) []platformTimelineRow
 			class = statusClassPlatform(te.ToStatus)
 		case "scope_confirmed":
 			label, class = "Scope confermato", "active"
-		case "artifact_attached":
+		case "attach_artifact":
 			label, class = "Report allegato", "waiting"
 		default:
 			label, class = te.Action, "waiting"
@@ -559,9 +570,14 @@ func buildPlatformSession(dir, csrf string, sess *workbench.Session, jobBusy boo
 		ExpertURL:        expertURL,
 	}
 	p.HeroCTAURL = platformCTAURL(sess.ID, expertURL, v.Cockpit.CTA)
+	// A task is "done" only when it has been Accepted. Non-acceptable actions
+	// (blocking cron recreations, CONFIRM_MX_EXTERNAL — the engine forbids
+	// waving them through) can never be Accepted, so they must stay counted as
+	// REMAINING; counting only Acceptable&&!Accepted would silently tally them
+	// as completed and overstate progress (honesty invariant).
 	p.TasksTotal = len(p.Tasks)
 	for _, t := range p.Tasks {
-		if t.Acceptable && !t.Accepted {
+		if !t.Accepted {
 			p.TasksPending++
 		}
 	}
@@ -588,12 +604,18 @@ func buildPlatformDashboard(store *workbench.Store, csrf string) (platformPage, 
 	return p, nil
 }
 
-// humanTime formats a timestamp for the product UI (empty → em-dash).
+// mesiIT are the Italian month abbreviations — Go's time formatting has no
+// locale, so the operator UI (mockups show "20 mag 2025") maps them by hand
+// rather than leaking English month names ("Jul"/"May") into an Italian page.
+var mesiIT = [...]string{"gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"}
+
+// humanTime formats a timestamp for the product UI in Italian (empty → em-dash).
 func humanTime(t time.Time) string {
 	if t.IsZero() {
 		return "—"
 	}
-	return t.UTC().Format("02 Jan 2006, 15:04")
+	u := t.UTC()
+	return fmt.Sprintf("%02d %s %d, %02d:%02d", u.Day(), mesiIT[u.Month()-1], u.Year(), u.Hour(), u.Minute())
 }
 
 // humanDuration formats a positive duration compactly (e.g. "28 min 44 sec").

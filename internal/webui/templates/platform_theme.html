@@ -76,12 +76,16 @@
   .btn-lg{padding:.8rem 1.2rem; font-size:1rem; border-radius:12px;}
 
   /* ---- Cards ----------------------------------------------------------- */
-  .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:1.1rem 1.25rem;}
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow-sm); padding:1.1rem 1.25rem; min-width:0;}
   .card h2,.card h3{margin-bottom:.15rem;}
   .card-h{display:flex; align-items:center; gap:.5rem; margin-bottom:.9rem;}
   .card-h .ttl{font-weight:660; font-size:1rem;}
   .card-h .act{margin-left:auto;}
+  .stack{display:flex; flex-direction:column; gap:.6rem;}
   .grid{display:grid; gap:1rem;}
+  /* min-width:0 lets a grid/flex child (a wide table card) shrink instead of
+     blowing the track past the container — otherwise the side rail is clipped. */
+  .grid > *,.stack > *{min-width:0;}
   .g-2{grid-template-columns:1fr 1fr;} .g-3{grid-template-columns:repeat(3,1fr);}
   .g-4{grid-template-columns:repeat(4,1fr);} .g-5{grid-template-columns:repeat(5,1fr);}
   .cockpit-cols{grid-template-columns:340px 1fr 360px;}

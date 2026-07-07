@@ -34,8 +34,7 @@ stesso `startAllowed`. Il layer platform è presentazione + navigazione.
 |---|---|
 | `internal/webui/platform_view.go` | Read-model `platformPage` + adapter `buildPlatform*` (dashboard, cockpit, plan, tasks, report, compare) su `buildWorkbenchView`/`store.List` |
 | `internal/webui/platform_view_test.go` | Test read-model: no-nil, fallback onesti, expert URL, gating start invariato, dashboard stats da stati reali |
-| `internal/webui/platform.go` | `platformServer` + `routePlatform`, handler `handleDashboard/handleSessionCockpit/handlePlan/handleTasks/handleReport/handleCompare` |
-| `internal/webui/platform_wizard.go` | Wizard V2 GET/POST — riusa helper condiviso `parseWizardSubmission` estratto da `handleWizardCreate` |
+| `internal/webui/platform.go` | `platformServer` + `routePlatform`, handler `handleDashboard`, `handleWizardForm`/`handleWizardCreate`, e un unico `handleSession(screen)` dispatchato via `platformScreenTemplates` (cockpit/plan/tasks/report/compare). Il wizard riusa `parseWizardSubmission` estratto da `handleWizardCreate` |
 | `internal/webui/platform_render_test.go` | Test render 7 schermate (11 casi obbligatori del brief) |
 | `internal/webui/platform_wizard_test.go` | Test wizard render + submit valido/invalido riusa store |
 | `internal/webui/templates/platform_theme.html` | Shell SaaS: `<head>`+CSS inline, sidebar, topbar, `platformStepper`, `platformSessionHeader`, badge, card. Zero asset esterni |
@@ -63,13 +62,13 @@ orchestratore, exec, monitor: **diff zero**.
 |---|---|---|---|
 | GET | `/platform` → 303 `/platform/migrations` | — | entrypoint |
 | GET | `/platform/migrations` | `handleDashboard` | schermata 1 |
-| GET | `/platform/migrations/new` | `handlePlatformWizardForm` | schermata 2 |
-| POST | `/platform/migrations/new` | `handlePlatformWizardCreate` | riusa `parseWizardSubmission`+`store.CreateWithSetup`, redirect `/platform/migrations/:id` |
-| GET | `/platform/migrations/:id` | `handleSessionCockpit` | schermata 4 (cockpit) |
-| GET | `/platform/migrations/:id/plan` | `handlePlan` | schermata 3 |
-| GET | `/platform/migrations/:id/tasks` | `handleTasks` | schermata 5 |
-| GET | `/platform/migrations/:id/report` | `handleReport` | schermata 6 |
-| GET | `/platform/migrations/:id/compare` | `handleCompare` | schermata 7 |
+| GET | `/platform/migrations/new` | `handleWizardForm` | schermata 2 |
+| POST | `/platform/migrations/new` | `handleWizardCreate` (via `s.post`, CSRF) | riusa `parseWizardSubmission`+`store.CreateWithSetup`, redirect `/platform/migrations/:id` |
+| GET | `/platform/migrations/:id` | `handleSession("cockpit")` | schermata 4 (cockpit) |
+| GET | `/platform/migrations/:id/plan` | `handleSession("plan")` | schermata 3 |
+| GET | `/platform/migrations/:id/tasks` | `handleSession("tasks")` | schermata 5 |
+| GET | `/platform/migrations/:id/report` | `handleSession("report")` | schermata 6 |
+| GET | `/platform/migrations/:id/compare` | `handleSession("compare")` | schermata 7 |
 
 Le CTA mutanti (Conferma scope, Avvia migrazione, Registra conferma, Verifica/Apply
 singoli, Rollback, DNS) **puntano agli endpoint workbench esistenti**
