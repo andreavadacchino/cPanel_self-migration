@@ -109,6 +109,66 @@ export interface InventoryOverview {
   destination: InventorySnapshot | null
 }
 
+// Comparison (Sprint 3)
+export type Severity = 'blocker' | 'warning' | 'info'
+export type ComparisonEntryState =
+  | 'match'
+  | 'missing_on_destination'
+  | 'only_on_destination'
+  | 'different'
+  | 'unknown'
+
+export interface ComparisonSide {
+  exists: boolean
+  fingerprint: string | null
+}
+
+export interface ComparisonEntry {
+  category: string
+  key: string
+  state: ComparisonEntryState
+  severity: Severity
+  title: string
+  message: string
+  source: ComparisonSide
+  destination: ComparisonSide
+}
+
+export interface ComparisonCategoryStats {
+  source: number
+  destination: number
+  match: number
+  blocker: number
+  warning: number
+  info: number
+  // True when a read-capability gap made a per-item comparison unreliable.
+  skipped?: boolean
+}
+
+export interface ComparisonSummary {
+  blockers_count: number
+  warnings_count: number
+  infos_count: number
+  categories: string[]
+  by_category: Record<string, ComparisonCategoryStats>
+}
+
+export interface ComparisonReport {
+  id: number
+  migration_id: number
+  source_snapshot_id: number | null
+  destination_snapshot_id: number | null
+  status: string
+  summary: ComparisonSummary | null
+  entries: ComparisonEntry[]
+  blockers_count: number
+  warnings_count: number
+  infos_count: number
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -191,4 +251,27 @@ export function fetchEvents(migrationId: number): Promise<JobEvent[]> {
 // Inventory
 export function fetchInventory(migrationId: number): Promise<InventoryOverview> {
   return request<InventoryOverview>(`/api/migrations/${migrationId}/inventory`)
+}
+
+// Comparison
+export function generateComparison(
+  migrationId: number,
+): Promise<ComparisonReport> {
+  return request<ComparisonReport>(
+    `/api/migrations/${migrationId}/comparison`,
+    { method: 'POST' },
+  )
+}
+
+export async function fetchComparison(
+  migrationId: number,
+): Promise<ComparisonReport | null> {
+  try {
+    return await request<ComparisonReport>(
+      `/api/migrations/${migrationId}/comparison`,
+    )
+  } catch {
+    // 404 → no comparison generated yet.
+    return null
+  }
 }

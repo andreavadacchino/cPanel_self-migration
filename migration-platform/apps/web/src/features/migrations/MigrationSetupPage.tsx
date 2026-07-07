@@ -17,6 +17,7 @@ import EndpointCard from './EndpointCard'
 import PreflightPanel from './PreflightPanel'
 import JobStatusPanel from './JobStatusPanel'
 import InventorySummaryPanel from './InventorySummaryPanel'
+import ComparisonPanel from './ComparisonPanel'
 
 function isTerminal(job: Job | null): boolean {
   return job != null && (job.status === 'succeeded' || job.status === 'failed')
@@ -162,6 +163,8 @@ export default function MigrationSetupPage() {
       <JobStatusPanel job={job} events={events} />
 
       <InventorySummaryPanel overview={inventory} />
+
+      <ComparisonPanel migrationId={migrationId} />
     </>
   )
 }
