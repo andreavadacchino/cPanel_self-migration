@@ -11,6 +11,9 @@ dependencies = [
     "psycopg[binary]>=3.1",
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
+    # Producer side of the preflight queue (declares the run_preflight actor
+    # and enqueues to Redis). The worker owns the consumer implementation.
+    "dramatiq[redis]>=1.16",
 ]
 
 [project.optional-dependencies]

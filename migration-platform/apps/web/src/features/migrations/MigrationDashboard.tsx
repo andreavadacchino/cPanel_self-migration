@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { fetchMigrations, type Migration } from '../../lib/api'
 import EmptyDashboard from '../../components/EmptyDashboard'
+import CreateMigrationForm from './CreateMigrationForm'
 
 type LoadState =
   | { kind: 'loading' }
@@ -9,24 +11,21 @@ type LoadState =
 
 export default function MigrationDashboard() {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const [creating, setCreating] = useState(false)
+  const navigate = useNavigate()
 
-  useEffect(() => {
-    let active = true
+  function load() {
+    setState({ kind: 'loading' })
     fetchMigrations()
-      .then((migrations) => {
-        if (active) setState({ kind: 'ready', migrations })
-      })
+      .then((migrations) => setState({ kind: 'ready', migrations }))
       .catch((error: unknown) => {
-        if (active) {
-          const message =
-            error instanceof Error ? error.message : 'Errore sconosciuto'
-          setState({ kind: 'error', message })
-        }
+        const message =
+          error instanceof Error ? error.message : 'Errore sconosciuto'
+        setState({ kind: 'error', message })
       })
-    return () => {
-      active = false
-    }
-  }, [])
+  }
+
+  useEffect(load, [])
 
   return (
     <>
@@ -35,12 +34,27 @@ export default function MigrationDashboard() {
           <h1>Migrazioni</h1>
           <p>Gestisci e monitora le migrazioni degli account cPanel.</p>
         </div>
-        <button className="btn btn--primary">Nuova migrazione</button>
+        {!creating && (
+          <button
+            className="btn btn--primary"
+            onClick={() => setCreating(true)}
+          >
+            Nuova migrazione
+          </button>
+        )}
       </div>
 
-      {state.kind === 'loading' && (
-        <div className="state-msg">Caricamento…</div>
+      {creating && (
+        <CreateMigrationForm
+          onCancel={() => setCreating(false)}
+          onCreated={(migration) => {
+            setCreating(false)
+            navigate(`/migrations/${migration.id}`)
+          }}
+        />
       )}
+
+      {state.kind === 'loading' && <div className="state-msg">Caricamento…</div>}
 
       {state.kind === 'error' && (
         <div className="state-msg state-msg--error">
@@ -48,20 +62,24 @@ export default function MigrationDashboard() {
         </div>
       )}
 
-      {state.kind === 'ready' && state.migrations.length === 0 && (
-        <EmptyDashboard />
+      {state.kind === 'ready' && state.migrations.length === 0 && !creating && (
+        <EmptyDashboard onCreate={() => setCreating(true)} />
       )}
 
       {state.kind === 'ready' && state.migrations.length > 0 && (
         <div className="card-list">
           {state.migrations.map((migration) => (
-            <div className="migration-card" key={migration.id}>
+            <Link
+              className="migration-card migration-card--link"
+              key={migration.id}
+              to={`/migrations/${migration.id}`}
+            >
               <div>
                 <div className="migration-card__name">{migration.name}</div>
                 <div className="migration-card__domain">{migration.domain}</div>
               </div>
               <span className="badge">{migration.status}</span>
-            </div>
+            </Link>
           ))}
         </div>
       )}

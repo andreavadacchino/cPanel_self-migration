@@ -7,6 +7,12 @@ alive for the duration of each test.
 
 from __future__ import annotations
 
+import os
+
+# Force the Dramatiq StubBroker before any app module (which imports the queue)
+# is loaded, so enqueuing preflight jobs never needs a live Redis.
+os.environ.setdefault("DRAMATIQ_TESTING", "1")
+
 from collections.abc import Iterator
 
 import pytest
@@ -21,6 +27,7 @@ from app.db.session import get_db
 from app.main import app
 
 # Import model modules so their tables are registered on Base.metadata.
+from app.modules.endpoints import models as _endpoints_models  # noqa: F401
 from app.modules.jobs import models as _jobs_models  # noqa: F401
 from app.modules.migrations import models as _migrations_models  # noqa: F401
 
