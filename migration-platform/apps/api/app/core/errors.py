@@ -15,7 +15,22 @@ class NotFoundError(Exception):
         super().__init__(f"{resource} '{identifier}' not found")
 
 
+class ConflictError(Exception):
+    """Raised when a request is valid but the resource state forbids it.
+
+    Example: starting a preflight before both endpoints are configured.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+        super().__init__(message)
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(NotFoundError)
     async def _not_found(_: Request, exc: NotFoundError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(ConflictError)
+    async def _conflict(_: Request, exc: ConflictError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})

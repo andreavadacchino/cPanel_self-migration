@@ -9,5 +9,6 @@ from __future__ import annotations
 
 from worker.broker import broker  # noqa: F401  # sets the global broker
 from worker.actors import health  # noqa: F401  # registers actors
+from worker.actors import preflight  # noqa: F401  # registers run_preflight
 
-__all__ = ["broker", "health"]
+__all__ = ["broker", "health", "preflight"]
