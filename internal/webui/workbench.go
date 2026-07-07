@@ -177,6 +177,12 @@ func (ws *workbenchServer) handleScreen(w http.ResponseWriter, r *http.Request, 
 	if m := migrateFlash(r.URL.Query().Get("migrate")); m != "" {
 		view.Flash = m
 	}
+	// Operator-First UX: OPERATOR mode by default; ?mode=expert reveals the
+	// technical surfaces. Presentation only — never a gate, never persisted.
+	if r.URL.Query().Get("mode") == "expert" {
+		view.Expert = true
+		view.ModeQuery = "?mode=expert"
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := ws.tpl.ExecuteTemplate(w, tplName, view); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)

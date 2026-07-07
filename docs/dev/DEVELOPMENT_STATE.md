@@ -252,6 +252,21 @@ migrazione» vs «Bloccante cutover» (§6.2). `screen_applica` → «Azioni ava
 dettagli tecnici collassati. Nessun writer/CLI/`migration_plan.json`, nessuna SSE. Gate: gofmt/vet/race
 puliti, Docker LINUX_ALL_GREEN (go1.25.11). Prossima: **Fase 5 — Comparative Manual Tasks**.
 
+## Operator-First UX Reset (2026-07-07) — IMPLEMENTATA
+
+Separazione netta **Modalità Operatore (default) / Modalità Esperto** nella WebUI, presentation-only
+(nessun writer/CLI, nessuna SSE, motore intatto). Aggiunti `workbenchView.Expert` + `ModeQuery`
+(letti da `?mode=expert` in `handleScreen`); toggle di modalità nel Flight Director header, sticky
+via `ModeQuery` sui link della navigazione guidata. In **modalità operatore** i dettagli tecnici
+(governance/cambio-stato, artifact/SHA, attach manuale, definizione migrazione, «Stato per fase»,
+cronologia completa) NON sono renderizzati — spostati, non solo collassati, dietro `{{if .Expert}}`
+in `workbench_detail.html`. Copy `host.yaml` sostituito con «Connessioni non configurate» per
+l'operatore (il nome-file resta solo in esperto, anche su `screen_preflight`). `screen_migrazione`
+mostra le 3 card semplici (Automatico / Manuale-verificabile / Escluso). Nessun controllo
+safety-critical rimosso: `startAllowed`/gate CTA intatto (hero↔CTA sempre coerenti, indipendenti da
+Expert), CSRF/strong-confirmation/DNS Danger Zone/rollback gated-by-backup invariati. Gate:
+gofmt/vet/race puliti, Docker LINUX_ALL_GREEN (go1.25.11), suite webui verde.
+
 ## Dogfooding #2 (2026-07-04) — verdetto e follow-up
 
 Ciclo UI-only di giorginisposi (report completo:

@@ -493,6 +493,20 @@ type workbenchView struct {
 	// Flash is a transient message rendered once (e.g. after a scope confirm
 	// round-trip), derived from a query param — never persisted.
 	Flash string
+	// Expert toggles the technical/expert surfaces (governance state change,
+	// artifact SHAs, manual attach, the migration definition block, host.yaml
+	// wording, the full event timeline) into view. Default false = OPERATOR mode:
+	// the guided path shows only operator language and one dominant CTA. Set
+	// per-request from ?mode=expert — presentation only, never persisted, never a
+	// gate (it MUST NOT influence startAllowed / the CTA gating).
+	Expert bool
+	// ModeQuery is the query suffix ("?mode=expert" or "") appended to the
+	// guided-path navigation LINKS (rail, stepper, next-action) so the chosen mode
+	// persists as the operator clicks between screens. It is deliberately NOT
+	// threaded through the POST-action redirects (/scope, /start-migration): those
+	// are operator-primary actions and returning to the default operator view
+	// afterwards is intended. Presentation only, always a hardcoded literal.
+	ModeQuery string
 }
 
 // areaLabelsIT translates EVERY coverage-manifest area (and checklist section)

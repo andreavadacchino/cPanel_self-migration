@@ -35,7 +35,9 @@ func newTestWorkbenchHandler(t *testing.T) (http.Handler, *workbench.Store, stri
 
 func extractCSRF(t *testing.T, h http.Handler, sessionID string) string {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/workbench/session/"+sessionID, nil)
+	// The governance/attach forms (which carry the CSRF token) live in expert
+	// mode; the token itself is a per-server constant, identical on every page.
+	req := httptest.NewRequest("GET", "/workbench/session/"+sessionID+"?mode=expert", nil)
 	req.Host = "127.0.0.1:8422"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

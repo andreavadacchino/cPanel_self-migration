@@ -64,17 +64,25 @@ func TestScreenRoutesAllRender(t *testing.T) {
 }
 
 // TestPanoramicaIsCockpit: the base route renders the Fase 4 cockpit — hero
-// state, the journey stepper, the comparison and plan blocks — while the
-// engineering surfaces (Stato per fase) remain reachable in the collapsed
-// technical details. "Bozza" confirms the persistent status badge still shows.
+// state, the journey stepper, the comparison and plan blocks. "Bozza" confirms
+// the persistent status badge still shows. The engineering surfaces ("Stato per
+// fase") are now operator-hidden and reachable only in expert mode.
 func TestPanoramicaIsCockpit(t *testing.T) {
 	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	_, body := getBody(t, h, "/workbench/session/"+sess.ID)
-	for _, want := range []string{"Stato migrazione", "Comparativa account", "Piano di migrazione", "Bozza", "Stato per fase"} {
+	for _, want := range []string{"Stato migrazione", "Comparativa account", "Piano di migrazione", "Bozza"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("cockpit panoramica missing %q", want)
 		}
+	}
+	// The technical "Stato per fase" widget moved behind expert mode.
+	if strings.Contains(body, "Stato per fase") {
+		t.Error("operator Panoramica must not show the technical 'Stato per fase' widget")
+	}
+	_, expert := getBody(t, h, "/workbench/session/"+sess.ID+"?mode=expert")
+	if !strings.Contains(expert, "Stato per fase") {
+		t.Error("expert Panoramica must still expose 'Stato per fase'")
 	}
 }
 

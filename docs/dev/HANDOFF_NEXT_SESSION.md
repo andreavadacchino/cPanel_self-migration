@@ -36,6 +36,14 @@ migrazione lunga non la giustifica — il monitor esecuzione della Fase 4 (meta-
 journal + events.jsonl) è ora il prerequisito per osservare quel run. I numeri GitHub reali sono
 assegnati all'apertura delle PR.
 
+**Operator-First UX Reset (2026-07-07): modalità operatore predefinita, dettagli tecnici/azioni
+avanzate spostati fuori dal percorso principale.** Presentation-only: `workbenchView.Expert` +
+`ModeQuery` letti da `?mode=expert`, toggle nel Flight Director header (sticky sui link nav). In
+modalità operatore governance/artifact/SHA/attach/definizione/«Stato per fase»/cronologia NON sono
+renderizzati (dietro `{{if .Expert}}`); `host.yaml` nascosto dal copy operatore («Connessioni non
+configurate»); `screen_migrazione` con 3 card semplici. `startAllowed`/gate CTA e tutti i controlli
+safety-critical invariati. Nessun writer/CLI/SSE/`migration_plan.json`.
+
 **Dogfooding #4 (2026-07-07, `DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md`):** UI-walk in browser
 reale + suite test (43/43) + una esecuzione reale dell'orchestratore osservata end-to-end (fallita al
 config-load, dir isolata senza `host.yaml` → **nessun server contattato**, ma percorso di fallimento

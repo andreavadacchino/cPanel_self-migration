@@ -337,14 +337,21 @@ func TestCockpitDNSManualNeverAuto(t *testing.T) {
 	}
 }
 
-// Test #10 + #11: engineering surfaces are collapsed under <details>, and the
-// former primary "Applica e verifica" screen is demoted to an expert path.
+// Test #10 + #11: engineering surfaces move OUT of the operator path into expert
+// mode (reachable under <details>), and the former primary "Applica e verifica"
+// screen stays demoted to an expert path.
 func TestCockpitTechnicalCollapsedAndAdvancedDemoted(t *testing.T) {
 	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+	// Operator mode: governance is out of the primary path entirely.
 	_, panoramica := getBody(t, h, "/workbench/session/"+sess.ID)
-	if !strings.Contains(panoramica, "<details") || !strings.Contains(panoramica, "Governance") {
-		t.Error("governance/history must be reachable but collapsed under <details>")
+	if strings.Contains(panoramica, "Governance") {
+		t.Error("operator Panoramica must not surface governance in the primary path")
+	}
+	// Expert mode: governance/history reachable but collapsed under <details>.
+	_, expert := getBody(t, h, "/workbench/session/"+sess.ID+"?mode=expert")
+	if !strings.Contains(expert, "<details") || !strings.Contains(expert, "Governance") {
+		t.Error("expert mode must keep governance/history reachable under <details>")
 	}
 	_, applica := getBody(t, h, "/workbench/session/"+sess.ID+"/applica")
 	if !strings.Contains(applica, "Azioni avanzate") || !strings.Contains(applica, "Percorso esperto") {
