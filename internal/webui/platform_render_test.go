@@ -269,30 +269,36 @@ func TestPlatformNoTechnicalLeakage(t *testing.T) {
 	}
 }
 
-// Case 10 + 11: the start gate is single-sourced. A startable session exposes
-// the "Avvia migrazione" CTA pointing at the tested workbench start form and
-// NEVER the raw strong-confirmation form; a draft session exposes neither, and
-// the hero never diverges from the CTA.
+// Case 10 + 11: the start gate is single-sourced. A startable session renders
+// the strong-confirmation start form IN the platform (posting to the platform
+// start-migration route), preserving the per-account confirmation; a draft
+// session exposes neither, and the hero never diverges from the CTA.
 func TestPlatformStartGateSingleSourced(t *testing.T) {
 	// Startable session (ready_for_apply, confirmed scope, ready checklist).
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
 	rr := doReq(env.h, http.MethodGet, "/platform/migrations/"+env.sessID, nil)
 	body := rr.Body.String()
-	startLink := "/workbench/session/" + env.sessID + "/migrazione"
-	if !strings.Contains(body, "Avvia migrazione") || !strings.Contains(body, startLink) {
-		t.Error("startable cockpit must show the Avvia migrazione CTA linking to the tested workbench form")
+	if !strings.Contains(body, `action="/platform/migrations/`+env.sessID+`/start-migration"`) {
+		t.Error("startable cockpit must render the start form posting to the platform route")
 	}
-	if strings.Contains(body, "confirm_account") {
-		t.Error("the platform must NOT render the raw strong-confirmation start form (it delegates)")
+	if !strings.Contains(body, `name="confirm_account"`) {
+		t.Error("the strong per-account confirmation must be preserved in-platform (not removed)")
+	}
+	if !strings.Contains(body, "Avvia migrazione") {
+		t.Error("startable cockpit must show the Avvia migrazione CTA")
+	}
+	// Start no longer delegates to the workbench.
+	if strings.Contains(body, `action="/workbench/session/`+env.sessID+`/start-migration"`) {
+		t.Error("start must run in-platform, not delegate to the workbench")
 	}
 
-	// Draft session: not startable → no start link, hero not 'ready'.
+	// Draft session: not startable → no start form, hero not 'ready'.
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
 	draft := platformSessionBody(t, ps, sess.ID, "cockpit")
-	if strings.Contains(draft, "/workbench/session/"+sess.ID+"/migrazione") {
-		t.Error("a draft session must not expose the start form link")
+	if strings.Contains(draft, "/start-migration") || strings.Contains(draft, "confirm_account") {
+		t.Error("a draft session must not expose the start form")
 	}
 	if strings.Contains(draft, "Pronta per migrare") {
 		t.Error("a draft session hero must not claim it is ready to migrate")

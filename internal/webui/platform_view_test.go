@@ -138,8 +138,8 @@ func TestBuildPlatformSessionNoChecklist(t *testing.T) {
 }
 
 // The session read-model reuses the SAME start gate as the workbench cockpit:
-// for a startable session the dominant CTA is "start" and its target is the
-// tested workbench start form (never an untested platform form).
+// for a startable session the dominant CTA is "start". The cockpit renders the
+// strong-confirmation form inline (in-platform), so no link target is set.
 func TestBuildPlatformSessionReusesStartGate(t *testing.T) {
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
 	sess, err := env.store.Get(env.sessID)
@@ -150,9 +150,8 @@ func TestBuildPlatformSessionReusesStartGate(t *testing.T) {
 	if page.Cockpit.CTA.Kind != "start" {
 		t.Fatalf("startable session must yield a start CTA, got kind %q (state %q)", page.Cockpit.CTA.Kind, page.Cockpit.StateLabel)
 	}
-	want := "/workbench/session/" + sess.ID + "/migrazione"
-	if page.HeroCTAURL != want {
-		t.Errorf("start CTA target = %q, want the tested workbench start form %q", page.HeroCTAURL, want)
+	if page.HeroCTAURL != "" {
+		t.Errorf("start CTA renders an inline form, so HeroCTAURL must be empty, got %q", page.HeroCTAURL)
 	}
 }
 

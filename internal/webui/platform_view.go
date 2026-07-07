@@ -188,7 +188,9 @@ func platformCTAURL(id, expertURL string, cta cockpitCTA) string {
 	case "wait":
 		return ""
 	case "start":
-		return expertURL + "/migrazione"
+		// The cockpit renders the strong-confirmation start FORM inline (posting
+		// to /platform/migrations/:id/start-migration), so no link is needed.
+		return ""
 	default:
 		seg := platformScreenForWorkbench(cta.Screen)
 		if seg == "" {

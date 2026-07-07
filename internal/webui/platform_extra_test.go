@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -301,6 +303,102 @@ func TestPlatformPlanRendersScopeForm(t *testing.T) {
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("/plan scope form missing %q", want)
+		}
+	}
+}
+
+// Operator-first: starting the migration runs the SAME orchestrator behind the
+// SAME strong confirmation, but returns to the platform cockpit — never the
+// workbench.
+func TestPlatformStartMigrationInPlatform(t *testing.T) {
+	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
+	rr := doReq(env.h, http.MethodPost, "/platform/migrations/"+env.sessID+"/start-migration",
+		url.Values{"csrf": {env.csrf}, "confirm_account": {"giorginisposi"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("start POST = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	loc := rr.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/platform/migrations/"+env.sessID+"?migrate=") {
+		t.Errorf("start redirect = %q, want the platform cockpit (?migrate=…)", loc)
+	}
+	if strings.Contains(loc, "/workbench/") {
+		t.Error("start must return to the platform, never the workbench")
+	}
+}
+
+// The strong per-account confirmation and CSRF gate are preserved for the
+// in-platform start (nothing weakened): wrong account name → 403, bad csrf →
+// 403, GET → 405.
+func TestPlatformStartMigrationGatesPreserved(t *testing.T) {
+	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
+	path := "/platform/migrations/" + env.sessID + "/start-migration"
+	if rr := doReq(env.h, http.MethodPost, path, url.Values{"csrf": {env.csrf}, "confirm_account": {"wrong-name"}}); rr.Code != http.StatusForbidden {
+		t.Errorf("wrong confirm_account = %d, want 403", rr.Code)
+	}
+	if rr := doReq(env.h, http.MethodPost, path, url.Values{"csrf": {"nope"}, "confirm_account": {"giorginisposi"}}); rr.Code != http.StatusForbidden {
+		t.Errorf("bad csrf = %d, want 403", rr.Code)
+	}
+	if rr := doReq(env.h, http.MethodGet, path, nil); rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET start = %d, want 405", rr.Code)
+	}
+	// The session was never started (no journal, still startable).
+	if got, _ := env.store.Get(env.sessID); got.Status != workbench.StatusReadyForApply {
+		t.Errorf("a refused start must not change the session status, got %q", got.Status)
+	}
+}
+
+// Operator-first: accepting a manual action happens in-platform and returns to
+// the platform Task screen, reusing the shared saveAcceptTo (persists to
+// acceptances.json).
+func TestPlatformAcceptInPlatform(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	fr := &fakeRunner{}
+	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+		Mode: "migration-checklist", FormatVersion: 1,
+		OverallStatus: accountinventory.OverallManualActionRequired,
+		ManualActions: []accountinventory.ManualAction{
+			{ID: "MA-1", Key: "AK-test", Title: "Verifica MX", Section: "dns", Acceptable: true},
+		},
+	})
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/accept",
+		url.Values{"csrf": {csrf}, "action_key": {"AK-test"}, "operator": {"Mario"}, "reason": {"verificato ok"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("accept POST = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"/tasks" {
+		t.Errorf("accept redirect = %q, want the platform Task screen", loc)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "acceptances.json")); err != nil {
+		t.Error("acceptance must be persisted to acceptances.json")
+	}
+}
+
+// The /tasks screen renders the in-platform accept form for an acceptable action.
+func TestPlatformTasksRendersAcceptForm(t *testing.T) {
+	dir := t.TempDir()
+	ps, store := newPlatformTest(t, dir, false)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+		Mode: "migration-checklist", FormatVersion: 1,
+		OverallStatus: accountinventory.OverallManualActionRequired,
+		ManualActions: []accountinventory.ManualAction{
+			{Key: "AK-x", Title: "Verifica MX", Section: "dns", Acceptable: true},
+		},
+	})
+	body := platformSessionBody(t, ps, sess.ID, "tasks")
+	for _, want := range []string{
+		`action="/platform/migrations/` + sess.ID + `/accept"`,
+		`name="action_key"`, "AK-x", `name="operator"`, `name="reason"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/tasks accept form missing %q", want)
 		}
 	}
 }

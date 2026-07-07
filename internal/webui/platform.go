@@ -123,16 +123,45 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 		http.NotFound(w, r)
 		return true
 	}
-	// Mutating operator action kept inside the platform: scope confirmation is a
-	// CSRF-gated METADATA mutation (no migration write) that reuses the shared
-	// workbench core and returns to the platform Piano screen.
-	if screen == "scope" {
+	// Mutating OPERATOR-FLOW actions kept inside the platform (CSRF via s.post),
+	// each REUSING the exact workbench handler with only the redirect pointed
+	// back at /platform — no gate, confirmation or writer is re-implemented:
+	//   - scope: metadata mutation (shared applyScopeConfirm core);
+	//   - start-migration: the one-click orchestrator behind the SAME strong
+	//     per-account confirmation (s.wbExec.handleStartMigration);
+	//   - accept: operator acceptance of a manual action (s.saveAcceptTo).
+	// The technical break-glass actions (single apply/verify, DNS Danger Zone,
+	// rollback, force-transition) deliberately stay in Modalità esperto.
+	switch screen {
+	case "scope":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, "POST")
 			return true
 		}
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
 			s.platform.handleConfirmScope(w, r, id)
+		})
+		return true
+	case "start-migration":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return true
+		}
+		if s.wbExec == nil {
+			http.NotFound(w, r)
+			return true
+		}
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.wbExec.handleStartMigration(w, r, id, "/platform/migrations/"+id)
+		})
+		return true
+	case "accept":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return true
+		}
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.saveAcceptTo(w, r, "/platform/migrations/"+id+"/tasks")
 		})
 		return true
 	}

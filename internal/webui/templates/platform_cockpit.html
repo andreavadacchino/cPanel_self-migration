@@ -33,8 +33,15 @@
         {{if eq .Cockpit.CTA.Kind "wait"}}
           <button class="btn btn-lg is-disabled" style="width:100%; justify-content:center" disabled>{{.Cockpit.CTA.Label}}</button>
         {{else if eq .Cockpit.CTA.Kind "start"}}
-          <a class="btn btn-primary btn-lg" style="width:100%; justify-content:center" href="{{.HeroCTAURL}}">Avvia migrazione →</a>
-          <p class="faint" style="font-size:.78rem; text-align:center; margin-top:.4rem">La conferma avviene sullo schermo di avvio (forte conferma).</p>
+          {{/* Strong per-account confirmation, in-platform. The account name is
+               required to proceed — a safety gate that is NOT removed for fidelity. */}}
+          <form method="post" action="/platform/migrations/{{.Session.ID}}/start-migration">
+            <input type="hidden" name="csrf" value="{{.CSRF}}">
+            <label class="sub" style="display:block; margin-bottom:.35rem">Per confermare, digita il nome dell'account (<code class="mono">{{.Session.Name}}</code>):</label>
+            <input type="text" name="confirm_account" size="24" autocomplete="off" required style="width:100%; padding:.5rem .7rem; border:1px solid var(--border); border-radius:8px; font-size:.9rem; background:#fff">
+            <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center; margin-top:.5rem">Avvia migrazione →</button>
+          </form>
+          {{if .Cockpit.CTA.Detail}}<p class="faint" style="font-size:.78rem; margin-top:.45rem">{{.Cockpit.CTA.Detail}}</p>{{end}}
         {{else}}
           <a class="btn btn-primary btn-lg" style="width:100%; justify-content:center" href="{{.HeroCTAURL}}">{{.Cockpit.CTA.Label}} →</a>
         {{end}}
