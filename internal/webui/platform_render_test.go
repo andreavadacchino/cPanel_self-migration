@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 func newPlatformTest(t *testing.T, dir string, busy bool) (*platformServer, *workbench.Store) {
 	t.Helper()
 	store := mustStore(t, dir)
-	ps, err := newPlatformServer(store, dir, "csrf-x", func() bool { return busy })
+	ps, err := newPlatformServer(store, dir, "csrf-x", func() bool { return busy }, &sync.Mutex{})
 	if err != nil {
 		t.Fatalf("newPlatformServer: %v", err)
 	}
@@ -67,24 +68,28 @@ func TestPlatformDashboardListsSessionsCoherently(t *testing.T) {
 	rr := httptest.NewRecorder()
 	ps.handleDashboard(rr, httptest.NewRequest(http.MethodGet, "/platform/migrations", nil))
 	body := rr.Body.String()
-	for _, want := range []string{"giorgini", "Preflight richiesto", "Esegui preflight"} {
+	for _, want := range []string{"giorgini", "Preflight richiesto", "Apri controllo iniziale"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard row missing %q", want)
 		}
 	}
 }
 
-// Case 2: the wizard shows the clear numbered steps and the real form fields.
-func TestPlatformWizardShowsSteps(t *testing.T) {
+// Case 2: the wizard shows one clear setup form and the real form fields. It
+// must not pretend to be a multi-step wizard when all fields are on one page.
+func TestPlatformWizardShowsSinglePageSetup(t *testing.T) {
 	ps, _ := newPlatformTest(t, t.TempDir(), false)
 	rr := httptest.NewRecorder()
 	ps.handleWizardForm(rr, httptest.NewRequest(http.MethodGet, "/platform/migrations/new", nil))
 	body := rr.Body.String()
-	for _, want := range []string{"Nome migrazione", "Sorgente", "Destinazione", "Contenuti", "Riepilogo",
+	for _, want := range []string{"Dai un nome", "Sorgente", "Destinazione", "Cosa vuoi migrare",
 		`name="csrf"`, `name="src_host"`, `name="dst_account"`, "Cosa vuoi migrare", "Crea migrazione"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("wizard missing %q", want)
 		}
+	}
+	if strings.Contains(body, "Riepilogo") {
+		t.Error("single-page wizard must not render a fake multi-step 'Riepilogo' step")
 	}
 }
 
@@ -102,6 +107,7 @@ func TestPlatformWizardCreatesSessionAndRedirects(t *testing.T) {
 		"csrf": {csrf}, "name": {"Migrazione X"},
 		"src_host": {"1.2.3.4"}, "src_account": {"acc"},
 		"dst_host": {"5.6.7.8"}, "dst_account": {"acc2"},
+		"src_pass": {"src-secret"}, "dst_pass": {"dst-secret"},
 		"content_files": {"1"},
 	}
 	rr := doReq(h, http.MethodPost, "/platform/migrations/new", form)
@@ -153,12 +159,12 @@ func TestPlatformPlanHonestFallbackAndRealData(t *testing.T) {
 
 	// With a ready checklist + confirmed scope → real buckets.
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
-	ps2, err := newPlatformServer(env.store, env.dir, env.csrf, func() bool { return false })
+	ps2, err := newPlatformServer(env.store, env.dir, env.csrf, func() bool { return false }, &sync.Mutex{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body2 := platformSessionBody(t, ps2, env.sessID, "plan")
-	for _, want := range []string{"Piano migrazione", "Automatico", "Conferma scope"} {
+	for _, want := range []string{"Piano migrazione", "Automatico", "Conferma cosa migrare"} {
 		if !strings.Contains(body2, want) {
 			t.Errorf("ready plan missing %q", want)
 		}
@@ -203,7 +209,7 @@ func TestPlatformCompareDegradesHonestly(t *testing.T) {
 	if !strings.Contains(body, "Confronto non ancora disponibile") {
 		t.Error("comparison without data must say so honestly")
 	}
-	if !strings.Contains(body, "non è disponibile in questa versione") {
+	if !strings.Contains(body, "non è incluso in questa vista") {
 		t.Error("the file-level detail panel must degrade honestly")
 	}
 }
@@ -213,7 +219,7 @@ func TestPlatformExpertLinkOnEveryScreen(t *testing.T) {
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
-	want := "/workbench/session/" + sess.ID
+	want := "/workbench/session/" + sess.ID + "?mode=expert"
 	for _, screen := range []string{"cockpit", "plan", "tasks", "report", "compare"} {
 		if body := platformSessionBody(t, ps, sess.ID, screen); !strings.Contains(body, want) {
 			t.Errorf("screen %q missing the expert-mode link %q", screen, want)
@@ -239,7 +245,7 @@ func TestWorkbenchNotBrokenByPlatform(t *testing.T) {
 	csrf := fetchCSRF(t, h)
 	form := url.Values{
 		"csrf": {csrf}, "name": {"WB"}, "src_host": {"1.1.1.1"}, "src_account": {"a"},
-		"dst_host": {"2.2.2.2"}, "dst_account": {"b"}, "content_files": {"1"},
+		"dst_host": {"2.2.2.2"}, "dst_account": {"b"}, "src_pass": {"a"}, "dst_pass": {"b"}, "content_files": {"1"},
 	}
 	rr := doReq(h, http.MethodPost, "/workbench/new", form)
 	if rr.Code != http.StatusSeeOther || !strings.HasPrefix(rr.Header().Get("Location"), "/workbench/session/") {
@@ -269,20 +275,22 @@ func TestPlatformNoTechnicalLeakage(t *testing.T) {
 	}
 }
 
-// Case 10 + 11: the start gate is single-sourced. A startable session renders
-// the strong-confirmation start form IN the platform (posting to the platform
-// start-migration route), preserving the per-account confirmation; a draft
-// session exposes neither, and the hero never diverges from the CTA.
+// Case 10 + 11: the platform start gate is single-sourced. A startable session
+// renders the smart-start form IN the platform; a draft session exposes neither,
+// and the hero never diverges from the CTA.
 func TestPlatformStartGateSingleSourced(t *testing.T) {
 	// Startable session (ready_for_apply, confirmed scope, ready checklist).
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
 	rr := doReq(env.h, http.MethodGet, "/platform/migrations/"+env.sessID, nil)
 	body := rr.Body.String()
-	if !strings.Contains(body, `action="/platform/migrations/`+env.sessID+`/start-migration"`) {
-		t.Error("startable cockpit must render the start form posting to the platform route")
+	if !strings.Contains(body, `action="/platform/migrations/`+env.sessID+`/smart-start"`) {
+		t.Error("startable cockpit must render the smart-start form posting to the platform route")
 	}
-	if !strings.Contains(body, `name="confirm_account"`) {
-		t.Error("the strong per-account confirmation must be preserved in-platform (not removed)")
+	if !strings.Contains(body, `name="confirm_start"`) {
+		t.Error("platform smart-start must post the server-side confirmation marker")
+	}
+	if strings.Contains(body, `name="confirm_account"`) {
+		t.Error("platform primary flow must not ask the operator to retype the account")
 	}
 	if !strings.Contains(body, "Avvia migrazione") {
 		t.Error("startable cockpit must show the Avvia migrazione CTA")
@@ -297,7 +305,7 @@ func TestPlatformStartGateSingleSourced(t *testing.T) {
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
 	draft := platformSessionBody(t, ps, sess.ID, "cockpit")
-	if strings.Contains(draft, "/start-migration") || strings.Contains(draft, "confirm_account") {
+	if strings.Contains(draft, "/smart-start") || strings.Contains(draft, "confirm_start") || strings.Contains(draft, "confirm_account") {
 		t.Error("a draft session must not expose the start form")
 	}
 	if strings.Contains(draft, "Pronta per migrare") {

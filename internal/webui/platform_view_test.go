@@ -132,8 +132,8 @@ func TestBuildPlatformSessionNoChecklist(t *testing.T) {
 	if len(page.Steps) != len(platformStepDefs) {
 		t.Errorf("stepper must have %d steps, got %d", len(platformStepDefs), len(page.Steps))
 	}
-	if page.ExpertURL != "/workbench/session/"+sess.ID {
-		t.Errorf("expert URL = %q, want the workbench session route", page.ExpertURL)
+	if page.ExpertURL != "/workbench/session/"+sess.ID+"?mode=expert" {
+		t.Errorf("expert URL = %q, want the workbench expert route", page.ExpertURL)
 	}
 }
 

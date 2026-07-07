@@ -145,25 +145,28 @@ type platformPage struct {
 	Activity   []platformActivity
 
 	// Session screens (adapter over workbenchView)
-	Session          *workbench.Session
-	Steps            []platformStep
-	CurrentStepIndex int // 1..7 stepper position of the current status (honest progress)
-	SrcDst           platformSrcDst
-	Plan             migrationPlan
-	Cockpit          cockpitModel
-	Cutover          cutoverVerdict
-	Tasks            []accountinventory.ManualAction
-	TasksPending     int // not yet accepted (still to resolve) — see buildPlatformSession
-	TasksTotal       int
-	Compare          []platformCompareRow
-	Report           platformReport
-	ExpertURL        string
-	Flash            string
+	Session            *workbench.Session
+	Steps              []platformStep
+	CurrentStepIndex   int // 1..7 stepper position of the current status (honest progress)
+	SrcDst             platformSrcDst
+	Plan               migrationPlan
+	Cockpit            cockpitModel
+	Cutover            cutoverVerdict
+	Risk               riskBadge
+	Tasks              []accountinventory.ManualAction
+	TasksPending       int // not yet accepted (still to resolve) — see buildPlatformSession
+	TasksTotal         int
+	Compare            []platformCompareRow
+	Report             platformReport
+	ExpertURL          string
+	ExpertPreflightURL string
+	ExpertApplyURL     string
+	Flash              string
 	// HeroCTAURL is the target of the cockpit's single dominant CTA. It is
-	// empty for a passive "wait" CTA (a job is in flight). For "start" it points
-	// to the workbench Piano & scope screen — the strong-confirmation start form
-	// lives there, tested — so the irreversible confirmation never runs off an
-	// untested platform form. For "link" it points to the mapped platform screen.
+	// empty for a passive "wait" CTA (a job is in flight) or for "start" (the
+	// cockpit renders the smart-start form inline). For "link" it points to the
+	// mapped platform screen or to the expert workbench when the control is
+	// intentionally technical.
 	HeroCTAURL string
 }
 
@@ -282,13 +285,13 @@ func statusStepIndex(s workbench.Status) int {
 func dashboardNextAction(s workbench.Status) (label, seg string) {
 	switch s {
 	case workbench.StatusDraft, workbench.StatusPreflightRequired:
-		return "Esegui preflight", "plan"
+		return "Apri controllo iniziale", "plan"
 	case workbench.StatusInventoryReady, workbench.StatusChecklistReady:
 		return "Rivedi il piano", "plan"
 	case workbench.StatusManualActionsRequired:
 		return "Apri task manuali", "tasks"
 	case workbench.StatusReadyForApply:
-		return "Avvia migrazione", ""
+		return "Apri cockpit per avviare", ""
 	case workbench.StatusApplyInProgress:
 		return "Monitora", ""
 	case workbench.StatusApplyDone, workbench.StatusVerificationRequired:
@@ -298,12 +301,20 @@ func dashboardNextAction(s workbench.Status) (label, seg string) {
 	case workbench.StatusCutoverDone, workbench.StatusArchived:
 		return "Apri report", "report"
 	case workbench.StatusBlocked:
-		return "Risolvi bloccanti", "plan"
+		return "Controlla bloccanti", "plan"
 	case workbench.StatusFailed:
 		return "Controlla l'errore", ""
 	default:
 		return "Apri migrazione", ""
 	}
+}
+
+func workbenchExpertURL(id, screen string) string {
+	u := "/workbench/session/" + id
+	if screen != "" {
+		u += "/" + screen
+	}
+	return u + "?mode=expert"
 }
 
 // stepPct is the honest completion percentage of the stepper (index/total),
@@ -518,12 +529,13 @@ func buildReportTimeline(events []workbench.TimelineEvent) []platformTimelineRow
 // buildPlatformReport assembles the final-report read-model for a session.
 func buildPlatformReport(sess *workbench.Session, v workbenchView) platformReport {
 	completed := sess.Status == workbench.StatusCutoverDone || sess.Status == workbench.StatusArchived
+	hasAnyTechReport := v.Facts.ContentApplyPresent || v.Facts.DNS.ApplyPresent || v.Facts.Email.ApplyPresent || v.Facts.Cron.ApplyPresent
 	r := platformReport{
 		Completed:     completed,
 		Domain:        sessionDomain(*sess),
 		Source:        fallbackDash(sess.SourceProfile),
 		Dest:          fallbackDash(sess.DestinationProfile),
-		HasTechReport: v.Facts.ContentApplyPresent,
+		HasTechReport: hasAnyTechReport,
 		Areas:         mapCompareRows(v.Cockpit.Comparison),
 		Timeline:      buildReportTimeline(sess.Timeline),
 	}
@@ -553,23 +565,27 @@ func navForScreen(screen string) string {
 // are available) and maps the fields into the platform shape. Read-only.
 func buildPlatformSession(dir, csrf string, sess *workbench.Session, jobBusy bool, screen string) platformPage {
 	v := buildWorkbenchView(dir, csrf, screenPanoramica, sess, jobBusy)
-	expertURL := "/workbench/session/" + sess.ID
+	v.Cockpit = platformSmartCockpit(v, sess)
+	expertURL := workbenchExpertURL(sess.ID, "")
 	p := platformPage{
-		Screen:           screen,
-		CSRF:             csrf,
-		Nav:              platformNav{Active: navForScreen(screen), ExpertURL: expertURL},
-		Header:           platformHeader{Brand: sessionDomain(*sess), Subtitle: statusLabelIT(sess.Status)},
-		Session:          sess,
-		Steps:            buildPlatformSteps(sess.Status, sess.ID),
-		CurrentStepIndex: statusStepIndex(sess.Status),
-		SrcDst:           platformSrcDst{Source: fallbackDash(sess.SourceProfile), Dest: fallbackDash(sess.DestinationProfile)},
-		Plan:             v.Plan,
-		Cockpit:          v.Cockpit,
-		Cutover:          v.Cutover,
-		Tasks:            v.Confirms,
-		Compare:          mapCompareRows(v.Cockpit.Comparison),
-		Report:           buildPlatformReport(sess, v),
-		ExpertURL:        expertURL,
+		Screen:             screen,
+		CSRF:               csrf,
+		Nav:                platformNav{Active: navForScreen(screen), ExpertURL: expertURL},
+		Header:             platformHeader{Brand: sessionDomain(*sess), Subtitle: statusLabelIT(sess.Status)},
+		Session:            sess,
+		Steps:              buildPlatformSteps(sess.Status, sess.ID),
+		CurrentStepIndex:   statusStepIndex(sess.Status),
+		SrcDst:             platformSrcDst{Source: fallbackDash(sess.SourceProfile), Dest: fallbackDash(sess.DestinationProfile)},
+		Plan:               v.Plan,
+		Cockpit:            v.Cockpit,
+		Cutover:            v.Cutover,
+		Risk:               v.Risk,
+		Tasks:              v.Confirms,
+		Compare:            mapCompareRows(v.Cockpit.Comparison),
+		Report:             buildPlatformReport(sess, v),
+		ExpertURL:          expertURL,
+		ExpertPreflightURL: workbenchExpertURL(sess.ID, screenPreflight),
+		ExpertApplyURL:     workbenchExpertURL(sess.ID, screenApplica),
 	}
 	p.HeroCTAURL = platformCTAURL(sess.ID, expertURL, v.Cockpit.CTA)
 	// A task is "done" only when it has been Accepted. Non-acceptable actions
@@ -584,6 +600,42 @@ func buildPlatformSession(dir, csrf string, sess *workbench.Session, jobBusy boo
 		}
 	}
 	return p
+}
+
+func platformSmartCockpit(v workbenchView, sess *workbench.Session) cockpitModel {
+	c := v.Cockpit
+	if !platformSmartStartAllowed(sess.Status, v.Facts, deriveContentScope(sess), v.Job, v.JobLive) {
+		return c
+	}
+	c.StateLabel = "Pronta per avvio smart"
+	c.StateClass = "done"
+	c.CTA = cockpitCTA{
+		Label:  "Avvia migrazione",
+		Detail: "Prima eseguiamo il controllo iniziale, poi migriamo automaticamente le aree selezionate. Il DNS resta solo checklist/verifica.",
+		Kind:   "start",
+		Screen: screenMigrazione,
+	}
+	return c
+}
+
+func platformSmartStartAllowed(status workbench.Status, f artifactFacts, scope contentScope, job *jobJournal, jobLive bool) bool {
+	if jobLive {
+		return false
+	}
+	switch status {
+	case workbench.StatusBlocked, workbench.StatusFailed,
+		workbench.StatusApplyInProgress, workbench.StatusApplyDone,
+		workbench.StatusVerificationRequired, workbench.StatusReadyForCutover,
+		workbench.StatusCutoverDone, workbench.StatusArchived:
+		return false
+	}
+	if f.ContentApplyPresent || !f.HostYAMLPresent || !scope.HasSetup || !hasAutoRunnableSelection(scope) {
+		return false
+	}
+	if job != nil && (job.State == jobStateFailed || job.State == jobStateInterrupted) {
+		return false
+	}
+	return f.Checklist == nil || !f.Checklist.ApplyBlocked
 }
 
 // buildPlatformDashboard assembles the dashboard read-model from the session

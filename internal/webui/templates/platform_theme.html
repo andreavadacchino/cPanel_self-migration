@@ -6,23 +6,26 @@
 {{define "platformCSS"}}<style>
   :root{
     color-scheme: light;
-    --bg:#f1f5f9; --surface:#ffffff; --surface-2:#f8fafc; --surface-3:#f1f5f9;
-    --border:#e2e8f0; --border-strong:#cbd5e1;
+    --bg:#eef2ff; --surface:#ffffff; --surface-2:#f8fafc; --surface-3:#eef2ff;
+    --border:#dbe4ff; --border-strong:#c7d2fe;
     --text:#0f172a; --text-2:#334155; --muted:#64748b; --faint:#94a3b8;
-    --accent:#2563eb; --accent-hover:#1d4ed8; --accent-soft:#eff6ff; --accent-border:#bfdbfe;
-    --ok:#16a34a; --ok-2:#15803d; --ok-bg:#f0fdf4; --ok-border:#bbf7d0;
-    --warn:#d97706; --warn-bg:#fffbeb; --warn-border:#fde68a;
+    --accent:#0f766e; --accent-hover:#115e59; --accent-soft:#ecfeff; --accent-border:#99f6e4;
+    --ok:#15803d; --ok-2:#166534; --ok-bg:#f0fdf4; --ok-border:#bbf7d0;
+    --warn:#b45309; --warn-bg:#fff7ed; --warn-border:#fdba74;
     --danger:#dc2626; --danger-bg:#fef2f2; --danger-border:#fecaca;
     --manual:#7c3aed; --manual-bg:#f5f3ff; --manual-border:#ddd6fe;
-    --radius:16px; --radius-sm:12px; --radius-xs:8px;
+    --radius:18px; --radius-sm:12px; --radius-xs:8px;
     --shadow-sm:0 1px 2px rgba(15,23,42,.06);
     --shadow:0 1px 3px rgba(15,23,42,.08),0 1px 2px rgba(15,23,42,.04);
-    --shadow-lg:0 10px 30px rgba(15,23,42,.08);
+    --shadow-lg:0 18px 40px rgba(15,23,42,.12);
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   }
   *{box-sizing:border-box}
   body{margin:0; font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    color:var(--text); background:var(--bg); -webkit-font-smoothing:antialiased;}
+    color:var(--text); background:
+      linear-gradient(180deg, rgba(255,255,255,.72), rgba(255,255,255,.86)),
+      linear-gradient(135deg, #eef2ff 0%, #ecfeff 55%, #fff7ed 100%);
+    -webkit-font-smoothing:antialiased;}
   a{color:var(--accent); text-decoration:none; font-weight:550;}
   a:hover{text-decoration:underline;}
   h1,h2,h3{color:var(--text); letter-spacing:-.01em; margin:0;}
@@ -46,7 +49,7 @@
   .side-foot{margin-top:auto; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius-sm); padding:.85rem;}
   .side-foot .t{font-weight:640; font-size:.9rem;} .side-foot p{font-size:.82rem; color:var(--muted);}
   .main{min-width:0; display:flex; flex-direction:column;}
-  .topbar{display:flex; align-items:center; gap:1rem; padding:.85rem 1.6rem; border-bottom:1px solid var(--border); background:var(--surface);}
+  .topbar{display:flex; align-items:center; gap:1rem; padding:.85rem 1.6rem; border-bottom:1px solid var(--border); background:rgba(255,255,255,.74); backdrop-filter:blur(10px);}
   .search{flex:1; max-width:34rem; background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:.5rem .8rem; color:var(--faint); font-size:.9rem;}
   .userchip{display:flex; align-items:center; gap:.55rem; margin-left:auto;}
   .userchip .av{width:2rem; height:2rem; border-radius:50%; background:var(--accent-soft); color:var(--accent); display:grid; place-items:center; font-weight:700; font-size:.85rem;}
@@ -64,6 +67,19 @@
   .chip .lb{color:var(--faint); font-size:.74rem; text-transform:uppercase; letter-spacing:.03em;}
   .sess-actions{margin-left:auto; display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;}
   .sess-sub{color:var(--muted); font-size:.9rem; margin:.1rem 0 1.1rem;}
+  .hero-band{border:1px solid var(--border); border-radius:24px; padding:1.4rem 1.5rem; background:
+      linear-gradient(135deg, rgba(15,118,110,.12), rgba(255,255,255,.92)),
+      #fff; box-shadow:var(--shadow-lg); margin-bottom:1rem;}
+  .hero-band .eyebrow{font-size:.76rem; text-transform:uppercase; letter-spacing:.08em; color:var(--accent); font-weight:700;}
+  .hero-band h1{font-size:2.1rem; line-height:1.08; margin:.25rem 0 .4rem;}
+  .hero-band .desc{max-width:68ch; color:var(--text-2); font-size:.98rem;}
+  .hero-meta{display:flex; flex-wrap:wrap; gap:.5rem; margin-top:1rem;}
+  .hero-chip{display:inline-flex; align-items:center; gap:.45rem; padding:.38rem .7rem; border-radius:999px; border:1px solid var(--border); background:#fff; font-size:.84rem; color:var(--text-2);}
+  .hero-chip strong{color:var(--text);}
+  .hero-grid{display:grid; grid-template-columns:1.2fr .8fr; gap:1rem; align-items:start;}
+  .hero-aside{display:flex; flex-direction:column; gap:.65rem; justify-content:space-between; min-width:0;}
+  .hero-rail{display:flex; gap:.55rem; flex-wrap:wrap;}
+  .hero-note{padding:.7rem .8rem; border-radius:14px; background:rgba(255,255,255,.7); border:1px solid var(--border);}
 
   /* ---- Buttons --------------------------------------------------------- */
   .btn{display:inline-flex; align-items:center; gap:.45rem; padding:.55rem .95rem; border-radius:10px; font-weight:600; font-size:.9rem; border:1px solid transparent; cursor:pointer; background:var(--surface); color:var(--text-2); border-color:var(--border);}
@@ -194,13 +210,11 @@
   <a class="side-brand" href="/platform/migrations"><span aria-hidden="true">☁️</span> Migrazioni cPanel</a>
   <nav class="side-nav">
     <a href="/platform/migrations" class="{{if eq .Nav.Active "migrations"}}active{{end}}"><span class="ic" aria-hidden="true">▤</span> Migrazioni</a>
-    <a href="/platform/migrations" class="{{if eq .Nav.Active "tasks"}}active{{end}}"><span class="ic" aria-hidden="true">☑</span> Task manuali</a>
-    <a href="/platform/migrations" class="{{if eq .Nav.Active "report"}}active{{end}}"><span class="ic" aria-hidden="true">▦</span> Report</a>
-    <a href="{{.Nav.ExpertURL}}"><span class="ic" aria-hidden="true">⚙</span> Modalità esperto</a>
+    <a href="{{.Nav.ExpertURL}}"><span class="ic" aria-hidden="true">⚙</span> Dettagli tecnici</a>
   </nav>
   <div class="side-foot">
-    <div class="t">Modalità esperto</div>
-    <p>I dettagli tecnici e le azioni avanzate restano nella <a href="{{.Nav.ExpertURL}}">workbench</a>.</p>
+    <div class="t">Dettagli tecnici</div>
+    <p>Azioni avanzate e report grezzi restano nella <a href="{{.Nav.ExpertURL}}">vista tecnica</a>.</p>
   </div>
 </aside>
 {{end}}
@@ -212,6 +226,63 @@
   <div class="userchip">
     <div style="text-align:right"><div class="nm">Operatore</div><div class="rl">Amministratore</div></div>
     <div class="av">OP</div>
+  </div>
+</div>
+{{end}}
+
+{{/* ---- Product hero (dashboard/session) -------------------------------- */}}
+{{define "platformDashboardHero"}}
+<div class="hero-band">
+  <div class="eyebrow">Migration platform</div>
+  <div class="hero-grid">
+    <div>
+      <h1>Migrazione smart, senza passaggi inutili</h1>
+      <div class="desc">Account cPanel, selezione contenuti, avvio guidato e monitoraggio leggibile. Il preflight resta utile, ma non blocca la navigazione della migrazione.</div>
+      <div class="hero-meta">
+        <span class="hero-chip">Vista operatore</span>
+        <span class="hero-chip">Avvio smart</span>
+        <span class="hero-chip">Monitor leggibile</span>
+        <span class="hero-chip">DNS solo verifica</span>
+      </div>
+    </div>
+    <div class="hero-aside">
+      <div class="hero-note">
+        <div style="font-weight:700; margin-bottom:.2rem">Percorso principale</div>
+        <div class="faint" style="font-size:.88rem">1. Account 2. Scope 3. Avvio smart 4. Monitor 5. Checklist differenze</div>
+      </div>
+      <div class="hero-rail">
+        <a class="btn btn-primary" href="/platform/migrations/new">+ Nuova migrazione</a>
+        <a class="btn btn-ghost" href="/workbench">Dettagli tecnici</a>
+      </div>
+    </div>
+  </div>
+</div>
+{{end}}
+
+{{define "platformSessionHero"}}
+<div class="hero-band" style="margin-bottom:1rem">
+  <div class="eyebrow">Migrazione in corso</div>
+  <div class="hero-grid">
+    <div>
+      <h1>{{.Header.Brand}}</h1>
+      <div class="desc">{{.Header.Subtitle}}. La piattaforma mostra solo ciò che serve per decidere e monitorare.</div>
+      <div class="hero-meta">
+        <span class="hero-chip"><strong>{{.SrcDst.Source}}</strong></span>
+        <span class="hero-chip">→</span>
+        <span class="hero-chip"><strong>{{.SrcDst.Dest}}</strong></span>
+        <span class="hero-chip"><strong>{{.Risk.Label}}</strong></span>
+      </div>
+    </div>
+    <div class="hero-aside">
+      <div class="hero-note">
+        <div style="font-weight:700; margin-bottom:.2rem">{{.Cockpit.CTA.Label}}</div>
+        <div class="faint" style="font-size:.88rem">{{.Cockpit.CTA.Detail}}</div>
+      </div>
+      <div class="hero-rail">
+        <a class="btn btn-ghost" href="{{.ExpertURL}}">Dettagli tecnici</a>
+        {{if .HeroCTAURL}}<a class="btn btn-primary" href="{{.HeroCTAURL}}">{{.Cockpit.CTA.Label}}</a>{{end}}
+      </div>
+    </div>
   </div>
 </div>
 {{end}}
@@ -229,8 +300,9 @@
     <span class="chip"><span class="lb">Destinazione</span> {{.SrcDst.Dest}}</span>
   </div>
   <div class="sess-actions">
+    <span class="badge b-{{.Risk.Class}} plain">{{.Risk.Label}}</span>
     <span class="badge b-{{statusBadgeClass .Session.Status}} plain">{{.Header.Subtitle}}</span>
-    <a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}">Modalità esperto</a>
+    <a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}">Dettagli tecnici</a>
   </div>
 </div>
 {{end}}

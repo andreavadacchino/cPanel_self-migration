@@ -13,17 +13,8 @@
     <div class="sess-actions"><a class="btn btn-ghost btn-sm" href="/platform/migrations">Annulla e torna alle migrazioni</a></div>
   </div>
 
-  {{/* Wizard stepper — single-page form (the phases below are all present) */}}
-  <div class="stepper" style="margin-top:.8rem">
-    <div class="step doing"><div class="dot">1</div><div><div class="lab">Nome migrazione</div><div class="cap">in corso</div></div></div>
-    <div class="bar"></div>
-    <div class="step todo"><div class="dot">2</div><div><div class="lab">Sorgente</div><div class="cap">da configurare</div></div></div>
-    <div class="bar"></div>
-    <div class="step todo"><div class="dot">3</div><div><div class="lab">Destinazione</div><div class="cap">da configurare</div></div></div>
-    <div class="bar"></div>
-    <div class="step todo"><div class="dot">4</div><div><div class="lab">Contenuti</div><div class="cap">da selezionare</div></div></div>
-    <div class="bar"></div>
-    <div class="step todo"><div class="dot">5</div><div><div class="lab">Riepilogo</div><div class="cap">da confermare</div></div></div>
+  <div class="callout info" style="margin:.8rem 0 1rem">
+    Compila i dati dell'account di partenza e di arrivo, scegli cosa migrare e crea la migrazione. Il controllo iniziale non modifica nulla.
   </div>
 
   {{if .Errors}}
@@ -54,9 +45,10 @@
         <p class="muted" style="font-size:.86rem">Account cPanel da cui migrare i dati.</p>
         <div style="display:grid; grid-template-columns:2fr 1fr 1.4fr; gap:.6rem; margin-top:.5rem">
           <label>Indirizzo IP o host<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="src_host" value="{{.Src.Host}}" placeholder="185.x.x.x o host.dominio.com" required></label>
-          <label>Porta SSH<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="src_port" value="{{.Src.Port}}" placeholder="22"></label>
+          <label>Porta accesso server<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="src_port" value="{{.Src.Port}}" placeholder="22"></label>
           <label>Account cPanel<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="src_account" value="{{.Src.Account}}" placeholder="account" required></label>
         </div>
+        <label style="display:block; margin-top:.6rem">Password accesso server<input class="search" style="width:100%; color:var(--text); background:#fff; margin-top:.25rem" type="password" name="src_pass" autocomplete="new-password" placeholder="Password SSH/cPanel" required></label>
       </div>
 
       <div class="card">
@@ -64,10 +56,11 @@
         <p class="muted" style="font-size:.86rem">Account cPanel di destinazione.</p>
         <div style="display:grid; grid-template-columns:2fr 1fr 1.4fr; gap:.6rem; margin-top:.5rem">
           <label>Indirizzo IP o host<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="dst_host" value="{{.Dst.Host}}" placeholder="185.x.x.x o host.dominio.com" required></label>
-          <label>Porta SSH<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="dst_port" value="{{.Dst.Port}}" placeholder="22"></label>
+          <label>Porta accesso server<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="dst_port" value="{{.Dst.Port}}" placeholder="22"></label>
           <label>Account cPanel<input class="search" style="width:100%; color:var(--text); background:#fff" type="text" name="dst_account" value="{{.Dst.Account}}" placeholder="account" required></label>
         </div>
-        <div class="callout info" style="margin-top:.7rem">🔒 Le credenziali (password SSH) non si inseriscono qui: si configurano separatamente e non vengono mai mostrate. Il preflight non modifica nulla.</div>
+        <label style="display:block; margin-top:.6rem">Password accesso server<input class="search" style="width:100%; color:var(--text); background:#fff; margin-top:.25rem" type="password" name="dst_pass" autocomplete="new-password" placeholder="Password SSH/cPanel" required></label>
+        <div class="callout info" style="margin-top:.7rem">Le password vengono salvate solo nel file locale di configurazione e non vengono mai mostrate dopo il salvataggio.</div>
       </div>
     </div>
 
@@ -80,8 +73,8 @@
         {{template "wizardToggle" (list "content_databases" "🗄 Database" "Tutti i database e gli utenti associati" .Content.Databases)}}
         {{template "wizardToggle" (list "content_email" "✉ Email" "Caselle di posta e messaggi" .Content.Email)}}
         {{template "wizardToggle" (list "content_email_config" "⚙ Configurazioni email" "Filtri, inoltri, autorisponditori" .Content.EmailConfig)}}
-        {{template "wizardToggle" (list "content_cron" "⏱ Cron" "Attività pianificate (cron job)" .Content.Cron)}}
-        {{template "wizardToggle" (list "content_dns" "🌐 DNS manuale / verificabile" "Zone DNS gestite manualmente" .Content.DNS)}}
+        {{template "wizardToggle" (list "content_cron" "⏱ Attività pianificate" "Operazioni programmate dell'account" .Content.Cron)}}
+        {{template "wizardToggle" (list "content_dns" "🌐 DNS da verificare" "Record DNS da controllare manualmente" .Content.DNS)}}
       </div>
       <div class="callout" style="margin-top:.7rem">Il DNS non viene mai applicato automaticamente: resta un task manuale verificabile.</div>
     </div>
@@ -89,14 +82,14 @@
     {{/* Column 3 — what happens next + CTA */}}
     <div class="card" style="background:linear-gradient(180deg,var(--accent-soft),#fff)">
       <h2>Cosa succede dopo?</h2>
-      <p class="muted" style="font-size:.86rem">Dopo aver creato la migrazione, esegui il preflight: il sistema</p>
+      <p class="muted" style="font-size:.86rem">Dopo aver creato la migrazione, esegui il controllo iniziale: il sistema</p>
       <ol style="padding-left:1.1rem; font-size:.88rem; color:var(--text-2); line-height:1.5">
         <li>Verifica la connessione a sorgente e destinazione.</li>
         <li>Analizza i contenuti (file, database, email, configurazioni).</li>
         <li>Esegue controlli intelligenti (spazio, compatibilità, criticità).</li>
         <li>Crea il piano di migrazione con riepilogo e raccomandazioni.</li>
       </ol>
-      <div class="callout ok" style="margin:.6rem 0">I tuoi dati sono al sicuro: nulla viene modificato durante il preflight.</div>
+      <div class="callout ok" style="margin:.6rem 0">I tuoi dati sono al sicuro: nulla viene modificato durante il controllo iniziale.</div>
       <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center">Crea migrazione →</button>
     </div>
 

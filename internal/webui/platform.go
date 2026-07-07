@@ -22,6 +22,7 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
@@ -38,9 +39,10 @@ type platformServer struct {
 	csrf    string
 	dir     string
 	jobBusy func() bool
+	cfgMu   *sync.Mutex
 }
 
-func newPlatformServer(store *workbench.Store, dir, csrf string, jobBusy func() bool) (*platformServer, error) {
+func newPlatformServer(store *workbench.Store, dir, csrf string, jobBusy func() bool, cfgMu *sync.Mutex) (*platformServer, error) {
 	funcMap := template.FuncMap{
 		"manualTitleIT":    manualTitleIT,
 		"manualActionIT":   manualActionIT,
@@ -63,7 +65,7 @@ func newPlatformServer(store *workbench.Store, dir, csrf string, jobBusy func() 
 	if err != nil {
 		return nil, fmt.Errorf("parse platform templates: %w", err)
 	}
-	return &platformServer{store: store, tpl: tpl, csrf: csrf, dir: dir, jobBusy: jobBusy}, nil
+	return &platformServer{store: store, tpl: tpl, csrf: csrf, dir: dir, jobBusy: jobBusy, cfgMu: cfgMu}, nil
 }
 
 // platformScreenTemplates maps a session screen segment to its template.
@@ -124,11 +126,10 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	// Mutating OPERATOR-FLOW actions kept inside the platform (CSRF via s.post),
-	// each REUSING the exact workbench handler with only the redirect pointed
-	// back at /platform — no gate, confirmation or writer is re-implemented:
+	// each reusing the same store, config writer, runner and single-writer slot:
 	//   - scope: metadata mutation (shared applyScopeConfirm core);
-	//   - start-migration: the one-click orchestrator behind the SAME strong
-	//     per-account confirmation (s.wbExec.handleStartMigration);
+	//   - smart-start: platform-only guided start with popup confirmation and
+	//     preflight-then-migrate sequencing;
 	//   - accept: operator acceptance of a manual action (s.saveAcceptTo).
 	// The technical break-glass actions (single apply/verify, DNS Danger Zone,
 	// rollback, force-transition) deliberately stay in Modalità esperto.
@@ -142,7 +143,7 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 			s.platform.handleConfirmScope(w, r, id)
 		})
 		return true
-	case "start-migration":
+	case "smart-start":
 		if r.Method != http.MethodPost {
 			methodNotAllowed(w, "POST")
 			return true
@@ -152,8 +153,11 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.wbExec.handleStartMigration(w, r, id, "/platform/migrations/"+id)
+			s.wbExec.handleSmartStartMigration(w, r, id, "/platform/migrations/"+id)
 		})
+		return true
+	case "start-migration":
+		http.NotFound(w, r)
 		return true
 	case "accept":
 		if r.Method != http.MethodPost {
@@ -217,12 +221,39 @@ func (ps *platformServer) handleWizardCreate(w http.ResponseWriter, r *http.Requ
 		ps.renderCode(w, "platform_wizard.html", v, http.StatusBadRequest)
 		return
 	}
+	if err := ps.saveWizardConfig(r); err != nil {
+		v.Errors = append(v.Errors, "Credenziali non valide: "+err.Error())
+		ps.renderCode(w, "platform_wizard.html", v, http.StatusBadRequest)
+		return
+	}
 	sess, err := ps.store.CreateWithSetup(sub.Name, sub.SrcProfile, sub.DstProfile, sub.Setup, time.Now().UTC())
 	if err != nil {
 		http.Error(w, "create session: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if hasAutomaticArea(sub.Setup.Content) {
+		if _, err := ps.store.ConfirmScope(sess.ID, sub.Setup.Content, time.Now().UTC()); err != nil {
+			http.Error(w, "confirm scope: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	http.Redirect(w, r, "/platform/migrations/"+sess.ID, http.StatusSeeOther)
+}
+
+func (ps *platformServer) saveWizardConfig(r *http.Request) error {
+	if ps.cfgMu != nil {
+		ps.cfgMu.Lock()
+		defer ps.cfgMu.Unlock()
+	}
+	existing, _ := loadConfigAt(ps.dir)
+	c, err := parseConfigForm(r, existing, configFormNames{
+		SrcIP: "src_host", SrcPort: "src_port", SrcUser: "src_account", SrcPass: "src_pass",
+		DestIP: "dst_host", DestPort: "dst_port", DestUser: "dst_account", DestPass: "dst_pass",
+	})
+	if err != nil {
+		return err
+	}
+	return writeValidatedConfigAt(ps.dir, c)
 }
 
 // jobLiveNow mirrors workbenchServer.jobLiveNow: an exec is genuinely in flight
@@ -247,7 +278,7 @@ func (ps *platformServer) handleConfirmScope(w http.ResponseWriter, r *http.Requ
 		http.Error(w, msg, code)
 		return
 	}
-	http.Redirect(w, r, "/platform/migrations/"+sessionID+"/plan"+query, http.StatusSeeOther)
+	http.Redirect(w, r, "/platform/migrations/"+sessionID+query, http.StatusSeeOther)
 }
 
 func (ps *platformServer) handleSession(w http.ResponseWriter, r *http.Request, id, screen string) {

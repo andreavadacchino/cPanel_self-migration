@@ -183,7 +183,7 @@ func New(o Options) (http.Handler, error) {
 		// read-only presentation layer over the same store + shared artifact dir;
 		// mutating actions delegate to the workbench POST handlers above. The old
 		// workbench (/workbench/*) remains the expert/fallback surface.
-		ps, err := newPlatformServer(o.SessionStore, o.Dir, s.csrf, s.job.running)
+		ps, err := newPlatformServer(o.SessionStore, o.Dir, s.csrf, s.job.running, &s.cfgMu)
 		if err != nil {
 			return nil, err
 		}
@@ -305,19 +305,21 @@ type yamlConfig struct {
 
 func (s *server) hostYAMLPath() string { return filepath.Join(s.dir, "host.yaml") }
 
-// saveConfig writes host.yaml from the form. Validation is delegated to
-// the AUTHORITY: the candidate is written to a temp file and accepted only
-// if config.Load accepts it, then atomically renamed into place. Blank
-// password fields inherit the stored ones, so editing an endpoint never
-// requires re-typing (or re-exposing) a secret.
-func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
-	existing, _ := config.Load(s.hostYAMLPath()) // best-effort: zero value when absent
+type configFormNames struct {
+	SrcIP, SrcPort, SrcUser, SrcPass     string
+	DestIP, DestPort, DestUser, DestPass string
+}
 
-	parseHost := func(prefix string, prev config.HostConfig) (yamlHost, error) {
+func loadConfigAt(dir string) (config.Config, error) {
+	return config.Load(filepath.Join(dir, "host.yaml"))
+}
+
+func parseConfigForm(r *http.Request, existing config.Config, names configFormNames) (yamlConfig, error) {
+	parseHost := func(ipKey, portKey, userKey, passKey, prefix string, prev config.HostConfig) (yamlHost, error) {
 		h := yamlHost{
-			IP:      strings.TrimSpace(r.FormValue(prefix + "_ip")),
-			SSHUser: strings.TrimSpace(r.FormValue(prefix + "_user")),
-			SSHPass: r.FormValue(prefix + "_pass"),
+			IP:      strings.TrimSpace(r.FormValue(ipKey)),
+			SSHUser: strings.TrimSpace(r.FormValue(userKey)),
+			SSHPass: r.FormValue(passKey),
 			Timeout: "15s",
 		}
 		if prev.Timeout > 0 {
@@ -326,7 +328,7 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 		if h.SSHPass == "" {
 			h.SSHPass = prev.SSHPass
 		}
-		portStr := strings.TrimSpace(r.FormValue(prefix + "_port"))
+		portStr := strings.TrimSpace(r.FormValue(portKey))
 		if portStr == "" {
 			portStr = "22"
 		}
@@ -338,13 +340,30 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 		return h, nil
 	}
 
-	src, err := parseHost("src", existing.Src)
+	src, err := parseHost(names.SrcIP, names.SrcPort, names.SrcUser, names.SrcPass, "src", existing.Src)
+	if err != nil {
+		return yamlConfig{}, err
+	}
+	dest, err := parseHost(names.DestIP, names.DestPort, names.DestUser, names.DestPass, "dest", existing.Dest)
+	if err != nil {
+		return yamlConfig{}, err
+	}
+	return yamlConfig{Src: src, Dest: dest}, nil
+}
+
+// saveConfig writes host.yaml from the form. Validation is delegated to
+// the AUTHORITY: the candidate is written to a temp file and accepted only
+// if config.Load accepts it, then atomically renamed into place. Blank
+// password fields inherit the stored ones, so editing an endpoint never
+// requires re-typing (or re-exposing) a secret.
+func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
+	existing, _ := loadConfigAt(s.dir) // best-effort: zero value when absent
+	c, err := parseConfigForm(r, existing, configFormNames{
+		SrcIP: "src_ip", SrcPort: "src_port", SrcUser: "src_user", SrcPass: "src_pass",
+		DestIP: "dest_ip", DestPort: "dest_port", DestUser: "dest_user", DestPass: "dest_pass",
+	})
 	if err == nil {
-		var dest yamlHost
-		dest, err = parseHost("dest", existing.Dest)
-		if err == nil {
-			err = s.writeValidatedConfig(yamlConfig{Src: src, Dest: dest})
-		}
+		err = s.writeValidatedConfig(c)
 	}
 	if err != nil {
 		http.Error(w, "invalid configuration: "+err.Error(), http.StatusUnprocessableEntity)
@@ -360,11 +379,15 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 // full read-modify-write; os.CreateTemp already creates each file 0600, so
 // there is no permission-widening window and no shared-name race.
 func (s *server) writeValidatedConfig(c yamlConfig) error {
+	return writeValidatedConfigAt(s.dir, c)
+}
+
+func writeValidatedConfigAt(dir string, c yamlConfig) error {
 	b, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(s.dir, "host.yaml.*.tmp")
+	f, err := os.CreateTemp(dir, "host.yaml.*.tmp")
 	if err != nil {
 		return err
 	}
@@ -380,7 +403,7 @@ func (s *server) writeValidatedConfig(c yamlConfig) error {
 	if _, err := config.Load(tmp); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.hostYAMLPath())
+	return os.Rename(tmp, filepath.Join(dir, "host.yaml"))
 }
 
 // ---------------------------------------------------------------------------

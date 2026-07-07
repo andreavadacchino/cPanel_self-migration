@@ -23,7 +23,7 @@
       <div class="prog" style="margin:.6rem 0"><span style="width:{{stepPct (sub .TasksTotal .TasksPending) .TasksTotal}}%"></span></div>
       <div class="sub">{{sub .TasksTotal .TasksPending}} / {{.TasksTotal}} completati</div>
       <hr class="sep">
-      <div class="callout" style="text-align:left">Conferma ogni task «verificabile» qui a fianco con «Conferma fatto». I task «Bloccante cutover» non-accettabili vanno risolti (Modalità esperto), non semplicemente confermati.</div>
+      <div class="callout" style="text-align:left">Conferma ogni task verificabile qui a fianco. I task non confermabili richiedono un intervento tecnico: non vengono chiusi con un semplice clic.</div>
     </div>
 
     {{/* Task table */}}
@@ -37,7 +37,7 @@
         <tr>
           <td><strong>{{manualTitleIT .}}</strong><div class="sub">{{manualActionIT .}}</div></td>
           <td>{{if .BlockingCutover}}<span class="badge b-error">Bloccante cutover</span>{{else if .Acceptable}}<span class="badge b-warn">Verificabile</span>{{else}}<span class="badge b-draft">Manuale</span>{{end}}</td>
-          <td class="detail-cell">{{if .Detail}}<span class="mono" style="user-select:all">{{.Detail}}</span>{{else}}<span class="faint">—</span>{{end}}</td>
+          <td class="detail-cell">{{if .Detail}}<details><summary class="sub">Dettaglio tecnico</summary><span class="mono" style="user-select:all">{{.Detail}}</span></details>{{else}}<span class="faint">—</span>{{end}}</td>
           <td>{{if .Accepted}}<span class="badge b-done">Confermato</span>{{else}}<span class="badge b-draft">Da verificare</span>{{end}}</td>
           <td>
             {{if .Accepted}}
@@ -54,14 +54,14 @@
                 </form>
               </details>
             {{else}}
-              <a class="btn btn-ghost btn-sm" href="{{$.ExpertURL}}/applica">Da risolvere (esperto)</a>
+              <a class="btn btn-ghost btn-sm" href="{{$.ExpertApplyURL}}">Richiedi intervento tecnico</a>
             {{end}}
           </td>
         </tr>
         {{end}}
         </tbody>
       </table></div>
-      <div class="callout info" style="margin-top:.8rem">I task «Bloccante cutover» devono essere completati prima di poter attivare il sito. La conferma si registra dalla Modalità esperto.</div>
+      <div class="callout info" style="margin-top:.8rem">I task «Bloccante cutover» devono essere completati prima di poter attivare il sito.</div>
       {{else}}
       <div class="empty"><p style="font-weight:600; color:var(--text)">Nessun task manuale</p><p>Non ci sono attività manuali aperte. Esegui il preflight per popolare questa sezione, se non l'hai già fatto.</p></div>
       {{end}}

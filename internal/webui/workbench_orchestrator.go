@@ -180,6 +180,10 @@ const (
 // so a long content phase can never eat the whole run's budget and cause a
 // later write to be killed mid-flight by a shared, artificial deadline.
 func (ws *workbenchExecServer) runOrchestration(base context.Context, sessionID string, phases []orchestratorPhase, startedAt time.Time) orchestrationResult {
+	return ws.runOrchestrationWithGate(base, sessionID, phases, startedAt, isApplyBlockedByChecklist)
+}
+
+func (ws *workbenchExecServer) runOrchestrationWithGate(base context.Context, sessionID string, phases []orchestratorPhase, startedAt time.Time, gateClosed func(string) bool) orchestrationResult {
 	res := orchestrationResult{Outcomes: make([]phaseOutcome, len(phases))}
 	for i, ph := range phases {
 		res.Outcomes[i] = phaseOutcome{Key: ph.key, Label: ph.label, State: phaseNotRun, Detail: orchestratorNotRunDetail}
@@ -189,7 +193,7 @@ func (ws *workbenchExecServer) runOrchestration(base context.Context, sessionID 
 	for i, ph := range phases {
 		// Gate re-check BEFORE every write phase (roadmap §14.3): a checklist that
 		// turned blocking mid-run stops the orchestrator immediately.
-		if isApplyBlockedByChecklist(ws.dir) {
+		if gateClosed != nil && gateClosed(ws.dir) {
 			res.Stopped = true
 			res.StopKind = stopGate
 			res.StopReason = orchestratorGateStoppedMsg
@@ -229,6 +233,29 @@ func (ws *workbenchExecServer) runOrchestration(base context.Context, sessionID 
 		res.Outcomes[i] = phaseOutcome{ph.key, ph.label, phaseCompletedWithReport, "Applicata (report disponibile)."}
 	}
 	return res
+}
+
+func isSmartStartHardBlockedByChecklist(dir string) bool {
+	f := readArtifactFacts(dir)
+	return f.Checklist != nil && f.Checklist.ApplyBlocked
+}
+
+func hasAutoRunnableSelection(scope contentScope) bool {
+	return scope.IncludeFiles || scope.IncludeDatabases || scope.IncludeEmailContent || scope.IncludeEmailConfig || scope.IncludeCron
+}
+
+func (ws *workbenchExecServer) runPreflightInline(base context.Context, sessionID string, startedAt time.Time) error {
+	tail := &tailBuffer{limit: execTailLimit}
+	ctx, cancel := context.WithTimeout(base, jobTimeout)
+	defer cancel()
+	for _, st := range pipelineSteps(ws.dir) {
+		ws.journalPhaseRunning(sessionID, "Controllo iniziale: "+st.Name, startedAt)
+		err := ws.runner(ctx, tail, st.Name, st.Argv)
+		if err != nil && !st.Tolerant {
+			return fmt.Errorf("%s: %w", st.Name, err)
+		}
+	}
+	return nil
 }
 
 // runStep runs ONE orchestrator step with its OWN execTimeout, identical to the
@@ -367,6 +394,80 @@ func (ws *workbenchExecServer) handleStartMigration(w http.ResponseWriter, r *ht
 	http.Redirect(w, r, dest+"?migrate="+resultCode(result, scope), http.StatusSeeOther)
 }
 
+func (ws *workbenchExecServer) handleSmartStartMigration(w http.ResponseWriter, r *http.Request, sessionID, destBase string) {
+	sess, err := ws.store.Get(sessionID)
+	if err != nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	dest := destBase
+	if sess.Setup == nil {
+		http.Redirect(w, r, dest+"?migrate=needs_setup", http.StatusSeeOther)
+		return
+	}
+	if r.FormValue("confirm_start") != "1" {
+		http.Error(w, "missing start confirmation", http.StatusForbidden)
+		return
+	}
+	if _, err := os.Stat(filepath.Join(ws.dir, "host.yaml")); err != nil {
+		http.Redirect(w, r, dest+"?migrate=config_missing", http.StatusSeeOther)
+		return
+	}
+	scope := deriveContentScope(sess)
+	if !hasAutoRunnableSelection(scope) {
+		http.Redirect(w, r, dest+"?migrate=no_auto", http.StatusSeeOther)
+		return
+	}
+	if !ws.job.tryReserve() {
+		writeBusy409(w, ws.dir, ws.job)
+		return
+	}
+	startedAt := time.Now().UTC()
+	startJobJournal(ws.dir, sessionID, orchestratorAction, startedAt)
+	var runErr error
+	stopPhase := orchestratorAction
+	defer func() {
+		finishJobJournal(ws.dir, sessionID, orchestratorAction, stopPhase, startedAt, time.Now().UTC(), runErr)
+		ws.job.release()
+	}()
+
+	f := readArtifactFacts(ws.dir)
+	if f.Checklist == nil || f.Checklist.OverallStatus == "NOT_READY" {
+		if err := ws.runPreflightInline(ws.base, sessionID, startedAt); err != nil {
+			runErr = err
+			http.Redirect(w, r, dest+"?migrate=preflight_failed", http.StatusSeeOther)
+			return
+		}
+	}
+	if isSmartStartHardBlockedByChecklist(ws.dir) {
+		runErr = errors.New("smart start hard block")
+		http.Redirect(w, r, dest+"?migrate=blocked", http.StatusSeeOther)
+		return
+	}
+
+	f = readArtifactFacts(ws.dir)
+	scope = deriveContentScope(sess)
+	phases := buildOrchestratorPhases(ws.dir, f, scope)
+	if len(phases) == 0 {
+		http.Redirect(w, r, dest+"?migrate=no_auto", http.StatusSeeOther)
+		return
+	}
+
+	result := ws.runOrchestrationWithGate(ws.base, sessionID, phases, startedAt, isSmartStartHardBlockedByChecklist)
+	runErr = result.Err
+	if p := lastRunningPhase(result.Outcomes); p != "" {
+		stopPhase = p
+	}
+	if freshSess, getErr := ws.store.Get(sessionID); getErr == nil {
+		reason := "avvio smart: " + summarizeOutcomes(result.Outcomes)
+		if result.Stopped {
+			reason += " [interrotta]"
+		}
+		_, _ = ws.store.SetStatus(sessionID, freshSess.Status, true, reason, time.Now().UTC())
+	}
+	http.Redirect(w, r, dest+"?migrate="+resultCode(result, scope), http.StatusSeeOther)
+}
+
 // lastRunningPhase returns the label of the phase that failed (or the last one
 // that ran), for the journal's terminal phase field. Empty when none ran.
 func lastRunningPhase(outs []phaseOutcome) string {
@@ -418,6 +519,10 @@ func migrateFlash(code string) string {
 		return "Conferma lo scope prima di avviare la migrazione."
 	case "blocked":
 		return "Migrazione non avviata: la verifica migrazione segnala problemi bloccanti. Risolvili e riesegui il preflight."
+	case "config_missing":
+		return "Completa le credenziali sorgente e destinazione prima di avviare la migrazione."
+	case "preflight_failed":
+		return "Controllo iniziale non completato: la migrazione non è partita perché mancano informazioni tecniche indispensabili."
 	case "no_auto":
 		return "Nessuna area automatica da avviare: le aree incluse (es. DNS) sono gestite come task manuali verificabili."
 	case "done":

@@ -78,12 +78,12 @@
     {{/* Report + archive */}}
     <div class="stack" style="gap:1rem">
       <div class="card">
-        <div class="card-h"><span class="ttl">📄 Report tecnico</span></div>
+        <div class="card-h"><span class="ttl">📄 Documenti tecnici</span></div>
         {{if .Report.HasTechReport}}
-        <p class="muted" style="font-size:.86rem">Il report tecnico completo (report.json e artifact) è disponibile in Modalità esperto.</p>
-        <a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}">Apri gli artifact →</a>
+        <p class="muted" style="font-size:.86rem">I documenti tecnici della migrazione sono disponibili nella vista tecnica.</p>
+        <a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}">Apri documenti tecnici →</a>
         {{else}}
-        <p class="muted" style="font-size:.86rem">Nessun report di applicazione ancora presente. Sarà disponibile dopo la migrazione automatica.</p>
+        <p class="muted" style="font-size:.86rem">Nessun documento di applicazione ancora presente. Sarà disponibile dopo la migrazione automatica.</p>
         {{end}}
       </div>
       <div class="card">

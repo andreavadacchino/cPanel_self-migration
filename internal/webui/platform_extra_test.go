@@ -188,6 +188,27 @@ func TestPlatformCockpitTaskListWithRows(t *testing.T) {
 	}
 }
 
+// The platform header must reuse the workbench risk badge, not only the raw
+// governance status. A cutover-only blocker is a warning, not a migration
+// blocker, so the primary platform path must spell that distinction out.
+func TestPlatformHeaderRendersRiskBadge(t *testing.T) {
+	dir := t.TempDir()
+	ps, store := newPlatformTest(t, dir, false)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+		Mode: "migration-checklist", FormatVersion: 1,
+		OverallStatus: accountinventory.OverallBlocked,
+		ApplyBlocked:  false,
+	})
+	body := platformSessionBody(t, ps, sess.ID, "cockpit")
+	if !strings.Contains(body, "Bloccante cutover") {
+		t.Error("platform header must render the reconciled risk badge")
+	}
+	if strings.Contains(body, "Bloccante migrazione") {
+		t.Error("cutover-only blockers must not be presented as migration blockers")
+	}
+}
+
 // Honesty guard: manual_actions_required precedes ready_for_apply/apply, so the
 // stepper must NOT render a later phase ("Migrazione") as completed — that would
 // falsely claim the migration already ran. (This pins the reason the status is
@@ -224,7 +245,7 @@ func TestPlatformCockpitCTANoSelfLoop(t *testing.T) {
 }
 
 // Operator-first: confirming the scope from the platform Piano screen keeps the
-// operator ON /platform (returns to /plan), never bouncing to the expert
+// operator ON /platform (returns to the cockpit), never bouncing to the expert
 // workbench, and actually persists the confirmation.
 func TestPlatformConfirmScopeStaysInPlatform(t *testing.T) {
 	dir := t.TempDir()
@@ -241,8 +262,8 @@ func TestPlatformConfirmScopeStaysInPlatform(t *testing.T) {
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("scope POST = %d, want 303\n%s", rr.Code, rr.Body.String())
 	}
-	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"/plan?scope=updated" {
-		t.Errorf("scope redirect = %q, want the platform Piano screen (not the workbench)", loc)
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"?scope=updated" {
+		t.Errorf("scope redirect = %q, want the platform cockpit (not the workbench)", loc)
 	}
 	got, _ := store.Get(sess.ID)
 	if got.Setup == nil || got.Setup.ScopeConfirmedAt == nil {
@@ -263,8 +284,8 @@ func TestPlatformConfirmScopeNeedArea(t *testing.T) {
 	csrf := fetchCSRF(t, h)
 	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/scope",
 		url.Values{"csrf": {csrf}, "preset": {"custom"}, "dns": {"1"}})
-	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"/plan?scope=need_area" {
-		t.Errorf("DNS-only scope redirect = %q, want ...plan?scope=need_area", loc)
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"?scope=need_area" {
+		t.Errorf("DNS-only scope redirect = %q, want ...?scope=need_area", loc)
 	}
 	if got, _ := store.Get(sess.ID); got.Setup != nil && got.Setup.ScopeConfirmedAt != nil {
 		t.Error("a DNS-only scope must not be confirmed")
@@ -307,13 +328,12 @@ func TestPlatformPlanRendersScopeForm(t *testing.T) {
 	}
 }
 
-// Operator-first: starting the migration runs the SAME orchestrator behind the
-// SAME strong confirmation, but returns to the platform cockpit — never the
-// workbench.
+// Operator-first: starting the migration runs the platform smart-start flow and
+// returns to the platform cockpit — never the workbench.
 func TestPlatformStartMigrationInPlatform(t *testing.T) {
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
-	rr := doReq(env.h, http.MethodPost, "/platform/migrations/"+env.sessID+"/start-migration",
-		url.Values{"csrf": {env.csrf}, "confirm_account": {"giorginisposi"}})
+	rr := doReq(env.h, http.MethodPost, "/platform/migrations/"+env.sessID+"/smart-start",
+		url.Values{"csrf": {env.csrf}, "confirm_start": {"1"}})
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("start POST = %d, want 303\n%s", rr.Code, rr.Body.String())
 	}
@@ -326,16 +346,15 @@ func TestPlatformStartMigrationInPlatform(t *testing.T) {
 	}
 }
 
-// The strong per-account confirmation and CSRF gate are preserved for the
-// in-platform start (nothing weakened): wrong account name → 403, bad csrf →
-// 403, GET → 405.
+// The in-platform start keeps CSRF plus an explicit server-side confirmation
+// marker: missing marker → 403, bad csrf → 403, GET → 405.
 func TestPlatformStartMigrationGatesPreserved(t *testing.T) {
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
-	path := "/platform/migrations/" + env.sessID + "/start-migration"
-	if rr := doReq(env.h, http.MethodPost, path, url.Values{"csrf": {env.csrf}, "confirm_account": {"wrong-name"}}); rr.Code != http.StatusForbidden {
-		t.Errorf("wrong confirm_account = %d, want 403", rr.Code)
+	path := "/platform/migrations/" + env.sessID + "/smart-start"
+	if rr := doReq(env.h, http.MethodPost, path, url.Values{"csrf": {env.csrf}}); rr.Code != http.StatusForbidden {
+		t.Errorf("missing confirm_start = %d, want 403", rr.Code)
 	}
-	if rr := doReq(env.h, http.MethodPost, path, url.Values{"csrf": {"nope"}, "confirm_account": {"giorginisposi"}}); rr.Code != http.StatusForbidden {
+	if rr := doReq(env.h, http.MethodPost, path, url.Values{"csrf": {"nope"}, "confirm_start": {"1"}}); rr.Code != http.StatusForbidden {
 		t.Errorf("bad csrf = %d, want 403", rr.Code)
 	}
 	if rr := doReq(env.h, http.MethodGet, path, nil); rr.Code != http.StatusMethodNotAllowed {
@@ -344,6 +363,54 @@ func TestPlatformStartMigrationGatesPreserved(t *testing.T) {
 	// The session was never started (no journal, still startable).
 	if got, _ := env.store.Get(env.sessID); got.Status != workbench.StatusReadyForApply {
 		t.Errorf("a refused start must not change the session status, got %q", got.Status)
+	}
+}
+
+func TestPlatformSmartStartRunsPreflightThenMigration(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	setup := &workbench.SetupMeta{
+		Content: workbench.ContentSelection{Files: true, Databases: true},
+	}
+	sess, err := store.CreateWithSetup("giorginisposi", "src", "dst", setup, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ConfirmScope(sess.ID, setup.Content, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeValidatedConfigAt(dir, yamlConfig{
+		Src:  yamlHost{IP: "1.2.3.4", Port: 22, SSHUser: "srcacct", SSHPass: "src-secret", Timeout: "15s"},
+		Dest: yamlHost{IP: "5.6.7.8", Port: 22, SSHUser: "dstacct", SSHPass: "dst-secret", Timeout: "15s"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fr := &fakeRunner{onCall: func(name string) {
+		if name == "inventory checklist" {
+			writeChecklist(t, dir, readyChecklist())
+		}
+	}}
+	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/smart-start",
+		url.Values{"csrf": {csrf}, "confirm_start": {"1"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("smart-start = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	names := []string{}
+	for _, c := range fr.recorded() {
+		names = append(names, c.name)
+	}
+	for _, want := range []string{"account inventory", "inventory diff", "inventory policy", "inventory checklist", "migrate content"} {
+		if !hasCall(names, want) {
+			t.Fatalf("smart-start calls = %v, missing %q", names, want)
+		}
+	}
+	if strings.Contains(rr.Header().Get("Location"), "/workbench/") {
+		t.Fatal("smart-start must return to the platform")
 	}
 }
 
