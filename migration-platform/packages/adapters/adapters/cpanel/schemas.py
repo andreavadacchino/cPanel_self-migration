@@ -1,13 +1,29 @@
-"""Schemas describing how to talk to a cPanel host (no secrets logic)."""
+"""Schemas describing UAPI responses (no secrets logic).
+
+``CpanelUapiResponse`` is the normalized UAPI ``/execute`` envelope
+(``result.{status,data,errors,...}``). Connection coordinates + the resolved
+token are passed as plain constructor args to ``CpanelClient`` and held only in
+memory for the duration of a call — never modelled/persisted here.
+"""
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
-class CpanelCredentials(BaseModel):
-    host: str
-    username: str
-    # Sprint 0 placeholder — real credential handling is out of scope.
-    api_token: str | None = None
-    port: int = 2083
+class CpanelUapiResponse(BaseModel):
+    """Parsed UAPI response. ``status == 1`` means success."""
+
+    module: str
+    function: str
+    status: int
+    data: Any = None
+    errors: list[str] = Field(default_factory=list)
+    messages: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return self.status == 1

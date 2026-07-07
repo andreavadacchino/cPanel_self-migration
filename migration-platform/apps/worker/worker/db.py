@@ -16,6 +16,7 @@ import os
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    JSON,
     DateTime,
     Integer,
     MetaData,
@@ -57,6 +58,42 @@ job_events = Table(
     Column("message", Text, nullable=False),
     Column("progress", Integer, nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+# Subset of the endpoints table the worker reads (to build a source) and
+# updates (connection_status/capabilities after an inventory read). No FK: DML
+# matches Postgres by column name; the authoritative schema lives in Alembic.
+endpoints = Table(
+    "endpoints",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("migration_id", Integer, nullable=False),
+    Column("role", String(16), nullable=False),
+    Column("host", String(255), nullable=False),
+    Column("port", Integer, nullable=False, default=2083),
+    Column("username", String(255), nullable=False),
+    Column("auth_type", String(16), nullable=False, default="mock"),
+    Column("auth_ref", String(255), nullable=True),
+    Column("connection_status", String(16), nullable=False, default="unknown"),
+    Column("last_checked_at", DateTime(timezone=True), nullable=True),
+    Column("last_error", Text, nullable=True),
+    Column("capabilities", JSON, nullable=True),
+)
+
+inventory_snapshots = Table(
+    "inventory_snapshots",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("migration_id", Integer, nullable=False),
+    Column("endpoint_id", Integer, nullable=False),
+    Column("endpoint_role", String(16), nullable=False),
+    Column("status", String(16), nullable=False, default="pending"),
+    Column("captured_at", DateTime(timezone=True), nullable=True),
+    Column("summary", JSON, nullable=True),
+    Column("data", JSON, nullable=True),
+    Column("error", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
 
@@ -150,3 +187,80 @@ def mark_failed(engine: Engine, job_id: int, error: str) -> None:
             .where(jobs.c.id == job_id)
             .values(status="failed", error=error, finished_at=_now())
         )
+
+
+def get_job_migration_id(engine: Engine, job_id: int) -> int | None:
+    with engine.connect() as conn:
+        row = conn.execute(
+            select(jobs.c.migration_id).where(jobs.c.id == job_id)
+        ).first()
+    return None if row is None else row[0]
+
+
+def get_endpoints_for_migration(engine: Engine, migration_id: int) -> list:
+    """Return the endpoints (connection coordinates only) for a migration."""
+    with engine.connect() as conn:
+        return conn.execute(
+            select(
+                endpoints.c.id,
+                endpoints.c.role,
+                endpoints.c.host,
+                endpoints.c.port,
+                endpoints.c.username,
+                endpoints.c.auth_type,
+                endpoints.c.auth_ref,
+            )
+            .where(endpoints.c.migration_id == migration_id)
+            .order_by(endpoints.c.id)
+        ).all()
+
+
+def update_endpoint_capabilities(
+    engine: Engine,
+    endpoint_id: int,
+    *,
+    status: str,
+    capabilities: dict | None,
+    error: str | None,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            update(endpoints)
+            .where(endpoints.c.id == endpoint_id)
+            .values(
+                connection_status=status,
+                capabilities=capabilities,
+                last_error=error,
+                last_checked_at=_now(),
+            )
+        )
+
+
+def create_inventory_snapshot(
+    engine: Engine,
+    *,
+    migration_id: int,
+    endpoint_id: int,
+    endpoint_role: str,
+    status: str,
+    summary: dict | None,
+    data: dict | None,
+    error: str | None,
+) -> int:
+    now = _now()
+    with engine.begin() as conn:
+        result = conn.execute(
+            insert(inventory_snapshots).values(
+                migration_id=migration_id,
+                endpoint_id=endpoint_id,
+                endpoint_role=endpoint_role,
+                status=status,
+                summary=summary,
+                data=data,
+                error=error,
+                captured_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        return int(result.inserted_primary_key[0])

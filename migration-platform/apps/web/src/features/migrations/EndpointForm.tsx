@@ -16,10 +16,14 @@ const ROLE_LABEL: Record<EndpointRole, string> = {
   destination: 'destinazione',
 }
 
+type AuthMode = 'mock' | 'token'
+
 export default function EndpointForm({ migrationId, role, onCreated }: Props) {
   const [host, setHost] = useState('')
   const [username, setUsername] = useState('')
   const [port, setPort] = useState(2083)
+  const [authMode, setAuthMode] = useState<AuthMode>('mock')
+  const [authRef, setAuthRef] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -28,13 +32,15 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
     setSubmitting(true)
     setError(null)
     try {
+      const isToken = authMode === 'token'
       const endpoint = await createEndpoint(migrationId, {
         role,
         label: role === 'source' ? 'Sorgente' : 'Destinazione',
         host: host.trim(),
         port,
         username: username.trim(),
-        auth_type: 'mock',
+        auth_type: isToken ? 'token_ref' : 'mock',
+        auth_ref: isToken ? authRef.trim() : null,
       })
       onCreated(endpoint)
     } catch (err) {
@@ -44,7 +50,11 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
   }
 
   const canSubmit =
-    host.trim() !== '' && username.trim() !== '' && port > 0 && !submitting
+    host.trim() !== '' &&
+    username.trim() !== '' &&
+    port > 0 &&
+    (authMode === 'mock' || authRef.trim() !== '') &&
+    !submitting
 
   return (
     <form className="endpoint-form" onSubmit={handleSubmit}>
@@ -77,12 +87,35 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
           />
         </label>
       </div>
+      <label className="field">
+        <span className="field__label">Autenticazione</span>
+        <select
+          className="input"
+          value={authMode}
+          onChange={(e) => setAuthMode(e.target.value as AuthMode)}
+        >
+          <option value="mock">Mock (test locale)</option>
+          <option value="token">Token cPanel (env://)</option>
+        </select>
+      </label>
+      {authMode === 'token' && (
+        <label className="field">
+          <span className="field__label">Riferimento token</span>
+          <input
+            className="input"
+            value={authRef}
+            onChange={(e) => setAuthRef(e.target.value)}
+            placeholder="env://SOURCE_CPANEL_TOKEN"
+          />
+        </label>
+      )}
       {error && <div className="state-msg state-msg--error">{error}</div>}
       <button type="submit" className="btn btn--primary" disabled={!canSubmit}>
         {submitting ? 'Salvataggio…' : `Salva ${ROLE_LABEL[role]}`}
       </button>
       <p className="hint">
-        Autenticazione mock (Sprint 1): nessun segreto viene salvato.
+        Nessun segreto viene salvato: solo un riferimento opaco (es.
+        env://VAR). Il token viene letto dall’ambiente, mai memorizzato.
       </p>
     </form>
   )

@@ -79,3 +79,12 @@ class Endpoint(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+    @property
+    def has_auth_ref(self) -> bool:
+        """Whether an opaque credential reference is configured.
+
+        Exposed to the API instead of ``auth_ref`` so the reference itself is
+        never serialized to the UI.
+        """
+        return self.auth_ref is not None

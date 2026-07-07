@@ -69,7 +69,9 @@ class EndpointRead(BaseModel):
     port: int
     username: str
     auth_type: str
-    auth_ref: str | None
+    # Sprint 2 debt fix: the opaque auth_ref is NEVER returned. Only a boolean
+    # flag tells the UI whether a credential reference is configured.
+    has_auth_ref: bool
     connection_status: str
     last_checked_at: datetime | None
     last_error: str | None

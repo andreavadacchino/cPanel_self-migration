@@ -129,7 +129,13 @@ def test_test_connection_failure_mock_when_host_contains_fail(
     assert body["last_error"]
 
 
-def test_endpoint_accepts_opaque_auth_ref(client: TestClient) -> None:
+def test_endpoint_accepts_opaque_auth_ref_but_never_returns_it(
+    client: TestClient,
+) -> None:
+    """Sprint 2 debt fix: the opaque auth_ref is stored but never echoed.
+
+    The response exposes only ``has_auth_ref: true`` — no auth_ref, no secret.
+    """
     migration_id = _new_migration(client)
     payload = _source_payload()
     payload["auth_type"] = "token_ref"
@@ -139,10 +145,28 @@ def test_endpoint_accepts_opaque_auth_ref(client: TestClient) -> None:
     )
     assert created.status_code == 201
     body = created.json()
-    # The opaque reference round-trips verbatim...
-    assert body["auth_ref"] == "vault://secret/ref-only"
-    # ...and the response schema has no secret-bearing field at all.
-    assert set(body) & {"password", "token", "secret", "auth_secret"} == set()
+    # The reference itself is NOT returned to the UI...
+    assert "auth_ref" not in body
+    # ...only a boolean flag, and no secret-bearing field of any kind.
+    assert body["has_auth_ref"] is True
+    assert set(body) & {
+        "auth_ref",
+        "password",
+        "token",
+        "secret",
+        "auth_secret",
+    } == set()
+
+
+def test_endpoint_without_auth_ref_reports_has_auth_ref_false(
+    client: TestClient,
+) -> None:
+    migration_id = _new_migration(client)
+    created = client.post(
+        f"/api/migrations/{migration_id}/endpoints", json=_source_payload()
+    )
+    assert created.status_code == 201
+    assert created.json()["has_auth_ref"] is False
 
 
 def test_endpoint_rejects_raw_secret_auth_ref(client: TestClient) -> None:

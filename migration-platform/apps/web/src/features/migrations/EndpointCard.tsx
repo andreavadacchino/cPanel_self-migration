@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   testConnection,
+  type Capabilities,
   type Endpoint,
   type EndpointRole,
 } from '../../lib/api'
@@ -17,6 +18,41 @@ interface Props {
 const TITLE: Record<EndpointRole, string> = {
   source: 'Server sorgente',
   destination: 'Server destinazione',
+}
+
+const CAP_LABELS: ReadonlyArray<[keyof Capabilities, string]> = [
+  ['can_read_account_info', 'Account'],
+  ['can_read_domains', 'Domini'],
+  ['can_read_email', 'Email'],
+  ['can_read_databases', 'Database'],
+  ['can_read_cron', 'Cron'],
+  ['can_read_ssl', 'SSL'],
+  ['can_read_dns', 'DNS'],
+]
+
+function CapabilitiesView({ capabilities }: { capabilities: Capabilities }) {
+  return (
+    <div className="capabilities">
+      <div className="hint">
+        Modalità: {capabilities.source === 'mock' ? 'mock' : 'cPanel reale'}
+      </div>
+      <div className="cap-badges">
+        {CAP_LABELS.map(([key, label]) => (
+          <span
+            key={key}
+            className={`badge ${Boolean(capabilities[key]) ? '' : 'badge--muted'}`}
+          >
+            {label}
+          </span>
+        ))}
+      </div>
+      {capabilities.limitations.length > 0 && (
+        <div className="hint">
+          Non disponibili: {capabilities.limitations.join(', ')}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function EndpointCard({
@@ -75,6 +111,9 @@ export default function EndpointCard({
             <div className="state-msg state-msg--error">
               {endpoint.last_error}
             </div>
+          )}
+          {endpoint.capabilities && (
+            <CapabilitiesView capabilities={endpoint.capabilities} />
           )}
           {error && <div className="state-msg state-msg--error">{error}</div>}
           <button

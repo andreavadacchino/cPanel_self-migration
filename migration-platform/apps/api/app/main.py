@@ -12,6 +12,10 @@ from app.modules.endpoints.router import (
     migration_endpoints_router,
 )
 from app.modules.health.router import router as health_router
+from app.modules.inventory.router import (
+    capabilities_router,
+    inventory_router,
+)
 from app.modules.jobs.router import router as jobs_router
 from app.modules.migrations.router import router as migrations_router
 from app.modules.preflight.router import router as preflight_router
@@ -38,6 +42,8 @@ def create_app() -> FastAPI:
     app.include_router(endpoints_router)
     app.include_router(preflight_router)
     app.include_router(jobs_router)
+    app.include_router(inventory_router)
+    app.include_router(capabilities_router)
 
     return app
 
