@@ -115,6 +115,23 @@ func hasCall(names []string, want string) bool {
 	return false
 }
 
+// waitJobSettled polls the job journal until the async smart-start reaches a
+// terminal state, so a test can observe its outcome after the immediate 303 and
+// not race the background goroutine's tempdir writes on cleanup. Fails the test
+// if the run never settles.
+func waitJobSettled(t *testing.T, dir string) *jobJournal {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if jj, ok := readJobJournal(dir); ok && jj.State != jobStateRunning {
+			return jj
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("async smart-start never settled in %s", dir)
+	return nil
+}
+
 func argvFor(fr *fakeRunner, name string) []string {
 	for _, c := range fr.recorded() {
 		if c.name == name {

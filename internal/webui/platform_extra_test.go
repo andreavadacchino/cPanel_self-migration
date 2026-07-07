@@ -344,6 +344,9 @@ func TestPlatformStartMigrationInPlatform(t *testing.T) {
 	if strings.Contains(loc, "/workbench/") {
 		t.Error("start must return to the platform, never the workbench")
 	}
+	// The run is asynchronous now: wait for it to settle so the goroutine's
+	// writes finish before the tempdir is cleaned up.
+	waitJobSettled(t, env.dir)
 }
 
 // The in-platform start keeps CSRF plus an explicit server-side confirmation
@@ -400,6 +403,9 @@ func TestPlatformSmartStartRunsPreflightThenMigration(t *testing.T) {
 	if rr.Code != http.StatusSeeOther {
 		t.Fatalf("smart-start = %d, want 303\n%s", rr.Code, rr.Body.String())
 	}
+	// The migration runs in the background now: wait for it to settle before
+	// asserting the recorded runner calls (and before tempdir cleanup).
+	waitJobSettled(t, dir)
 	names := []string{}
 	for _, c := range fr.recorded() {
 		names = append(names, c.name)
@@ -411,6 +417,100 @@ func TestPlatformSmartStartRunsPreflightThenMigration(t *testing.T) {
 	}
 	if strings.Contains(rr.Header().Get("Location"), "/workbench/") {
 		t.Fatal("smart-start must return to the platform")
+	}
+	waitJobSettled(t, dir)
+}
+
+// newSmartStartReady builds a session ready for the platform smart-start with a
+// caller-supplied runner and a pre-written ready checklist, so the run skips the
+// preflight and goes straight to the orchestrator phase ("migrate content") —
+// the surface the async tests below exercise.
+func newSmartStartReady(t *testing.T, fr *fakeRunner) (h http.Handler, dir, id string) {
+	t.Helper()
+	dir = t.TempDir()
+	store := mustStore(t, dir)
+	setup := &workbench.SetupMeta{Content: workbench.ContentSelection{Files: true, Databases: true}}
+	sess, err := store.CreateWithSetup("giorginisposi", "src", "dst", setup, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ConfirmScope(sess.ID, setup.Content, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeValidatedConfigAt(dir, yamlConfig{
+		Src:  yamlHost{IP: "1.2.3.4", Port: 22, SSHUser: "srcacct", SSHPass: "src-secret", Timeout: "15s"},
+		Dest: yamlHost{IP: "5.6.7.8", Port: 22, SSHUser: "dstacct", SSHPass: "dst-secret", Timeout: "15s"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeChecklist(t, dir, readyChecklist())
+	h, err = New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, dir, sess.ID
+}
+
+// The smart-start is asynchronous: the 303 fires immediately with ?migrate=started
+// (not the outcome), and the real result is persisted in the job journal and then
+// surfaced as the cockpit flash even though the reloaded URL still says started.
+func TestPlatformSmartStartIsAsyncWithPersistedOutcome(t *testing.T) {
+	fr := &fakeRunner{}
+	h, dir, id := newSmartStartReady(t, fr)
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+id+"/smart-start",
+		url.Values{"csrf": {csrf}, "confirm_start": {"1"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("smart-start = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+id+"?migrate=started" {
+		t.Errorf("redirect = %q, want an immediate ?migrate=started (async)", loc)
+	}
+	jj := waitJobSettled(t, dir)
+	if jj.State != jobStateCompleted {
+		t.Fatalf("journal state = %q, want completed", jj.State)
+	}
+	if !strings.Contains(jj.Outcome, "completata") {
+		t.Errorf("journal outcome = %q, want the human completion message", jj.Outcome)
+	}
+	body := doReq(h, http.MethodGet, "/platform/migrations/"+id+"?migrate=started", nil).Body.String()
+	if !strings.Contains(body, "completata") {
+		t.Error("cockpit must show the terminal outcome, not the stale 'started' flash")
+	}
+}
+
+// The single-writer slot is reserved SYNCHRONOUSLY before the 303, so a second
+// start while the background job runs is a readable 409, never a concurrent run.
+func TestPlatformSmartStartConcurrentReturns409(t *testing.T) {
+	fr := &fakeRunner{gate: make(chan struct{})} // each step blocks until closed
+	h, dir, id := newSmartStartReady(t, fr)
+	csrf := fetchCSRF(t, h)
+	path := "/platform/migrations/" + id + "/smart-start"
+	form := url.Values{"csrf": {csrf}, "confirm_start": {"1"}}
+	if rr := doReq(h, http.MethodPost, path, form); rr.Code != http.StatusSeeOther {
+		t.Fatalf("first start = %d, want 303", rr.Code)
+	}
+	if rr := doReq(h, http.MethodPost, path, form); rr.Code != http.StatusConflict {
+		t.Errorf("concurrent start = %d, want 409 (slot held by the running job)", rr.Code)
+	}
+	close(fr.gate) // let the first job finish and release the slot
+	waitJobSettled(t, dir)
+}
+
+// A panic in the background goroutine must be recovered into a failed journal —
+// it must never take down the ui process (net/http only recovers per-connection).
+func TestPlatformSmartStartPanicRecovered(t *testing.T) {
+	fr := &fakeRunner{onCall: func(name string) { panic("boom in " + name) }}
+	h, dir, id := newSmartStartReady(t, fr)
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+id+"/smart-start",
+		url.Values{"csrf": {csrf}, "confirm_start": {"1"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("smart-start = %d, want 303", rr.Code)
+	}
+	jj := waitJobSettled(t, dir) // the process being alive to reach here is the point
+	if jj.State != jobStateFailed {
+		t.Errorf("journal state = %q, want failed (panic recovered)", jj.State)
 	}
 }
 

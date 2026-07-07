@@ -50,7 +50,12 @@ type jobJournal struct {
 	State       jobJournalState `json:"state"`
 	Phase       string          `json:"phase"`
 	Error       string          `json:"error,omitempty"`
-	ToolVersion string          `json:"tool_version"`
+	// Outcome is the human, platform-language result message of a terminal run
+	// (the same text the synchronous flow returned via ?migrate=). It lets an
+	// async smart-start show its real result after the fact: the 303 fires when
+	// the job STARTS, so the outcome can only be persisted here, not in the URL.
+	Outcome     string `json:"outcome,omitempty"`
+	ToolVersion string `json:"tool_version"`
 }
 
 // jobJournalName is the fixed filename in the working dir (next to the other
@@ -135,8 +140,10 @@ func startJobJournal(dir, sessionID, action string, startedAt time.Time) {
 }
 
 // finishJobJournal closes the journal to completed|failed. Called from the exec
-// defer so it runs on every return path.
-func finishJobJournal(dir, sessionID, action, phase string, startedAt, now time.Time, execErr error) {
+// defer so it runs on every return path. outcome is the human result message
+// ("" when the caller has none — e.g. the synchronous flows that still flash via
+// ?migrate=); it is persisted so an async run can surface its result later.
+func finishJobJournal(dir, sessionID, action, phase string, startedAt, now time.Time, execErr error, outcome string) {
 	j := jobJournal{
 		SessionID:   sessionID,
 		Action:      action,
@@ -144,6 +151,7 @@ func finishJobJournal(dir, sessionID, action, phase string, startedAt, now time.
 		UpdatedAt:   now,
 		State:       jobStateCompleted,
 		Phase:       phase,
+		Outcome:     outcome,
 		ToolVersion: version.String(),
 	}
 	if execErr != nil {

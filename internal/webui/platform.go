@@ -303,6 +303,16 @@ func (ps *platformServer) handleSession(w http.ResponseWriter, r *http.Request, 
 	if m := migrateFlash(r.URL.Query().Get("migrate")); m != "" {
 		page.Flash = m
 	}
+	// After an async smart-start the 303 fired when the job STARTED (carrying
+	// ?migrate=started), so the real result is not in the query. Once the
+	// background run settles, surface its persisted outcome from the job journal
+	// so a meta-refresh / SSE reload of the same URL shows the actual result
+	// instead of the stale "started" flash. Scoped to THIS session's journal
+	// (single-account dir) and only for a terminal run.
+	if jj, ok := readJobJournal(ps.dir); ok && jj.SessionID == id &&
+		jj.State != jobStateRunning && jj.Outcome != "" {
+		page.Flash = jj.Outcome
+	}
 	ps.render(w, tplName, page)
 }
 

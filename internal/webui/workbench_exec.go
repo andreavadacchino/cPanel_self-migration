@@ -397,7 +397,7 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	startJobJournal(ws.dir, sessionID, action.name, startedAt)
 	var execErr error
 	defer func() {
-		finishJobJournal(ws.dir, sessionID, action.name, action.name, startedAt, time.Now().UTC(), execErr)
+		finishJobJournal(ws.dir, sessionID, action.name, action.name, startedAt, time.Now().UTC(), execErr, "")
 		ws.job.release()
 	}()
 

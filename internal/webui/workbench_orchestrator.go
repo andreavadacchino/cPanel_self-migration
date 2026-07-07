@@ -368,7 +368,7 @@ func (ws *workbenchExecServer) handleStartMigration(w http.ResponseWriter, r *ht
 	var runErr error
 	stopPhase := orchestratorAction
 	defer func() {
-		finishJobJournal(ws.dir, sessionID, orchestratorAction, stopPhase, startedAt, time.Now().UTC(), runErr)
+		finishJobJournal(ws.dir, sessionID, orchestratorAction, stopPhase, startedAt, time.Now().UTC(), runErr, "")
 		ws.job.release()
 	}()
 
@@ -418,54 +418,85 @@ func (ws *workbenchExecServer) handleSmartStartMigration(w http.ResponseWriter, 
 		http.Redirect(w, r, dest+"?migrate=no_auto", http.StatusSeeOther)
 		return
 	}
+	// Reserve the shared single-writer slot SYNCHRONOUSLY: a double submit is a
+	// readable 409 before this handler returns. The slot is released by the
+	// background goroutine below (NOT this handler), so it stays held for the
+	// whole async run — mutually exclusive with /run, /accept, /exec as before.
 	if !ws.job.tryReserve() {
 		writeBusy409(w, ws.dir, ws.job)
 		return
 	}
 	startedAt := time.Now().UTC()
 	startJobJournal(ws.dir, sessionID, orchestratorAction, startedAt)
-	var runErr error
-	stopPhase := orchestratorAction
-	defer func() {
-		finishJobJournal(ws.dir, sessionID, orchestratorAction, stopPhase, startedAt, time.Now().UTC(), runErr)
-		ws.job.release()
-	}()
 
-	f := readArtifactFacts(ws.dir)
-	if f.Checklist == nil || f.Checklist.OverallStatus == "NOT_READY" {
-		if err := ws.runPreflightInline(ws.base, sessionID, startedAt); err != nil {
-			runErr = err
-			http.Redirect(w, r, dest+"?migrate=preflight_failed", http.StatusSeeOther)
+	// The migration runs in the BACKGROUND so the operator is redirected to the
+	// cockpit immediately and follows the live progress there (meta-refresh, and
+	// the SSE stream once mounted) instead of the browser hanging on this POST
+	// for up to jobTimeout. The run uses ws.base (request-independent, already the
+	// case before this refactor) so it survives the handler returning. A panic in
+	// this request-independent goroutine would otherwise take down the whole ui
+	// process (net/http only recovers per-connection), so it is recovered into a
+	// failed journal — exactly like jobManager.execute.
+	go func() {
+		var runErr error
+		outcome := ""
+		stopPhase := orchestratorAction
+		defer func() {
+			if rec := recover(); rec != nil {
+				runErr = fmt.Errorf("errore interno durante la migrazione: %v", rec)
+				outcome = "Migrazione interrotta da un errore interno. Nessun rollback automatico è stato eseguito."
+			}
+			finishJobJournal(ws.dir, sessionID, orchestratorAction, stopPhase, startedAt, time.Now().UTC(), runErr, outcome)
+			ws.job.release()
+		}()
+
+		// Re-read the session inside the goroutine (do not share the handler's
+		// value across the goroutine boundary): the store is the concurrency
+		// authority the rest of the ui already relies on.
+		gsess, gerr := ws.store.Get(sessionID)
+		if gerr != nil {
+			runErr = gerr
 			return
 		}
-	}
-	if isSmartStartHardBlockedByChecklist(ws.dir) {
-		runErr = errors.New("smart start hard block")
-		http.Redirect(w, r, dest+"?migrate=blocked", http.StatusSeeOther)
-		return
-	}
+		gscope := deriveContentScope(gsess)
 
-	f = readArtifactFacts(ws.dir)
-	scope = deriveContentScope(sess)
-	phases := buildOrchestratorPhases(ws.dir, f, scope)
-	if len(phases) == 0 {
-		http.Redirect(w, r, dest+"?migrate=no_auto", http.StatusSeeOther)
-		return
-	}
-
-	result := ws.runOrchestrationWithGate(ws.base, sessionID, phases, startedAt, isSmartStartHardBlockedByChecklist)
-	runErr = result.Err
-	if p := lastRunningPhase(result.Outcomes); p != "" {
-		stopPhase = p
-	}
-	if freshSess, getErr := ws.store.Get(sessionID); getErr == nil {
-		reason := "avvio smart: " + summarizeOutcomes(result.Outcomes)
-		if result.Stopped {
-			reason += " [interrotta]"
+		f := readArtifactFacts(ws.dir)
+		if f.Checklist == nil || f.Checklist.OverallStatus == "NOT_READY" {
+			if err := ws.runPreflightInline(ws.base, sessionID, startedAt); err != nil {
+				runErr = err
+				outcome = migrateFlash("preflight_failed")
+				return
+			}
 		}
-		_, _ = ws.store.SetStatus(sessionID, freshSess.Status, true, reason, time.Now().UTC())
-	}
-	http.Redirect(w, r, dest+"?migrate="+resultCode(result, scope), http.StatusSeeOther)
+		if isSmartStartHardBlockedByChecklist(ws.dir) {
+			runErr = errors.New("smart start hard block")
+			outcome = migrateFlash("blocked")
+			return
+		}
+
+		f = readArtifactFacts(ws.dir)
+		phases := buildOrchestratorPhases(ws.dir, f, gscope)
+		if len(phases) == 0 {
+			outcome = migrateFlash("no_auto")
+			return
+		}
+
+		result := ws.runOrchestrationWithGate(ws.base, sessionID, phases, startedAt, isSmartStartHardBlockedByChecklist)
+		runErr = result.Err
+		outcome = migrateFlash(resultCode(result, gscope))
+		if p := lastRunningPhase(result.Outcomes); p != "" {
+			stopPhase = p
+		}
+		if freshSess, getErr := ws.store.Get(sessionID); getErr == nil {
+			reason := "avvio smart: " + summarizeOutcomes(result.Outcomes)
+			if result.Stopped {
+				reason += " [interrotta]"
+			}
+			_, _ = ws.store.SetStatus(sessionID, freshSess.Status, true, reason, time.Now().UTC())
+		}
+	}()
+
+	http.Redirect(w, r, dest+"?migrate=started", http.StatusSeeOther)
 }
 
 // lastRunningPhase returns the label of the phase that failed (or the last one
@@ -513,6 +544,8 @@ func resultCode(res orchestrationResult, scope contentScope) string {
 // migration screen. Platform language: no argv/artifact/apply_blocked leaks.
 func migrateFlash(code string) string {
 	switch code {
+	case "started":
+		return "Migrazione avviata: l'avanzamento è mostrato qui sotto e si aggiorna in tempo reale."
 	case "needs_setup":
 		return "Questa sessione non ha una configurazione guidata: non può avviare la migrazione automatica."
 	case "scope_unconfirmed":
