@@ -22,8 +22,20 @@ it will ever say is *possible, requires a real smoke test*. Only an executed
 smoke may promote a category to ``confirmed_by_smoke`` — and that promotion is
 **not** done here.
 
+A second, narrower path is also modelled here — the **SSH-Assisted Email
+Identity Clone** (see ``docs/SSH_EMAIL_IDENTITY_CLONE_FEASIBILITY.md``). Unlike
+the backup/restore path, it preserves **email passwords only**, by reading the
+mail password *hash* from the source account filesystem
+(``~/etc/<domain>/shadow``) and re-applying it on the destination mailbox — it
+never learns the plaintext, and it does not touch FTP/MySQL/API-token/WebDisk
+credentials. Its entry point is :func:`recommend_email_identity_strategy`.
+Because the hash is itself sensitive material, that path is refused unless the
+caller can guarantee the hash is redacted everywhere (never persisted, logged or
+exposed).
+
 Infrastructure-free: no DB, no network, no FastAPI, no cPanel, no secrets. The
-public entry point is the pure function :func:`recommend_strategy`.
+public entry points are the pure functions :func:`recommend_strategy` and
+:func:`recommend_email_identity_strategy`.
 """
 
 from __future__ import annotations
@@ -38,6 +50,10 @@ class AccessProfile(str, Enum):
     TOKEN_PLUS_CPANEL_PASSWORD = "token_plus_cpanel_password"
     WHM_RESELLER = "whm_reseller"
     ROOT_WHM = "root_whm"
+    # Account-level shell/filesystem access (SSH as the cPanel user). Not a rung
+    # on the backup/restore power ladder — a distinct axis that can read the mail
+    # ~/etc/<domain>/{passwd,shadow} the token/UAPI layer never sees.
+    SSH_ACCOUNT_ACCESS = "ssh_account_access"
 
 
 class MigrationStrategy(str, Enum):
@@ -45,6 +61,9 @@ class MigrationStrategy(str, Enum):
     RESTORE_ASSISTED_CONFIG_CLONE = "restore_assisted_config_clone"
     FULL_ACCOUNT_RESTORE = "full_account_restore"
     ROOT_TRANSFER = "root_transfer"
+    # Account-level SSH path that preserves EMAIL passwords only, by cloning the
+    # mail password hash from ~/etc/<domain>/shadow (never the plaintext).
+    SSH_ASSISTED_EMAIL_IDENTITY_CLONE = "ssh_assisted_email_identity_clone"
     # Reserved forward-looking vocabulary (documented, not emitted by
     # recommend_strategy in this spike): a mix of restore for config + a
     # separate homedir/data move.
@@ -199,4 +218,137 @@ def recommend_strategy(capabilities: dict) -> dict:
         MigrationStrategy.API_REBUILD,
         CredentialPreservation.OPERATOR_SUPPLIED_ONLY,
         reason,
+    )
+
+
+def _email_result(
+    strategy: MigrationStrategy,
+    preservation: CredentialPreservation,
+    reason: str,
+) -> dict:
+    """The stable 3-key contract for :func:`recommend_email_identity_strategy`.
+
+    Note the key is ``email_password_preservation`` (scoped to email), distinct
+    from ``credential_preservation`` in :func:`recommend_strategy`, so a caller
+    can never mistake an email-only verdict for an all-credentials one.
+    """
+    return {
+        "recommended_strategy": strategy.value,
+        "email_password_preservation": preservation.value,
+        "reason": reason,
+    }
+
+
+def recommend_email_identity_strategy(capabilities: dict) -> dict:
+    """Recommend whether the SSH-Assisted Email Identity Clone is viable.
+
+    This models the legacy Go engine's mail path: read the mail password *hash*
+    from ``~/etc/<domain>/shadow`` on the source (never the plaintext) and
+    re-apply it on the destination mailbox (``Email::add_pop password_hash=…``
+    for a new mailbox, or an atomic shadow-hash rewrite for an existing one),
+    then copy and verify the Maildir. It preserves **email passwords only**.
+
+    ``capabilities`` is a flat dict. Recognized keys (all optional; anything not
+    exactly ``True`` is treated as "not available"):
+
+    * ``access_profile``  — must be ``ssh_account_access`` for a clone
+    * ``can_ssh_source_account`` / ``can_ssh_destination_account``  — explicit
+      account-level SSH prerequisites on BOTH sides (not implied by the flags below)
+    * ``can_read_source_mail_shadow``  — read the hash source (hard requirement)
+    * ``can_read_source_mail_passwd``  — enumerate the source mailboxes
+    * ``can_create_destination_mailbox_with_password_hash``
+    * ``can_update_destination_mail_shadow_hash``
+    * ``can_copy_maildir`` / ``can_verify_maildir``
+    * ``can_redact_hashes_everywhere``  — security gate (failure-closed)
+
+    Returns ``{"recommended_strategy", "email_password_preservation", "reason"}``
+    with plain string values. It preserves EMAIL passwords only and never claims
+    ``confirmed_by_smoke``. Never raises on malformed input.
+    """
+    caps = capabilities if isinstance(capabilities, dict) else {}
+    profile = _coerce_profile(caps.get("access_profile"))
+
+    def flag(key: str) -> bool:
+        return caps.get(key) is True
+
+    # Gate 1 — the access profile must be SSH/account-level. Token/UAPI access
+    # never sees the mail ~/etc/<domain>/shadow.
+    if profile != AccessProfile.SSH_ACCOUNT_ACCESS:
+        if profile == AccessProfile.TOKEN_ONLY:
+            reason = "Token-only access cannot read source mail shadow hashes."
+        elif profile is None:
+            reason = (
+                "Access profile is missing or unrecognized: cannot read source "
+                "mail shadow hashes."
+            )
+        else:
+            reason = (
+                f"{profile.value} access does not read the account filesystem; "
+                "source mail shadow hashes are not readable."
+            )
+        return _email_result(
+            MigrationStrategy.API_REBUILD, CredentialPreservation.UNAVAILABLE, reason
+        )
+
+    # Gate 1b — SSH account-level access is an EXPLICIT prerequisite on BOTH the
+    # source (to read the shadow) and the destination (to write mailbox/shadow).
+    # It is not implied by the read/write capability flags.
+    if not (flag("can_ssh_source_account") and flag("can_ssh_destination_account")):
+        return _email_result(
+            MigrationStrategy.API_REBUILD,
+            CredentialPreservation.UNAVAILABLE,
+            "SSH account-level access is required on BOTH source and destination; "
+            "one side is missing.",
+        )
+
+    # Gate 1c — with SSH in place, the source mail shadow must actually be readable.
+    if not flag("can_read_source_mail_shadow"):
+        return _email_result(
+            MigrationStrategy.API_REBUILD,
+            CredentialPreservation.UNAVAILABLE,
+            "Source mail shadow hashes are not readable with the current access.",
+        )
+
+    # Gate 2 — destination must be able to BOTH create a new mailbox from a hash
+    # AND rewrite an existing mailbox's shadow hash (the legacy engine needs both).
+    if not (
+        flag("can_create_destination_mailbox_with_password_hash")
+        and flag("can_update_destination_mail_shadow_hash")
+    ):
+        return _email_result(
+            MigrationStrategy.API_REBUILD,
+            CredentialPreservation.UNAVAILABLE,
+            "Source hash is readable, but destination cannot create or update "
+            "mailboxes with password hashes.",
+        )
+
+    # Gate 3 — a *verified* identity clone also needs the Maildir copy + verify.
+    if not (flag("can_copy_maildir") and flag("can_verify_maildir")):
+        return _email_result(
+            MigrationStrategy.API_REBUILD,
+            CredentialPreservation.UNAVAILABLE,
+            "Mailbox identity is writable but Maildir copy/verify is not "
+            "available; cannot perform a verified email identity clone.",
+        )
+
+    # Gate 4 (security, failure-closed) — the hash is sensitive material. Refuse
+    # a hash-preserving migration unless the caller can guarantee redaction.
+    if not flag("can_redact_hashes_everywhere"):
+        return _email_result(
+            MigrationStrategy.API_REBUILD,
+            CredentialPreservation.UNAVAILABLE,
+            "Email hashes are sensitive; hash-preserving migration is refused "
+            "until redaction guarantees are available.",
+        )
+
+    # All gates pass → the clone is viable, pending a real smoke test. This
+    # preserves EMAIL passwords ONLY and never claims it is confirmed.
+    return _email_result(
+        MigrationStrategy.SSH_ASSISTED_EMAIL_IDENTITY_CLONE,
+        CredentialPreservation.POSSIBLE_REQUIRES_SMOKE,
+        "Source mail hashes are readable and destination can create/update "
+        "mailbox identity using hashes; Maildir copy and verify are available. "
+        "Hashes must remain transient and redacted. Preserves EMAIL passwords "
+        "only — NOT FTP, MySQL, API-token or WebDisk credentials — and requires "
+        "a real smoke test to confirm.",
     )
