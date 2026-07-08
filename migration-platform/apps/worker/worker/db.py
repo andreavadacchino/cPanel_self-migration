@@ -74,6 +74,7 @@ endpoints = Table(
     Column("username", String(255), nullable=False),
     Column("auth_type", String(16), nullable=False, default="mock"),
     Column("auth_ref", String(255), nullable=True),
+    Column("auth_secret_enc", Text, nullable=True),
     Column("connection_status", String(16), nullable=False, default="unknown"),
     Column("last_checked_at", DateTime(timezone=True), nullable=True),
     Column("last_error", Text, nullable=True),
@@ -209,6 +210,7 @@ def get_endpoints_for_migration(engine: Engine, migration_id: int) -> list:
                 endpoints.c.username,
                 endpoints.c.auth_type,
                 endpoints.c.auth_ref,
+                endpoints.c.auth_secret_enc,
             )
             .where(endpoints.c.migration_id == migration_id)
             .order_by(endpoints.c.id)

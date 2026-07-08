@@ -35,9 +35,23 @@ class EndpointCreate(BaseModel):
     username: str = Field(min_length=1, max_length=255)
     auth_type: AuthType = AuthType.MOCK
     auth_ref: str | None = Field(default=None, max_length=255)
+    # Write-only: the plaintext token for auth_type 'token'. It is encrypted on
+    # create and never read back (EndpointRead exposes only ``has_auth_secret``).
+    token: str | None = Field(default=None, max_length=4096, repr=False)
 
     @model_validator(mode="after")
-    def _enforce_opaque_auth_ref(self) -> "EndpointCreate":
+    def _enforce_credentials(self) -> "EndpointCreate":
+        if self.auth_type == AuthType.TOKEN:
+            if not self.token:
+                raise ValueError("token is required for auth_type 'token'")
+            if self.auth_ref is not None:
+                raise ValueError("auth_ref must be null for auth_type 'token'")
+            return self
+
+        # No other auth_type accepts a raw token.
+        if self.token is not None:
+            raise ValueError("token is only allowed for auth_type 'token'")
+
         ref = self.auth_ref
         if self.auth_type in (AuthType.NONE, AuthType.MOCK):
             if ref is not None:
@@ -58,6 +72,12 @@ class EndpointCreate(BaseModel):
         return self
 
 
+class EndpointCredentialUpdate(BaseModel):
+    """Refresh a directly-entered (time-limited) token on an existing endpoint."""
+
+    token: str = Field(min_length=1, max_length=4096, repr=False)
+
+
 class EndpointRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -69,9 +89,10 @@ class EndpointRead(BaseModel):
     port: int
     username: str
     auth_type: str
-    # Sprint 2 debt fix: the opaque auth_ref is NEVER returned. Only a boolean
-    # flag tells the UI whether a credential reference is configured.
+    # The opaque auth_ref and the encrypted token are NEVER returned. Only these
+    # boolean flags tell the UI whether a credential is configured.
     has_auth_ref: bool
+    has_auth_secret: bool
     connection_status: str
     last_checked_at: datetime | None
     last_error: str | None

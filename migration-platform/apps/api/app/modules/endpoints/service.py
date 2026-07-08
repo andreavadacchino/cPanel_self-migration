@@ -13,9 +13,10 @@ from adapters.credentials import (
     CredentialResolverNotImplemented,
     resolve_credential,
 )
+from adapters.crypto import SecretDecryptError, SecretKeyError, decrypt_secret, encrypt_secret
 from adapters.inventory import build_inventory_source
-from app.core.errors import NotFoundError, UnprocessableError
-from app.modules.endpoints.models import ConnectionStatus, Endpoint
+from app.core.errors import ConflictError, NotFoundError, UnprocessableError
+from app.modules.endpoints.models import AuthType, ConnectionStatus, Endpoint
 from app.modules.endpoints.schemas import EndpointCreate
 from app.modules.migrations.service import get_migration
 
@@ -46,16 +47,48 @@ def create_endpoint(
         auth_type=payload.auth_type.value,
         auth_ref=payload.auth_ref,
     )
+    # A directly-entered token is encrypted at rest; the plaintext is dropped.
+    if payload.auth_type == AuthType.TOKEN and payload.token:
+        endpoint.auth_secret_enc = _encrypt_token(payload.token)
     db.add(endpoint)
     db.commit()
     db.refresh(endpoint)
     return endpoint
 
 
+def _encrypt_token(token: str) -> str:
+    try:
+        return encrypt_secret(token)
+    except SecretKeyError as exc:
+        # Misconfiguration (no master key) → 422, not a silent 500. Never echoes
+        # the token.
+        raise UnprocessableError(str(exc)) from exc
+
+
 def get_endpoint(db: Session, endpoint_id: int) -> Endpoint:
     endpoint = db.get(Endpoint, endpoint_id)
     if endpoint is None:
         raise NotFoundError("Endpoint", endpoint_id)
+    return endpoint
+
+
+def update_endpoint_credentials(
+    db: Session, endpoint_id: int, token: str
+) -> Endpoint:
+    """Replace a directly-entered (time-limited) token. Re-encrypts and forces
+    a re-test by clearing the previous connection status."""
+    endpoint = get_endpoint(db, endpoint_id)
+    if endpoint.auth_type != AuthType.TOKEN.value:
+        raise ConflictError(
+            "credential update applies only to auth_type 'token' endpoints"
+        )
+    endpoint.auth_secret_enc = _encrypt_token(token)
+    endpoint.connection_status = ConnectionStatus.UNKNOWN.value
+    endpoint.last_error = None
+    endpoint.last_checked_at = None
+    db.add(endpoint)
+    db.commit()
+    db.refresh(endpoint)
     return endpoint
 
 
@@ -66,6 +99,14 @@ def _probe_endpoint(endpoint: Endpoint) -> tuple[str, str | None, dict | None]:
     (only ``env://`` in Sprint 2) and calls the real cPanel UAPI. A missing env
     var is a recorded failure; an unimplemented resolver (vault://) is a 422.
     """
+    # A direct token is decrypted only here, in memory, just before use.
+    token: str | None = None
+    if endpoint.auth_type == AuthType.TOKEN.value:
+        try:
+            token = decrypt_secret(endpoint.auth_secret_enc or "")
+        except (SecretDecryptError, SecretKeyError) as exc:
+            return ConnectionStatus.FAILED.value, str(exc), None
+
     try:
         source = build_inventory_source(
             auth_type=endpoint.auth_type,
@@ -73,6 +114,7 @@ def _probe_endpoint(endpoint: Endpoint) -> tuple[str, str | None, dict | None]:
             port=endpoint.port,
             username=endpoint.username,
             auth_ref=endpoint.auth_ref,
+            token=token,
             resolver=resolve_credential,
         )
     except CredentialResolverNotImplemented as exc:

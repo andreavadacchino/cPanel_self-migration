@@ -470,6 +470,12 @@ body {
   color: var(--slate-500);
 }
 
+.endpoint-card__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 /* Preflight panel */
 .preflight {
   display: flex;

@@ -25,7 +25,8 @@ class EndpointRole(str, enum.Enum):
 
 class AuthType(str, enum.Enum):
     NONE = "none"
-    TOKEN_REF = "token_ref"
+    TOKEN = "token"  # direct cPanel API token, encrypted at rest
+    TOKEN_REF = "token_ref"  # opaque reference (env://VAR) resolved elsewhere
     PASSWORD_REF = "password_ref"
     MOCK = "mock"
 
@@ -59,6 +60,9 @@ class Endpoint(Base):
     )
     # Opaque reference only — never a real password/token.
     auth_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Fernet ciphertext of a directly-entered token (auth_type "token"). The
+    # plaintext is never stored here and never returned by the API.
+    auth_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     connection_status: Mapped[str] = mapped_column(
         String(16),
         default=ConnectionStatus.UNKNOWN.value,
@@ -88,3 +92,12 @@ class Endpoint(Base):
         never serialized to the UI.
         """
         return self.auth_ref is not None
+
+    @property
+    def has_auth_secret(self) -> bool:
+        """Whether a directly-entered token is stored (encrypted).
+
+        Exposed instead of the ciphertext so neither the token nor its
+        ciphertext is ever serialized to the UI.
+        """
+        return self.auth_secret_enc is not None

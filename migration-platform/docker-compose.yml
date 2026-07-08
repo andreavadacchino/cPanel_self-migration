@@ -37,6 +37,11 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-migration}:${POSTGRES_PASSWORD:-migration}@postgres:5432/${POSTGRES_DB:-migration}
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      # Master key that encrypts endpoint tokens at rest. DEV DEFAULT — override
+      # PLATFORM_SECRET_KEY in any shared/prod deploy (with this key a DB dump is
+      # decryptable). Generate one: python -c "from cryptography.fernet import
+      # Fernet; print(Fernet.generate_key().decode())"
+      PLATFORM_SECRET_KEY: ${PLATFORM_SECRET_KEY:-u1TjglXJeq9grsU-BA_BCAp8reG_XfT14fT_lHZ-PBA=}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -52,6 +57,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-migration}:${POSTGRES_PASSWORD:-migration}@postgres:5432/${POSTGRES_DB:-migration}
       REDIS_URL: redis://redis:6379/0
+      # Same master key as the API so the worker can decrypt endpoint tokens.
+      PLATFORM_SECRET_KEY: ${PLATFORM_SECRET_KEY:-u1TjglXJeq9grsU-BA_BCAp8reG_XfT14fT_lHZ-PBA=}
     depends_on:
       postgres:
         condition: service_healthy

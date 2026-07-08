@@ -16,13 +16,14 @@ const ROLE_LABEL: Record<EndpointRole, string> = {
   destination: 'destinazione',
 }
 
-type AuthMode = 'mock' | 'token'
+type AuthMode = 'direct' | 'env' | 'mock'
 
 export default function EndpointForm({ migrationId, role, onCreated }: Props) {
   const [host, setHost] = useState('')
   const [username, setUsername] = useState('')
   const [port, setPort] = useState(2083)
-  const [authMode, setAuthMode] = useState<AuthMode>('mock')
+  const [authMode, setAuthMode] = useState<AuthMode>('direct')
+  const [token, setToken] = useState('')
   const [authRef, setAuthRef] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -32,16 +33,24 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
     setSubmitting(true)
     setError(null)
     try {
-      const isToken = authMode === 'token'
-      const endpoint = await createEndpoint(migrationId, {
+      const base = {
         role,
         label: role === 'source' ? 'Sorgente' : 'Destinazione',
         host: host.trim(),
         port,
         username: username.trim(),
-        auth_type: isToken ? 'token_ref' : 'mock',
-        auth_ref: isToken ? authRef.trim() : null,
-      })
+      }
+      const payload =
+        authMode === 'direct'
+          ? { ...base, auth_type: 'token' as const, token: token.trim() }
+          : authMode === 'env'
+            ? {
+                ...base,
+                auth_type: 'token_ref' as const,
+                auth_ref: authRef.trim(),
+              }
+            : { ...base, auth_type: 'mock' as const }
+      const endpoint = await createEndpoint(migrationId, payload)
       onCreated(endpoint)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Errore sconosciuto')
@@ -49,11 +58,15 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
     }
   }
 
+  const credentialFilled =
+    authMode === 'mock' ||
+    (authMode === 'direct' && token.trim() !== '') ||
+    (authMode === 'env' && authRef.trim() !== '')
   const canSubmit =
     host.trim() !== '' &&
     username.trim() !== '' &&
     port > 0 &&
-    (authMode === 'mock' || authRef.trim() !== '') &&
+    credentialFilled &&
     !submitting
 
   return (
@@ -94,11 +107,25 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
           value={authMode}
           onChange={(e) => setAuthMode(e.target.value as AuthMode)}
         >
+          <option value="direct">Token cPanel</option>
+          <option value="env">Riferimento env://</option>
           <option value="mock">Mock (test locale)</option>
-          <option value="token">Token cPanel (env://)</option>
         </select>
       </label>
-      {authMode === 'token' && (
+      {authMode === 'direct' && (
+        <label className="field">
+          <span className="field__label">Token API cPanel</span>
+          <input
+            className="input"
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            autoComplete="off"
+            placeholder="incolla qui il token cPanel"
+          />
+        </label>
+      )}
+      {authMode === 'env' && (
         <label className="field">
           <span className="field__label">Riferimento token</span>
           <input
@@ -114,8 +141,11 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
         {submitting ? 'Salvataggio…' : `Salva ${ROLE_LABEL[role]}`}
       </button>
       <p className="hint">
-        Nessun segreto viene salvato: solo un riferimento opaco (es.
-        env://VAR). Il token viene letto dall’ambiente, mai memorizzato.
+        {authMode === 'direct'
+          ? 'Il token è cifrato prima di essere salvato e non viene mai mostrato di nuovo. Usa un token a scadenza.'
+          : authMode === 'env'
+            ? 'Salva solo un riferimento opaco (es. env://VAR): il token è letto dall’ambiente, mai memorizzato.'
+            : 'Modalità offline per il test locale: nessuna credenziale richiesta.'}
       </p>
     </form>
   )

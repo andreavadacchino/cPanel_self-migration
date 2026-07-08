@@ -12,6 +12,10 @@ import os
 # Force the Dramatiq StubBroker before any app module (which imports the queue)
 # is loaded, so enqueuing preflight jobs never needs a live Redis.
 os.environ.setdefault("DRAMATIQ_TESTING", "1")
+# A fixed dev Fernet key so endpoint-token encryption works under tests.
+os.environ.setdefault(
+    "PLATFORM_SECRET_KEY", "u1TjglXJeq9grsU-BA_BCAp8reG_XfT14fT_lHZ-PBA="
+)
 
 from collections.abc import Iterator
 

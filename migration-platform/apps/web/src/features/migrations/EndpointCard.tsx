@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   testConnection,
+  updateEndpointCredentials,
   type Capabilities,
   type Endpoint,
   type EndpointRole,
@@ -63,6 +64,9 @@ export default function EndpointCard({
 }: Props) {
   const [testing, setTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [newToken, setNewToken] = useState('')
+  const [savingToken, setSavingToken] = useState(false)
 
   async function handleTest() {
     if (!endpoint) return
@@ -75,6 +79,22 @@ export default function EndpointCard({
       setError(err instanceof Error ? err.message : 'Errore sconosciuto')
     } finally {
       setTesting(false)
+    }
+  }
+
+  async function handleSaveToken() {
+    if (!endpoint || newToken.trim() === '') return
+    setSavingToken(true)
+    setError(null)
+    try {
+      const updated = await updateEndpointCredentials(endpoint.id, newToken.trim())
+      onChanged(updated)
+      setNewToken('')
+      setRefreshing(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Errore sconosciuto')
+    } finally {
+      setSavingToken(false)
     }
   }
 
@@ -116,13 +136,55 @@ export default function EndpointCard({
             <CapabilitiesView capabilities={endpoint.capabilities} />
           )}
           {error && <div className="state-msg state-msg--error">{error}</div>}
-          <button
-            className="btn btn--ghost"
-            onClick={handleTest}
-            disabled={testing}
-          >
-            {testing ? 'Test in corso…' : 'Testa connessione'}
-          </button>
+          <div className="endpoint-card__actions">
+            <button
+              className="btn btn--ghost"
+              onClick={handleTest}
+              disabled={testing}
+            >
+              {testing ? 'Test in corso…' : 'Testa connessione'}
+            </button>
+            {endpoint.auth_type === 'token' && !refreshing && (
+              <button
+                className="btn btn--ghost"
+                onClick={() => setRefreshing(true)}
+              >
+                Aggiorna token
+              </button>
+            )}
+          </div>
+          {endpoint.auth_type === 'token' && refreshing && (
+            <div className="field" style={{ marginTop: 12 }}>
+              <span className="field__label">Nuovo token API cPanel</span>
+              <input
+                className="input"
+                type="password"
+                value={newToken}
+                autoComplete="off"
+                placeholder="incolla il nuovo token"
+                onChange={(e) => setNewToken(e.target.value)}
+              />
+              <div className="form__actions">
+                <button
+                  className="btn btn--ghost"
+                  onClick={() => {
+                    setRefreshing(false)
+                    setNewToken('')
+                  }}
+                  disabled={savingToken}
+                >
+                  Annulla
+                </button>
+                <button
+                  className="btn btn--primary"
+                  onClick={handleSaveToken}
+                  disabled={savingToken || newToken.trim() === ''}
+                >
+                  {savingToken ? 'Salvataggio…' : 'Salva token'}
+                </button>
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <EndpointForm

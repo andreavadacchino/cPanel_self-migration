@@ -1,7 +1,7 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 export type EndpointRole = 'source' | 'destination'
-export type AuthType = 'none' | 'token_ref' | 'password_ref' | 'mock'
+export type AuthType = 'none' | 'token' | 'token_ref' | 'password_ref' | 'mock'
 export type ConnectionStatus = 'unknown' | 'testing' | 'connected' | 'failed'
 export type JobStatus = 'pending' | 'queued' | 'running' | 'succeeded' | 'failed'
 
@@ -37,8 +37,9 @@ export interface Endpoint {
   port: number
   username: string
   auth_type: AuthType
-  // Sprint 2: the opaque auth_ref is never returned — only this flag.
+  // The opaque auth_ref and the encrypted token are never returned — only flags.
   has_auth_ref: boolean
+  has_auth_secret: boolean
   connection_status: ConnectionStatus
   last_checked_at: string | null
   last_error: string | null
@@ -55,6 +56,8 @@ export interface EndpointCreate {
   username: string
   auth_type: AuthType
   auth_ref?: string | null
+  // Plaintext token for auth_type 'token' — sent once, never returned.
+  token?: string | null
 }
 
 export interface Job {
@@ -225,6 +228,16 @@ export function createEndpoint(
 export function testConnection(endpointId: number): Promise<Endpoint> {
   return request<Endpoint>(`/api/endpoints/${endpointId}/test-connection`, {
     method: 'POST',
+  })
+}
+
+export function updateEndpointCredentials(
+  endpointId: number,
+  token: string,
+): Promise<Endpoint> {
+  return request<Endpoint>(`/api/endpoints/${endpointId}/credentials`, {
+    method: 'PATCH',
+    body: JSON.stringify({ token }),
   })
 }
 
