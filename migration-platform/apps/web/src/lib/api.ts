@@ -366,3 +366,67 @@ export async function fetchComparison(
     return null
   }
 }
+
+// Migration plan (Sprint 4A) — read-only, executes nothing.
+export type PlanStatus = 'blocked' | 'ready_for_review' | 'failed'
+
+export interface PlanItem {
+  category: string
+  key: string
+  state?: string | null
+  severity?: string | null
+  title: string
+  message: string
+}
+
+export interface PlanSummary {
+  blockers_count: number
+  warnings_count: number
+  manual_tasks_count: number
+  unknowns_count: number
+  ready_steps_count: number
+}
+
+export interface PlanSections {
+  blockers: PlanItem[]
+  manual_tasks: PlanItem[]
+  warnings: PlanItem[]
+  unknowns: PlanItem[]
+  ready_steps: PlanItem[]
+  cutover_notes: PlanItem[]
+}
+
+export interface PlanGeneratedFrom {
+  source_snapshot_id: number | null
+  destination_snapshot_id: number | null
+  comparison_report_id: number | null
+}
+
+export interface MigrationPlan {
+  id: number
+  migration_id: number
+  status: PlanStatus
+  summary: PlanSummary | null
+  sections: PlanSections | null
+  generated_from: PlanGeneratedFrom | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export function generatePlan(migrationId: number): Promise<MigrationPlan> {
+  return request<MigrationPlan>(`/api/migrations/${migrationId}/plan`, {
+    method: 'POST',
+  })
+}
+
+export async function fetchPlan(
+  migrationId: number,
+): Promise<MigrationPlan | null> {
+  try {
+    return await request<MigrationPlan>(`/api/migrations/${migrationId}/plan`)
+  } catch {
+    // 404 → no plan generated yet.
+    return null
+  }
+}

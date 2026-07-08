@@ -782,3 +782,93 @@ body {
   color: var(--slate-600, var(--slate-500));
   white-space: nowrap;
 }
+
+/* Migration plan (Sprint 4A) — read-only, descriptive */
+.plan-status {
+  margin: 12px 0 6px;
+}
+.badge--blocked,
+.badge--failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.badge--ready_for_review {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.plan-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin: 12px 0 4px;
+}
+.plan-summary > div {
+  background: var(--slate-50);
+  border: 1px solid var(--slate-100);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.plan-summary dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--slate-400);
+}
+.plan-summary dd {
+  margin: 2px 0 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--slate-900);
+}
+
+.plan-section {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border-left: 4px solid var(--slate-200);
+  background: var(--slate-50);
+}
+.plan-section--blocker {
+  border-left-color: #b91c1c;
+}
+.plan-section--warning {
+  border-left-color: #a16207;
+}
+.plan-section--info {
+  border-left-color: var(--blue-600);
+}
+.plan-section--ok {
+  border-left-color: #15803d;
+}
+.plan-section__title {
+  margin: 0;
+  font-size: 15px;
+  color: var(--slate-900);
+}
+.plan-section__count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--slate-500);
+}
+.plan-section__list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.plan-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.plan-item__title {
+  font-weight: 600;
+  color: var(--slate-700);
+}
+.plan-item__message {
+  font-size: 13px;
+  color: var(--slate-500);
+}

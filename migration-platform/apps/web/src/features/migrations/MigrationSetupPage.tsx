@@ -19,6 +19,7 @@ import JobStatusPanel from './JobStatusPanel'
 import InventorySummaryPanel from './InventorySummaryPanel'
 import InventoryCoveragePanel from './InventoryCoveragePanel'
 import ComparisonPanel from './ComparisonPanel'
+import MigrationPlanPanel from './MigrationPlanPanel'
 
 function isTerminal(job: Job | null): boolean {
   return job != null && (job.status === 'succeeded' || job.status === 'failed')
@@ -174,6 +175,8 @@ export default function MigrationSetupPage() {
       <InventoryCoveragePanel overview={inventory} />
 
       <ComparisonPanel migrationId={migrationId} />
+
+      <MigrationPlanPanel migrationId={migrationId} />
     </>
   )
 }
