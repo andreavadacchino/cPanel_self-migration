@@ -184,6 +184,28 @@ export interface ComparisonReport {
   updated_at: string
 }
 
+// FastAPI reports errors in `detail`, which is a string for our domain errors
+// (404/409/422 raised by services) but a *list* of {loc,msg,...} objects for
+// request-validation errors. Coerce every shape to a readable string so the UI
+// never shows "[object Object]".
+function formatApiError(detail: unknown, status: number): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) =>
+        d && typeof d === 'object' && 'msg' in d
+          ? String((d as { msg: unknown }).msg)
+          : JSON.stringify(d),
+      )
+      .filter(Boolean)
+    if (msgs.length > 0) return msgs.join('; ')
+  }
+  if (detail && typeof detail === 'object' && 'msg' in detail) {
+    return String((detail as { msg: unknown }).msg)
+  }
+  return `Errore API (${status})`
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -192,8 +214,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = `Errore API (${response.status})`
     try {
-      const body = (await response.json()) as { detail?: string }
-      if (body?.detail) detail = body.detail
+      const body = (await response.json()) as { detail?: unknown }
+      if (body?.detail !== undefined && body.detail !== null) {
+        detail = formatApiError(body.detail, response.status)
+      }
     } catch {
       // response had no JSON body; keep the status-based message
     }
