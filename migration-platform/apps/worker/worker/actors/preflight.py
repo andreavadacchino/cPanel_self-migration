@@ -20,6 +20,7 @@ import dramatiq
 
 import worker.broker  # noqa: F401  # configures the global broker on import
 from adapters.credentials import CredentialError, resolve_credential
+from adapters.crypto import SecretDecryptError, SecretKeyError, decrypt_secret
 from adapters.inventory import InventoryError, build_inventory_source
 from worker import db
 from worker.db import get_engine
@@ -71,6 +72,15 @@ def _inventory_role(
         db.add_event(engine, job_id, message, phase=phase, level="error")
         db.mark_failed(engine, job_id, message)
 
+    # A direct token is decrypted only here, in memory, just before use.
+    token = None
+    if endpoint.auth_type == "token":
+        try:
+            token = decrypt_secret(endpoint.auth_secret_enc or "")
+        except (SecretDecryptError, SecretKeyError) as exc:
+            _fail(exc)
+            return False
+
     # Credential resolution can fail before a source (and its client) exists.
     try:
         source = source_factory(
@@ -79,6 +89,7 @@ def _inventory_role(
             port=endpoint.port,
             username=endpoint.username,
             auth_ref=endpoint.auth_ref,
+            token=token,
         )
     except (InventoryError, CredentialError) as exc:
         _fail(exc)

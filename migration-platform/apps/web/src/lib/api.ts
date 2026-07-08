@@ -1,7 +1,7 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 export type EndpointRole = 'source' | 'destination'
-export type AuthType = 'none' | 'token_ref' | 'password_ref' | 'mock'
+export type AuthType = 'none' | 'token' | 'token_ref' | 'password_ref' | 'mock'
 export type ConnectionStatus = 'unknown' | 'testing' | 'connected' | 'failed'
 export type JobStatus = 'pending' | 'queued' | 'running' | 'succeeded' | 'failed'
 
@@ -37,8 +37,9 @@ export interface Endpoint {
   port: number
   username: string
   auth_type: AuthType
-  // Sprint 2: the opaque auth_ref is never returned — only this flag.
+  // The opaque auth_ref and the encrypted token are never returned — only flags.
   has_auth_ref: boolean
+  has_auth_secret: boolean
   connection_status: ConnectionStatus
   last_checked_at: string | null
   last_error: string | null
@@ -55,6 +56,20 @@ export interface EndpointCreate {
   username: string
   auth_type: AuthType
   auth_ref?: string | null
+  // Plaintext token for auth_type 'token' — sent once, never returned.
+  token?: string | null
+}
+
+// Edit an existing endpoint (role is immutable). token is optional: omit it to
+// keep the stored one when auth_type stays 'token'.
+export interface EndpointUpdate {
+  label?: string | null
+  host: string
+  port: number
+  username: string
+  auth_type: AuthType
+  auth_ref?: string | null
+  token?: string | null
 }
 
 export interface Job {
@@ -169,6 +184,28 @@ export interface ComparisonReport {
   updated_at: string
 }
 
+// FastAPI reports errors in `detail`, which is a string for our domain errors
+// (404/409/422 raised by services) but a *list* of {loc,msg,...} objects for
+// request-validation errors. Coerce every shape to a readable string so the UI
+// never shows "[object Object]".
+function formatApiError(detail: unknown, status: number): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) =>
+        d && typeof d === 'object' && 'msg' in d
+          ? String((d as { msg: unknown }).msg)
+          : JSON.stringify(d),
+      )
+      .filter(Boolean)
+    if (msgs.length > 0) return msgs.join('; ')
+  }
+  if (detail && typeof detail === 'object' && 'msg' in detail) {
+    return String((detail as { msg: unknown }).msg)
+  }
+  return `Errore API (${status})`
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -177,8 +214,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let detail = `Errore API (${response.status})`
     try {
-      const body = (await response.json()) as { detail?: string }
-      if (body?.detail) detail = body.detail
+      const body = (await response.json()) as { detail?: unknown }
+      if (body?.detail !== undefined && body.detail !== null) {
+        detail = formatApiError(body.detail, response.status)
+      }
     } catch {
       // response had no JSON body; keep the status-based message
     }
@@ -226,6 +265,30 @@ export function testConnection(endpointId: number): Promise<Endpoint> {
   return request<Endpoint>(`/api/endpoints/${endpointId}/test-connection`, {
     method: 'POST',
   })
+}
+
+export function updateEndpointCredentials(
+  endpointId: number,
+  token: string,
+): Promise<Endpoint> {
+  return request<Endpoint>(`/api/endpoints/${endpointId}/credentials`, {
+    method: 'PATCH',
+    body: JSON.stringify({ token }),
+  })
+}
+
+export function updateEndpoint(
+  endpointId: number,
+  payload: EndpointUpdate,
+): Promise<Endpoint> {
+  return request<Endpoint>(`/api/endpoints/${endpointId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteEndpoint(endpointId: number): Promise<void> {
+  return request<void>(`/api/endpoints/${endpointId}`, { method: 'DELETE' })
 }
 
 // Preflight

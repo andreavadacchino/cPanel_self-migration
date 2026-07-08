@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import {
+  deleteEndpoint,
   testConnection,
+  updateEndpointCredentials,
   type Capabilities,
   type Endpoint,
   type EndpointRole,
@@ -13,6 +15,7 @@ interface Props {
   role: EndpointRole
   endpoint: Endpoint | undefined
   onChanged: (endpoint: Endpoint) => void
+  onRemoved: (endpointId: number) => void
 }
 
 const TITLE: Record<EndpointRole, string> = {
@@ -60,9 +63,15 @@ export default function EndpointCard({
   role,
   endpoint,
   onChanged,
+  onRemoved,
 }: Props) {
   const [testing, setTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [newToken, setNewToken] = useState('')
+  const [savingToken, setSavingToken] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [removing, setRemoving] = useState(false)
 
   async function handleTest() {
     if (!endpoint) return
@@ -75,6 +84,35 @@ export default function EndpointCard({
       setError(err instanceof Error ? err.message : 'Errore sconosciuto')
     } finally {
       setTesting(false)
+    }
+  }
+
+  async function handleRemove() {
+    if (!endpoint) return
+    setRemoving(true)
+    setError(null)
+    try {
+      await deleteEndpoint(endpoint.id)
+      onRemoved(endpoint.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Errore sconosciuto')
+      setRemoving(false)
+    }
+  }
+
+  async function handleSaveToken() {
+    if (!endpoint || newToken.trim() === '') return
+    setSavingToken(true)
+    setError(null)
+    try {
+      const updated = await updateEndpointCredentials(endpoint.id, newToken.trim())
+      onChanged(updated)
+      setNewToken('')
+      setRefreshing(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Errore sconosciuto')
+    } finally {
+      setSavingToken(false)
     }
   }
 
@@ -91,7 +129,18 @@ export default function EndpointCard({
         )}
       </header>
 
-      {endpoint ? (
+      {endpoint && editing ? (
+        <EndpointForm
+          migrationId={migrationId}
+          role={role}
+          endpoint={endpoint}
+          onSaved={(saved) => {
+            onChanged(saved)
+            setEditing(false)
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      ) : endpoint ? (
         <>
           <dl className="kv">
             <div>
@@ -116,19 +165,79 @@ export default function EndpointCard({
             <CapabilitiesView capabilities={endpoint.capabilities} />
           )}
           {error && <div className="state-msg state-msg--error">{error}</div>}
-          <button
-            className="btn btn--ghost"
-            onClick={handleTest}
-            disabled={testing}
-          >
-            {testing ? 'Test in corso…' : 'Testa connessione'}
-          </button>
+          <div className="endpoint-card__actions">
+            <button
+              className="btn btn--ghost"
+              onClick={handleTest}
+              disabled={testing || removing}
+            >
+              {testing ? 'Test in corso…' : 'Testa connessione'}
+            </button>
+            <button
+              className="btn btn--ghost"
+              onClick={() => {
+                setError(null)
+                setEditing(true)
+              }}
+              disabled={removing}
+            >
+              Modifica
+            </button>
+            {endpoint.auth_type === 'token' && !refreshing && (
+              <button
+                className="btn btn--ghost"
+                onClick={() => setRefreshing(true)}
+                disabled={removing}
+              >
+                Aggiorna token
+              </button>
+            )}
+            <button
+              className="btn btn--ghost endpoint-card__danger"
+              onClick={handleRemove}
+              disabled={removing}
+            >
+              {removing ? 'Rimozione…' : 'Rimuovi'}
+            </button>
+          </div>
+          {endpoint.auth_type === 'token' && refreshing && (
+            <div className="field" style={{ marginTop: 12 }}>
+              <span className="field__label">Nuovo token API cPanel</span>
+              <input
+                className="input"
+                type="password"
+                value={newToken}
+                autoComplete="off"
+                placeholder="incolla il nuovo token"
+                onChange={(e) => setNewToken(e.target.value)}
+              />
+              <div className="form__actions">
+                <button
+                  className="btn btn--ghost"
+                  onClick={() => {
+                    setRefreshing(false)
+                    setNewToken('')
+                  }}
+                  disabled={savingToken}
+                >
+                  Annulla
+                </button>
+                <button
+                  className="btn btn--primary"
+                  onClick={handleSaveToken}
+                  disabled={savingToken || newToken.trim() === ''}
+                >
+                  {savingToken ? 'Salvataggio…' : 'Salva token'}
+                </button>
+              </div>
+            </div>
+          )}
         </>
       ) : (
         <EndpointForm
           migrationId={migrationId}
           role={role}
-          onCreated={onChanged}
+          onSaved={onChanged}
         />
       )}
     </section>

@@ -470,6 +470,21 @@ body {
   color: var(--slate-500);
 }
 
+.endpoint-card__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.endpoint-card__danger {
+  margin-left: auto;
+  color: #b91c1c;
+}
+
+.endpoint-card__danger:hover:not(:disabled) {
+  background: #fee2e2;
+}
+
 /* Preflight panel */
 .preflight {
   display: flex;

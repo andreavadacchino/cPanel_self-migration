@@ -157,6 +157,23 @@ class MockInventorySource:
         )
 
 
+def _cpanel_source(
+    *, host, port, username, token, timeout_seconds, transport
+) -> InventorySource:
+    # Lazy import avoids a circular import (cpanel.inventory imports us).
+    from adapters.cpanel.client import CpanelClient
+    from adapters.cpanel.inventory import CpanelInventorySource
+
+    client = CpanelClient(
+        f"https://{host}:{port}",
+        username,
+        token,
+        timeout_seconds=timeout_seconds,
+        transport=transport,
+    )
+    return CpanelInventorySource(client, host=host)
+
+
 def build_inventory_source(
     *,
     auth_type: str,
@@ -164,18 +181,34 @@ def build_inventory_source(
     port: int,
     username: str,
     auth_ref: str | None,
+    token: str | None = None,
     resolver=None,
     timeout_seconds: float = 10.0,
     transport=None,
 ) -> InventorySource:
     """Pick the concrete inventory source for an endpoint.
 
-    ``mock`` → offline deterministic source. ``token_ref`` → real cPanel client
-    (token resolved via ``resolver(auth_ref)``). Anything else is not supported
-    in Sprint 2.
+    ``mock`` → offline deterministic source. ``token`` → real cPanel client with
+    the (already decrypted) ``token`` supplied by the caller. ``token_ref`` →
+    real cPanel client with the token resolved via ``resolver(auth_ref)``.
+    Anything else is not supported.
     """
     if auth_type == "mock":
         return MockInventorySource(host, username)
+
+    if auth_type == "token":
+        if not token:
+            from adapters.credentials import CredentialError
+
+            raise CredentialError("token endpoint has no token")
+        return _cpanel_source(
+            host=host,
+            port=port,
+            username=username,
+            token=token,
+            timeout_seconds=timeout_seconds,
+            transport=transport,
+        )
 
     if auth_type == "token_ref":
         if resolver is None:
@@ -184,22 +217,17 @@ def build_inventory_source(
             from adapters.credentials import CredentialError
 
             raise CredentialError("token_ref endpoint has no auth_ref")
-        token = resolver(auth_ref)
-        # Lazy import avoids a circular import (cpanel.inventory imports us).
-        from adapters.cpanel.client import CpanelClient
-        from adapters.cpanel.inventory import CpanelInventorySource
-
-        client = CpanelClient(
-            f"https://{host}:{port}",
-            username,
-            token,
+        return _cpanel_source(
+            host=host,
+            port=port,
+            username=username,
+            token=resolver(auth_ref),
             timeout_seconds=timeout_seconds,
             transport=transport,
         )
-        return CpanelInventorySource(client, host=host)
 
     from adapters.credentials import CredentialResolverNotImplemented
 
     raise CredentialResolverNotImplemented(
-        f"auth_type '{auth_type}' is not supported for connection in Sprint 2"
+        f"auth_type '{auth_type}' is not supported for connection"
     )

@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.modules.endpoints import service
-from app.modules.endpoints.schemas import EndpointCreate, EndpointRead
+from app.modules.endpoints.schemas import (
+    EndpointCreate,
+    EndpointCredentialUpdate,
+    EndpointRead,
+    EndpointUpdate,
+)
 
 # Nested under a migration.
 migration_endpoints_router = APIRouter(
@@ -51,6 +56,24 @@ def get_endpoint(
     return service.get_endpoint(db, endpoint_id)
 
 
+@endpoints_router.patch("/{endpoint_id}", response_model=EndpointRead)
+def update_endpoint(
+    endpoint_id: int,
+    payload: EndpointUpdate,
+    db: Session = Depends(get_db),
+) -> EndpointRead:
+    return service.update_endpoint(db, endpoint_id, payload)
+
+
+@endpoints_router.delete(
+    "/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_endpoint(
+    endpoint_id: int, db: Session = Depends(get_db)
+) -> None:
+    service.delete_endpoint(db, endpoint_id)
+
+
 @endpoints_router.post(
     "/{endpoint_id}/test-connection", response_model=EndpointRead
 )
@@ -58,3 +81,14 @@ def test_connection(
     endpoint_id: int, db: Session = Depends(get_db)
 ) -> EndpointRead:
     return service.test_connection(db, endpoint_id)
+
+
+@endpoints_router.patch(
+    "/{endpoint_id}/credentials", response_model=EndpointRead
+)
+def update_credentials(
+    endpoint_id: int,
+    payload: EndpointCredentialUpdate,
+    db: Session = Depends(get_db),
+) -> EndpointRead:
+    return service.update_endpoint_credentials(db, endpoint_id, payload.token)
