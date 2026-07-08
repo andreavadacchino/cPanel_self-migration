@@ -124,8 +124,8 @@ token-only, non è full backup, non è reseller restore, non è root transfer.
 
 ## Capability richieste
 
-- `can_ssh_source_account`
-- `can_ssh_destination_account`
+- `can_ssh_source_account` — **prerequisito esplicito**
+- `can_ssh_destination_account` — **prerequisito esplicito**
 - `can_read_source_mail_shadow`
 - `can_read_source_mail_passwd`
 - `can_create_destination_mailbox_with_password_hash`
@@ -133,6 +133,14 @@ token-only, non è full backup, non è reseller restore, non è root transfer.
 - `can_copy_maildir`
 - `can_verify_maildir`
 - `can_redact_hashes_everywhere`
+
+> **`can_ssh_source_account` e `can_ssh_destination_account` sono prerequisiti
+> espliciti, NON impliciti.** La strategia è SSH/account-level: il modello
+> (`recommend_email_identity_strategy`) **rifiuta** (cade su `api_rebuild` /
+> `unavailable`) se anche uno solo dei due è assente, prima ancora di valutare la
+> leggibilità dello `shadow` o la scrivibilità della destinazione. Non basta che
+> lo `shadow` sia "readable": serve accesso shell/file-level dichiarato su
+> **entrambi** i lati.
 
 ## Cosa NON promette
 

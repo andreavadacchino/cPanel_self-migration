@@ -15,10 +15,12 @@ from domain.migration_strategy import (
     recommend_email_identity_strategy,
 )
 
-# A fully-capable SSH profile: source hash readable, destination writable both
-# ways, Maildir copy+verify, and redaction guaranteed.
+# A fully-capable SSH profile: SSH on both sides, source hash readable,
+# destination writable both ways, Maildir copy+verify, and redaction guaranteed.
 _FULL = {
     "access_profile": "ssh_account_access",
+    "can_ssh_source_account": True,
+    "can_ssh_destination_account": True,
     "can_read_source_mail_shadow": True,
     "can_read_source_mail_passwd": True,
     "can_create_destination_mailbox_with_password_hash": True,
@@ -49,6 +51,8 @@ def test_ssh_without_reading_shadow_cannot_preserve() -> None:
     out = recommend_email_identity_strategy(
         {
             "access_profile": "ssh_account_access",
+            "can_ssh_source_account": True,
+            "can_ssh_destination_account": True,
             "can_read_source_mail_shadow": False,
             "can_create_destination_mailbox_with_password_hash": True,
             "can_update_destination_mail_shadow_hash": True,
@@ -65,6 +69,8 @@ def test_ssh_with_shadow_but_no_destination_write_cannot_preserve() -> None:
     out = recommend_email_identity_strategy(
         {
             "access_profile": "ssh_account_access",
+            "can_ssh_source_account": True,
+            "can_ssh_destination_account": True,
             "can_read_source_mail_shadow": True,
             "can_create_destination_mailbox_with_password_hash": False,
             "can_update_destination_mail_shadow_hash": False,
@@ -94,6 +100,56 @@ def test_full_ssh_without_redaction_is_refused() -> None:
     assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
     assert out["email_password_preservation"] == _UNAVAILABLE
     assert "redaction" in out["reason"].lower()
+
+
+def test_full_ssh_without_maildir_copy_is_refused() -> None:
+    # Gate 3: everything writable + redaction, but no Maildir copy.
+    out = recommend_email_identity_strategy({**_FULL, "can_copy_maildir": False})
+    assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
+    assert out["email_password_preservation"] == _UNAVAILABLE
+
+
+def test_full_ssh_without_maildir_verify_is_refused() -> None:
+    # Gate 3: everything writable + redaction, but no Maildir verify.
+    out = recommend_email_identity_strategy({**_FULL, "can_verify_maildir": False})
+    assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
+    assert out["email_password_preservation"] == _UNAVAILABLE
+
+
+def test_destination_create_without_update_is_refused() -> None:
+    # Gate 2 must stay AND, not OR: create alone is not enough.
+    out = recommend_email_identity_strategy(
+        {**_FULL, "can_update_destination_mail_shadow_hash": False}
+    )
+    assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
+    assert out["email_password_preservation"] == _UNAVAILABLE
+
+
+def test_destination_update_without_create_is_refused() -> None:
+    # Gate 2 must stay AND, not OR: update alone is not enough.
+    out = recommend_email_identity_strategy(
+        {**_FULL, "can_create_destination_mailbox_with_password_hash": False}
+    )
+    assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
+    assert out["email_password_preservation"] == _UNAVAILABLE
+
+
+def test_missing_ssh_source_account_is_refused() -> None:
+    # SSH access is an explicit prerequisite on BOTH sides — not implied by the
+    # shadow/write flags. Source SSH missing → refuse.
+    out = recommend_email_identity_strategy(
+        {**_FULL, "can_ssh_source_account": False}
+    )
+    assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
+    assert out["email_password_preservation"] == _UNAVAILABLE
+
+
+def test_missing_ssh_destination_account_is_refused() -> None:
+    out = recommend_email_identity_strategy(
+        {**_FULL, "can_ssh_destination_account": False}
+    )
+    assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
+    assert out["email_password_preservation"] == _UNAVAILABLE
 
 
 def test_non_true_truthy_values_do_not_count() -> None:

@@ -252,6 +252,8 @@ def recommend_email_identity_strategy(capabilities: dict) -> dict:
     exactly ``True`` is treated as "not available"):
 
     * ``access_profile``  — must be ``ssh_account_access`` for a clone
+    * ``can_ssh_source_account`` / ``can_ssh_destination_account``  — explicit
+      account-level SSH prerequisites on BOTH sides (not implied by the flags below)
     * ``can_read_source_mail_shadow``  — read the hash source (hard requirement)
     * ``can_read_source_mail_passwd``  — enumerate the source mailboxes
     * ``can_create_destination_mailbox_with_password_hash``
@@ -269,10 +271,9 @@ def recommend_email_identity_strategy(capabilities: dict) -> dict:
     def flag(key: str) -> bool:
         return caps.get(key) is True
 
-    # Gate 1 — need account-level access that can read the source mail shadow.
-    if profile != AccessProfile.SSH_ACCOUNT_ACCESS or not flag(
-        "can_read_source_mail_shadow"
-    ):
+    # Gate 1 — the access profile must be SSH/account-level. Token/UAPI access
+    # never sees the mail ~/etc/<domain>/shadow.
+    if profile != AccessProfile.SSH_ACCOUNT_ACCESS:
         if profile == AccessProfile.TOKEN_ONLY:
             reason = "Token-only access cannot read source mail shadow hashes."
         elif profile is None:
@@ -280,18 +281,32 @@ def recommend_email_identity_strategy(capabilities: dict) -> dict:
                 "Access profile is missing or unrecognized: cannot read source "
                 "mail shadow hashes."
             )
-        elif profile != AccessProfile.SSH_ACCOUNT_ACCESS:
+        else:
             reason = (
                 f"{profile.value} access does not read the account filesystem; "
                 "source mail shadow hashes are not readable."
             )
-        else:
-            reason = (
-                "Source mail shadow hashes are not readable with the current "
-                "access."
-            )
         return _email_result(
             MigrationStrategy.API_REBUILD, CredentialPreservation.UNAVAILABLE, reason
+        )
+
+    # Gate 1b — SSH account-level access is an EXPLICIT prerequisite on BOTH the
+    # source (to read the shadow) and the destination (to write mailbox/shadow).
+    # It is not implied by the read/write capability flags.
+    if not (flag("can_ssh_source_account") and flag("can_ssh_destination_account")):
+        return _email_result(
+            MigrationStrategy.API_REBUILD,
+            CredentialPreservation.UNAVAILABLE,
+            "SSH account-level access is required on BOTH source and destination; "
+            "one side is missing.",
+        )
+
+    # Gate 1c — with SSH in place, the source mail shadow must actually be readable.
+    if not flag("can_read_source_mail_shadow"):
+        return _email_result(
+            MigrationStrategy.API_REBUILD,
+            CredentialPreservation.UNAVAILABLE,
+            "Source mail shadow hashes are not readable with the current access.",
         )
 
     # Gate 2 — destination must be able to BOTH create a new mailbox from a hash
