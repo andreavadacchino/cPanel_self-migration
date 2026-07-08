@@ -28,6 +28,9 @@ def _snapshot(**overrides) -> dict:
             "can_read_ssl": True,
             "can_read_dns": False,
             "can_read_account_info": True,
+            "can_read_forwarders": True,
+            "can_read_autoresponders": True,
+            "can_read_ftp": True,
         },
     }
     base.update(overrides)
@@ -127,6 +130,68 @@ def test_missing_ssl_on_destination_is_warning() -> None:
     hits = _entries_by(output, "ssl", "missing_on_destination")
     assert len(hits) == 1
     assert hits[0]["severity"] == "warning"
+
+
+# --- forwarders / autoresponders / ftp (item-level delta) -------------------
+# These are read by the inventory and tracked in the coverage matrix; they must
+# also be diffed item-by-item so a source item absent on the destination is
+# surfaced (previously they were read but never compared).
+
+def test_missing_forwarder_on_destination_is_warning() -> None:
+    fwd = {"source": "info@example.com", "destination": "x@gmail.com"}
+    output = compare(
+        _snapshot(email_forwarders=[fwd]),
+        _snapshot(email_forwarders=[]),
+    )
+    hits = _entries_by(output, "email_forwarders", "missing_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+    assert "email_forwarders" in output.summary["categories"]
+
+
+def test_missing_autoresponder_on_destination_is_warning() -> None:
+    output = compare(
+        _snapshot(email_autoresponders=[{"email": "vacation@example.com"}]),
+        _snapshot(email_autoresponders=[]),
+    )
+    hits = _entries_by(output, "email_autoresponders", "missing_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+    assert hits[0]["key"] == "vacation@example.com"
+
+
+def test_missing_ftp_on_destination_is_warning() -> None:
+    output = compare(
+        _snapshot(ftp_accounts=[{"user": "deploy", "type": "sub"}]),
+        _snapshot(ftp_accounts=[]),
+    )
+    hits = _entries_by(output, "ftp_accounts", "missing_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+    assert hits[0]["key"] == "deploy"
+
+
+def test_only_on_destination_forwarder_is_info() -> None:
+    fwd = {"source": "info@example.com", "destination": "x@gmail.com"}
+    output = compare(
+        _snapshot(email_forwarders=[]),
+        _snapshot(email_forwarders=[fwd]),
+    )
+    hits = _entries_by(output, "email_forwarders", "only_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "info"
+
+
+def test_fwd_ar_ftp_read_gap_skips_item_diff() -> None:
+    # When a side cannot read FTP, its empty list is a capability artifact — no
+    # per-item delta must be fabricated (the coverage/capability signal carries it).
+    caps_no_ftp = {**_snapshot()["capabilities"], "can_read_ftp": False}
+    output = compare(
+        _snapshot(ftp_accounts=[{"user": "deploy"}]),
+        _snapshot(ftp_accounts=[], capabilities=caps_no_ftp),
+    )
+    assert not any(e["category"] == "ftp_accounts" for e in output.entries)
+    assert output.summary["by_category"]["ftp_accounts"]["skipped"] is True
 
 
 # --- only_on_destination ----------------------------------------------------
