@@ -218,6 +218,9 @@ Account **sacrificabile** (credenziali fuori repo, autorizzazione esplicita):
 > Real-smoke **non eseguito** in questo spike: è modelling/documentation-only,
 > nessun account sacrificabile né autorizzazione.
 
+Runbook operativo successivo:
+[EMAIL_IDENTITY_SMOKE_RUNBOOK.md](./EMAIL_IDENTITY_SMOKE_RUNBOOK.md)
+
 ## Decisione consigliata
 
 - **Adottare la strategia SSH-Assisted Email Identity Clone come strategia
