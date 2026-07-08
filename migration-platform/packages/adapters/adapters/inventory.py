@@ -52,6 +52,9 @@ class CapabilityReport(BaseModel):
     can_read_domains: bool = False
     can_read_email: bool = False
     can_read_databases: bool = False
+    # MySQL *users* + their db grant relation, read separately from the database
+    # list (Mysql::list_users can fail while Mysql::list_databases succeeds).
+    can_read_db_users: bool = False
     can_read_cron: bool = False
     can_read_dns: bool = False
     can_read_ssl: bool = False
@@ -92,6 +95,7 @@ def build_summary(
     dns_records_count: int | None,
     ssl_items_count: int | None,
     warnings_count: int,
+    mysql_users_count: int | None = None,
 ) -> dict:
     return {
         "domains_count": domains_count,
@@ -100,6 +104,7 @@ def build_summary(
         "cron_jobs_count": cron_jobs_count,
         "dns_records_count": dns_records_count,
         "ssl_items_count": ssl_items_count,
+        "mysql_users_count": mysql_users_count,
         "warnings_count": warnings_count,
     }
 
@@ -162,6 +167,7 @@ def _mock_coverage() -> dict[str, CoverageEntry]:
         ),
         "email_accounts": ok("Email::list_pops", 3),
         "databases": ok("Mysql::list_databases", 2),
+        "mysql_users": ok("Mysql::list_users", 2),
         "cron_jobs": ok("Cron::listcron", 1),
         "ssl": ok("SSL::installed_hosts", 1),
         "dns_records": ok("DNS::parse_zone", 2),
@@ -228,6 +234,13 @@ class MockInventorySource:
                 {"email": f"noreply@{self._host}", "domain": self._host},
             ],
             "databases": [{"name": "mockdb1"}, {"name": "mockdb2"}],
+            # MySQL users with their db grant relation — never the password.
+            "mysql_users": [
+                {"user": "mockdb_app", "databases": ["mockdb1"],
+                 "relationship_present": True},
+                {"user": "mockdb_ro", "databases": ["mockdb1", "mockdb2"],
+                 "relationship_present": True},
+            ],
             # Schedule only — a cron command can embed secrets, never persisted.
             "cron_jobs": [
                 {"minute": "0", "hour": "3", "weekday": "*", "command_present": True}
@@ -253,6 +266,7 @@ class MockInventorySource:
             can_read_domains=True,
             can_read_email=True,
             can_read_databases=True,
+            can_read_db_users=True,
             can_read_cron=True,
             can_read_ssl=True,
             can_read_dns=True,
@@ -268,6 +282,7 @@ class MockInventorySource:
             cron_jobs_count=1,
             dns_records_count=len(dns_records),
             ssl_items_count=1,
+            mysql_users_count=len(data["mysql_users"]),
             warnings_count=len(data["warnings"]),
         )
         return InventoryResult(

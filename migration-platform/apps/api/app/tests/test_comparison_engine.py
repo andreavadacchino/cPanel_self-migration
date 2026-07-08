@@ -268,6 +268,7 @@ def test_entries_sorted_by_severity_then_category() -> None:
 _ALL_COVERAGE_CATS = (
     "domains", "email_accounts", "databases", "cron_jobs", "ssl",
     "dns_records", "email_forwarders", "email_autoresponders", "ftp_accounts",
+    "mysql_users",
 )
 
 
@@ -366,3 +367,111 @@ def test_legacy_snapshot_without_coverage_has_no_coverage_section() -> None:
     output = compare(_snapshot(), _snapshot())  # no coverage key
     assert "coverage" not in output.summary["categories"]
     assert not any(e["category"] == "coverage" for e in output.entries)
+
+
+# --- mysql users (Sprint 4 collector #1) ------------------------------------
+
+
+def _mysql_caps(**over) -> dict:
+    return {**_snapshot()["capabilities"], "can_read_db_users": True, **over}
+
+
+def _mysql_user(user: str, dbs: list[str]) -> dict:
+    return {"user": user, "databases": dbs, "relationship_present": True}
+
+
+def test_mysql_user_missing_on_destination_is_blocker() -> None:
+    src = _snapshot(
+        mysql_users=[_mysql_user("acme_wp", ["acme_db1"])],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(mysql_users=[], capabilities=_mysql_caps())
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "missing_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "blocker"
+    assert hits[0]["key"] == "acme_wp"
+
+
+def test_mysql_user_only_on_destination_is_warning() -> None:
+    src = _snapshot(mysql_users=[], capabilities=_mysql_caps())
+    dst = _snapshot(
+        mysql_users=[_mysql_user("acme_wp", ["acme_db1"])],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "only_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+
+
+def test_mysql_user_db_relation_different_is_blocker() -> None:
+    # Same user, but destination is missing a database it had on source: the
+    # user↔db grant relation diverges → blocker (DB would be inaccessible).
+    src = _snapshot(
+        mysql_users=[_mysql_user("acme_wp", ["acme_db1", "acme_db2"])],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[_mysql_user("acme_wp", ["acme_db1"])],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "different")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_mysql_users_unreadable_on_destination_no_false_blocker() -> None:
+    src = _snapshot(
+        mysql_users=[_mysql_user("acme_wp", ["acme_db1"])],
+        capabilities=_mysql_caps(can_read_db_users=True),
+        coverage=_coverage(),
+    )
+    dst = _snapshot(
+        mysql_users=[],
+        capabilities=_mysql_caps(can_read_db_users=False),
+        coverage=_coverage(mysql_users="unavailable"),
+    )
+    output = compare(src, dst)
+    # No fabricated per-user delta when destination cannot read db users.
+    assert not any(e["category"] == "mysql_users" for e in output.entries)
+    assert output.summary["by_category"]["mysql_users"]["skipped"] is True
+    # The read gap surfaces as a coverage warning instead.
+    hits = [
+        e for e in output.entries
+        if e["category"] == "coverage" and e["key"] == "mysql_users"
+    ]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+
+
+def test_mysql_users_relation_degraded_on_one_side_no_false_blocker() -> None:
+    # list_users succeeded on both sides, but the user↔db relation degraded on
+    # the destination (coverage "partial", can_read_db_users False there). The
+    # engine must NOT fabricate per-user DIFFERENT→blocker entries from the empty
+    # db lists; it skips the category and surfaces a coverage warning instead.
+    src = _snapshot(
+        mysql_users=[_mysql_user("acme_wp", ["acme_db1"])],
+        capabilities=_mysql_caps(can_read_db_users=True),
+        coverage=_coverage(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            {"user": "acme_wp", "databases": [], "relationship_present": False}
+        ],
+        capabilities=_mysql_caps(can_read_db_users=False),
+        coverage=_coverage(mysql_users="partial"),
+    )
+    output = compare(src, dst)
+    assert not any(
+        e["category"] == "mysql_users" and e["severity"] == "blocker"
+        for e in output.entries
+    )
+    assert output.summary["by_category"]["mysql_users"]["skipped"] is True
+    hits = [
+        e for e in output.entries
+        if e["category"] == "coverage" and e["key"] == "mysql_users"
+    ]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"

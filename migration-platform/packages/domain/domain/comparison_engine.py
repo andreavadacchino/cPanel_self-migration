@@ -132,6 +132,10 @@ def _key_db(item: dict) -> str:
     return str(item.get("name") or "").strip().lower()
 
 
+def _key_mysql_user(item: dict) -> str:
+    return str(item.get("user") or "").strip().lower()
+
+
 def _key_ssl(item: dict) -> str:
     return str(item.get("host") or "").strip().lower()
 
@@ -207,6 +211,20 @@ _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
         },
     ),
     _CategorySpec(
+        "mysql_users",
+        "Utente MySQL",
+        "mysql_users",
+        "db_users",
+        _key_mysql_user,
+        {
+            # A DB is unusable without its user; a diverging user↔db grant
+            # relation (a database the user can no longer reach) is a blocker.
+            State.MISSING_ON_DESTINATION: Severity.BLOCKER,
+            State.ONLY_ON_DESTINATION: Severity.WARNING,
+            State.DIFFERENT: Severity.BLOCKER,
+        },
+    ),
+    _CategorySpec(
         "cron_jobs",
         "Cron job",
         "cron_jobs",
@@ -258,6 +276,7 @@ _COVERAGE_CATEGORIES: tuple[tuple[str, str], ...] = (
     ("domains", "Dominio"),
     ("email_accounts", "Account email"),
     ("databases", "Database"),
+    ("mysql_users", "Utente MySQL"),
     ("cron_jobs", "Cron job"),
     ("ssl", "Certificato SSL"),
     ("dns_records", "Record DNS"),

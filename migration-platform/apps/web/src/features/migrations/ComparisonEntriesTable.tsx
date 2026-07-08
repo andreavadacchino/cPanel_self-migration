@@ -6,6 +6,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   domains: 'Domini',
   email_accounts: 'Email',
   databases: 'Database',
+  mysql_users: 'Utente MySQL',
   cron_jobs: 'Cron',
   ssl: 'SSL',
   capabilities: 'Capability',

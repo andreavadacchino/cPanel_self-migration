@@ -21,6 +21,7 @@ const CATEGORY_ORDER: [string, string][] = [
   ['account', 'Account'],
   ['email_accounts', 'Email'],
   ['databases', 'Database'],
+  ['mysql_users', 'Utenti MySQL'],
   ['dns_records', 'DNS'],
   ['cron_jobs', 'Cron'],
   ['ssl', 'SSL'],

@@ -6,6 +6,9 @@ venv/
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
 *.db
 
 # Node
