@@ -34,6 +34,15 @@ body {
   min-height: 100vh;
 }
 
+/* The 1fr main column defaults to min-width:auto (min-content), so a wide table
+   (long DNS keys / comparison detail) would stretch the track past the viewport
+   and spill the whole page horizontally. min-width:0 lets the track shrink to
+   the viewport so the inner .cmp-table-wrap / .cov-table-wrap overflow-x scrolls
+   inside the content area instead. */
+.app-shell__main {
+  min-width: 0;
+}
+
 /* Sidebar */
 .sidebar {
   background: var(--slate-900);
@@ -748,6 +757,9 @@ body {
 
 .cmp-table__msg {
   color: var(--slate-500);
+  /* Detail messages embed long unbreakable record keys (domain|name|TYPE|hash);
+     let them wrap so the cell doesn't force a very wide horizontal scroll. */
+  overflow-wrap: anywhere;
 }
 
 .sev-badge {
