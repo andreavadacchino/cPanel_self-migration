@@ -599,6 +599,106 @@ def test_giorginisposi_regression_two_real_blockers() -> None:
     assert all(b["state"] == "missing_on_destination" for b in blockers)
 
 
+# --- review fixes: case sensitivity + logical-key collisions -----------------
+
+
+def test_database_case_only_difference_is_not_false_match() -> None:
+    # MySQL DB identity is case-sensitive on Linux (lower_case_table_names=0):
+    # a case-only difference is a real delta, not a silent match.
+    src = _snapshot(databases=[_db("ShopDB", "ShopDB", None)])
+    dst = _snapshot(databases=[_db("shopdb", "shopdb", None)])
+    output = compare(src, dst)
+    hits = _entries_by(output, "databases", "different")
+    assert len(hits) == 1
+    assert hits[0]["source"]["fingerprint"] != hits[0]["destination"]["fingerprint"]
+
+
+def test_mysql_user_grant_case_only_difference_is_blocker() -> None:
+    # A case-only difference in the logical grant set is a real divergence and,
+    # for mysql_users, a blocker — it must not fold into a match.
+    src = _snapshot(
+        mysql_users=[_mysql_user_logical("acct_app", "app", "acct",
+                                         ["acct_WP"], ["WP"])],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[_mysql_user_logical("acct_app", "app", "acct",
+                                         ["acct_wp"], ["wp"])],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "different")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_intra_snapshot_logical_collision_database_is_surfaced() -> None:
+    # A prefixed and an unprefixed DB share the logical name "wp": two distinct
+    # objects. The second must not be silently deduped; the ambiguity surfaces.
+    src = _snapshot(databases=[_db("shop_wp", "wp", "shop"), _db("wp", "wp", None)])
+    dst = _snapshot(databases=[_db("wp", "wp", None)])
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "databases" and e["key"] == "wp"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+    assert hits[0]["state"] == "unknown"
+    assert "ambigu" in hits[0]["title"].lower()
+
+
+def test_intra_snapshot_logical_collision_mysql_user_is_surfaced() -> None:
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("shop_app", "app", "shop", ["shop_wp"], ["wp"]),
+            _mysql_user_logical("app", "app", None, ["wp"], ["wp"]),
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[_mysql_user_logical("app", "app", None, ["wp"], ["wp"])],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "mysql_users" and e["key"] == "app"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+    assert hits[0]["state"] == "unknown"
+
+
+def test_no_logical_collision_when_full_dedup_is_exact_duplicate() -> None:
+    # Two identical rows are a harmless duplicate, not an ambiguous collision.
+    src = _snapshot(databases=[_db("wp", "wp", None), _db("wp", "wp", None)])
+    dst = _snapshot(databases=[_db("wp", "wp", None)])
+    output = compare(src, dst)
+    assert not any(
+        e["category"] == "databases" and e["state"] == "unknown"
+        for e in output.entries
+    )
+
+
+def test_mysql_user_relationship_present_divergence_is_blocker() -> None:
+    # Both sides can read db users, but one row read the grant relation and the
+    # other did not (relationship_present differs) — a real row-level divergence
+    # that must not fold into a match.
+    src = _snapshot(
+        mysql_users=[{"user": "acct_app", "logical_user": "app", "prefix": "acct",
+                      "databases": [], "logical_databases": [],
+                      "relationship_present": True}],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[{"user": "acct_app", "logical_user": "app", "prefix": "acct",
+                      "databases": [], "logical_databases": [],
+                      "relationship_present": False}],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "different")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "blocker"
+
+
 def test_mysql_users_relation_degraded_on_one_side_no_false_blocker() -> None:
     # list_users succeeded on both sides, but the user↔db relation degraded on
     # the destination (coverage "partial", can_read_db_users False there). The

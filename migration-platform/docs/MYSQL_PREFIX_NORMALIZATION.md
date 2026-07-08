@@ -167,9 +167,19 @@ cose per `databases` e `mysql_users`:
 2. **Fingerprint** (per-categoria, non più il generico su tutto l'item):
    - `databases`: hash della sola `logical_name`. Un database è solo un nome:
      stesso nome logico ⇒ match (il prefisso account-specific è ignorato).
-   - `mysql_users`: hash di `(logical_user, sorted(logical_databases))`. La
-     relazione confrontata è **logica**: stesso utente logico che raggiunge lo
-     stesso set di database logici ⇒ match, anche con prefissi diversi.
+   - `mysql_users`: hash di `(logical_user, sorted(logical_databases),
+     relationship_present)`. La relazione confrontata è **logica**: stesso
+     utente logico che raggiunge lo stesso set di database logici ⇒ match,
+     anche con prefissi diversi. `relationship_present` resta nel fingerprint
+     (comportamento pre-PR) per non mascherare una divergenza row-level della
+     relazione di grant.
+
+   **Case-sensitivity**: il fingerprint preserva il case (solo `strip`, niente
+   `lower`). Su MySQL/Linux `lower_case_table_names=0`, quindi `ShopDB` e
+   `shopdb` sono database distinti: un delta di solo case è reale (per
+   `mysql_users` è un blocker) e non deve collassare in un falso match. Le
+   `_key_*` continuano a fare `lower` solo per l'**indicizzazione** (grouping),
+   come prima della PR.
 
 Conseguenze sulla severità (invariate rispetto a oggi):
 
@@ -190,10 +200,15 @@ uguale resta identico bit-per-bit.
 
 - **Collisione logica intra-snapshot.** Se dentro lo *stesso* account
   coesistessero `wp` (senza prefisso) e `vecchio_wp` (con prefisso), entrambi
-  avrebbero `logical="wp"` e la seconda occorrenza verrebbe deduplicata
-  nell'indice. In pratica cPanel forza il prefisso su tutti i DB/utenti di un
-  account, quindi i nomi logici sono unici entro un account. Rischio residuo
-  molto basso; documentato, non mitigato in questa PR.
+  avrebbero `logical="wp"`. cPanel forza il prefisso sui DB/utenti creati dalla
+  UI, ma su account legacy/self-migrati possono esistere oggetti non prefissati:
+  la collisione è quindi plausibile sul target reale. **Mitigato**: `_index`
+  rileva la collisione (due item distinti sotto la stessa chiave logica) e
+  `compare()` emette un warning esplicito («identità logica ambigua») per quella
+  chiave invece di scartare silenziosamente il secondo oggetto. La chiave
+  ambigua non viene confrontata item-per-item (niente falso match/blocker); il
+  gap è visibile all'operatore. Un duplicato esatto (stesso contenuto) non è una
+  collisione.
 - **Snapshot misti (nuovo vs legacy).** Un confronto tra uno snapshot nuovo (con
   `logical_*`) e uno legacy (senza) userebbe la chiave logica su un lato e il
   nome completo sull'altro. In pratica non accade: i due snapshot di un confronto
@@ -226,6 +241,11 @@ Comparison (`test_comparison_engine.py`):
 - utente logico mancante su dest → blocker
 - database logico mancante su dest → blocker
 - solo nome completo diverso ma logical uguale NON genera blocker
+- delta di solo case (`ShopDB` vs `shopdb`) NON collassa in match (db →
+  different, mysql_user grant → blocker)
+- collisione logica intra-snapshot (`shop_wp` + `wp`) → warning esplicito, non
+  scarto silenzioso; duplicato esatto → nessun warning
+- divergenza `relationship_present` a parità di dbs → blocker
 
 Regressione:
 
