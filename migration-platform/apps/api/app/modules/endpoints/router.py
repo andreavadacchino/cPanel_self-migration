@@ -15,6 +15,7 @@ from app.modules.endpoints.schemas import (
     EndpointCreate,
     EndpointCredentialUpdate,
     EndpointRead,
+    EndpointUpdate,
 )
 
 # Nested under a migration.
@@ -53,6 +54,24 @@ def get_endpoint(
     endpoint_id: int, db: Session = Depends(get_db)
 ) -> EndpointRead:
     return service.get_endpoint(db, endpoint_id)
+
+
+@endpoints_router.patch("/{endpoint_id}", response_model=EndpointRead)
+def update_endpoint(
+    endpoint_id: int,
+    payload: EndpointUpdate,
+    db: Session = Depends(get_db),
+) -> EndpointRead:
+    return service.update_endpoint(db, endpoint_id, payload)
+
+
+@endpoints_router.delete(
+    "/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_endpoint(
+    endpoint_id: int, db: Session = Depends(get_db)
+) -> None:
+    service.delete_endpoint(db, endpoint_id)
 
 
 @endpoints_router.post(

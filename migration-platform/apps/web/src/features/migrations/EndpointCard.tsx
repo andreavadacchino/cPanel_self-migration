@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import {
+  deleteEndpoint,
   testConnection,
   updateEndpointCredentials,
   type Capabilities,
@@ -14,6 +15,7 @@ interface Props {
   role: EndpointRole
   endpoint: Endpoint | undefined
   onChanged: (endpoint: Endpoint) => void
+  onRemoved: (endpointId: number) => void
 }
 
 const TITLE: Record<EndpointRole, string> = {
@@ -61,12 +63,15 @@ export default function EndpointCard({
   role,
   endpoint,
   onChanged,
+  onRemoved,
 }: Props) {
   const [testing, setTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [newToken, setNewToken] = useState('')
   const [savingToken, setSavingToken] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [removing, setRemoving] = useState(false)
 
   async function handleTest() {
     if (!endpoint) return
@@ -79,6 +84,19 @@ export default function EndpointCard({
       setError(err instanceof Error ? err.message : 'Errore sconosciuto')
     } finally {
       setTesting(false)
+    }
+  }
+
+  async function handleRemove() {
+    if (!endpoint) return
+    setRemoving(true)
+    setError(null)
+    try {
+      await deleteEndpoint(endpoint.id)
+      onRemoved(endpoint.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Errore sconosciuto')
+      setRemoving(false)
     }
   }
 
@@ -111,7 +129,18 @@ export default function EndpointCard({
         )}
       </header>
 
-      {endpoint ? (
+      {endpoint && editing ? (
+        <EndpointForm
+          migrationId={migrationId}
+          role={role}
+          endpoint={endpoint}
+          onSaved={(saved) => {
+            onChanged(saved)
+            setEditing(false)
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      ) : endpoint ? (
         <>
           <dl className="kv">
             <div>
@@ -140,18 +169,36 @@ export default function EndpointCard({
             <button
               className="btn btn--ghost"
               onClick={handleTest}
-              disabled={testing}
+              disabled={testing || removing}
             >
               {testing ? 'Test in corso…' : 'Testa connessione'}
+            </button>
+            <button
+              className="btn btn--ghost"
+              onClick={() => {
+                setError(null)
+                setEditing(true)
+              }}
+              disabled={removing}
+            >
+              Modifica
             </button>
             {endpoint.auth_type === 'token' && !refreshing && (
               <button
                 className="btn btn--ghost"
                 onClick={() => setRefreshing(true)}
+                disabled={removing}
               >
                 Aggiorna token
               </button>
             )}
+            <button
+              className="btn btn--ghost endpoint-card__danger"
+              onClick={handleRemove}
+              disabled={removing}
+            >
+              {removing ? 'Rimozione…' : 'Rimuovi'}
+            </button>
           </div>
           {endpoint.auth_type === 'token' && refreshing && (
             <div className="field" style={{ marginTop: 12 }}>
@@ -190,7 +237,7 @@ export default function EndpointCard({
         <EndpointForm
           migrationId={migrationId}
           role={role}
-          onCreated={onChanged}
+          onSaved={onChanged}
         />
       )}
     </section>

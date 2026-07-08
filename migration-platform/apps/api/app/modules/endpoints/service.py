@@ -17,7 +17,7 @@ from adapters.crypto import SecretDecryptError, SecretKeyError, decrypt_secret, 
 from adapters.inventory import build_inventory_source
 from app.core.errors import ConflictError, NotFoundError, UnprocessableError
 from app.modules.endpoints.models import AuthType, ConnectionStatus, Endpoint
-from app.modules.endpoints.schemas import EndpointCreate
+from app.modules.endpoints.schemas import EndpointCreate, EndpointUpdate
 from app.modules.migrations.service import get_migration
 
 
@@ -70,6 +70,49 @@ def get_endpoint(db: Session, endpoint_id: int) -> Endpoint:
     if endpoint is None:
         raise NotFoundError("Endpoint", endpoint_id)
     return endpoint
+
+
+def update_endpoint(
+    db: Session, endpoint_id: int, payload: EndpointUpdate
+) -> Endpoint:
+    """Edit an endpoint's coordinates/credentials. Any config change forces a
+    re-test by clearing the previous connection status/capabilities."""
+    endpoint = get_endpoint(db, endpoint_id)  # 404 if missing
+    endpoint.label = payload.label
+    endpoint.host = payload.host
+    endpoint.port = payload.port
+    endpoint.username = payload.username
+    endpoint.auth_type = payload.auth_type.value
+
+    if payload.auth_type == AuthType.TOKEN:
+        endpoint.auth_ref = None
+        if payload.token:
+            endpoint.auth_secret_enc = _encrypt_token(payload.token)
+        elif endpoint.auth_secret_enc is None:
+            # Switching to 'token' with no token and none stored is not usable.
+            raise UnprocessableError("token is required for auth_type 'token'")
+        # else: keep the existing encrypted token.
+    elif payload.auth_type == AuthType.TOKEN_REF:
+        endpoint.auth_ref = payload.auth_ref
+        endpoint.auth_secret_enc = None
+    else:  # mock | none | password_ref
+        endpoint.auth_ref = payload.auth_ref
+        endpoint.auth_secret_enc = None
+
+    endpoint.connection_status = ConnectionStatus.UNKNOWN.value
+    endpoint.last_error = None
+    endpoint.capabilities = None
+    endpoint.last_checked_at = None
+    db.add(endpoint)
+    db.commit()
+    db.refresh(endpoint)
+    return endpoint
+
+
+def delete_endpoint(db: Session, endpoint_id: int) -> None:
+    endpoint = get_endpoint(db, endpoint_id)  # 404 if missing
+    db.delete(endpoint)
+    db.commit()
 
 
 def update_endpoint_credentials(

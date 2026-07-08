@@ -1,14 +1,20 @@
 import { useState, type FormEvent } from 'react'
 import {
   createEndpoint,
+  updateEndpoint,
+  type AuthType,
   type Endpoint,
   type EndpointRole,
+  type EndpointUpdate,
 } from '../../lib/api'
 
 interface Props {
   migrationId: number
   role: EndpointRole
-  onCreated: (endpoint: Endpoint) => void
+  // When present, the form edits this endpoint instead of creating a new one.
+  endpoint?: Endpoint
+  onSaved: (endpoint: Endpoint) => void
+  onCancel?: () => void
 }
 
 const ROLE_LABEL: Record<EndpointRole, string> = {
@@ -18,40 +24,58 @@ const ROLE_LABEL: Record<EndpointRole, string> = {
 
 type AuthMode = 'direct' | 'env' | 'mock'
 
-export default function EndpointForm({ migrationId, role, onCreated }: Props) {
-  const [host, setHost] = useState('')
-  const [username, setUsername] = useState('')
-  const [port, setPort] = useState(2083)
-  const [authMode, setAuthMode] = useState<AuthMode>('direct')
+function modeOf(endpoint?: Endpoint): AuthMode {
+  if (!endpoint) return 'direct'
+  if (endpoint.auth_type === 'token') return 'direct'
+  if (endpoint.auth_type === 'token_ref') return 'env'
+  return 'mock'
+}
+
+export default function EndpointForm({
+  migrationId,
+  role,
+  endpoint,
+  onSaved,
+  onCancel,
+}: Props) {
+  const isEdit = endpoint != null
+  const [host, setHost] = useState(endpoint?.host ?? '')
+  const [username, setUsername] = useState(endpoint?.username ?? '')
+  const [port, setPort] = useState(endpoint?.port ?? 2083)
+  const [authMode, setAuthMode] = useState<AuthMode>(modeOf(endpoint))
   const [token, setToken] = useState('')
   const [authRef, setAuthRef] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Editing a 'token' endpoint may keep the stored token (leave the field blank).
+  const keepsToken = isEdit && endpoint?.auth_type === 'token'
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
     setSubmitting(true)
     setError(null)
     try {
-      const base = {
-        role,
+      const authType: AuthType =
+        authMode === 'direct'
+          ? 'token'
+          : authMode === 'env'
+            ? 'token_ref'
+            : 'mock'
+      const payload: EndpointUpdate = {
         label: role === 'source' ? 'Sorgente' : 'Destinazione',
         host: host.trim(),
         port,
         username: username.trim(),
+        auth_type: authType,
+        auth_ref: authMode === 'env' ? authRef.trim() : null,
+        token: authMode === 'direct' && token.trim() !== '' ? token.trim() : null,
       }
-      const payload =
-        authMode === 'direct'
-          ? { ...base, auth_type: 'token' as const, token: token.trim() }
-          : authMode === 'env'
-            ? {
-                ...base,
-                auth_type: 'token_ref' as const,
-                auth_ref: authRef.trim(),
-              }
-            : { ...base, auth_type: 'mock' as const }
-      const endpoint = await createEndpoint(migrationId, payload)
-      onCreated(endpoint)
+      const saved =
+        isEdit && endpoint
+          ? await updateEndpoint(endpoint.id, payload)
+          : await createEndpoint(migrationId, { role, ...payload })
+      onSaved(saved)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Errore sconosciuto')
       setSubmitting(false)
@@ -60,7 +84,7 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
 
   const credentialFilled =
     authMode === 'mock' ||
-    (authMode === 'direct' && token.trim() !== '') ||
+    (authMode === 'direct' && (token.trim() !== '' || keepsToken)) ||
     (authMode === 'env' && authRef.trim() !== '')
   const canSubmit =
     host.trim() !== '' &&
@@ -121,7 +145,11 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
             value={token}
             onChange={(e) => setToken(e.target.value)}
             autoComplete="off"
-            placeholder="incolla qui il token cPanel"
+            placeholder={
+              keepsToken
+                ? 'lascia vuoto per non cambiare il token'
+                : 'incolla qui il token cPanel'
+            }
           />
         </label>
       )}
@@ -137,9 +165,25 @@ export default function EndpointForm({ migrationId, role, onCreated }: Props) {
         </label>
       )}
       {error && <div className="state-msg state-msg--error">{error}</div>}
-      <button type="submit" className="btn btn--primary" disabled={!canSubmit}>
-        {submitting ? 'Salvataggio…' : `Salva ${ROLE_LABEL[role]}`}
-      </button>
+      <div className="form__actions">
+        {isEdit && onCancel && (
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={onCancel}
+            disabled={submitting}
+          >
+            Annulla
+          </button>
+        )}
+        <button type="submit" className="btn btn--primary" disabled={!canSubmit}>
+          {submitting
+            ? 'Salvataggio…'
+            : isEdit
+              ? 'Salva modifiche'
+              : `Salva ${ROLE_LABEL[role]}`}
+        </button>
+      </div>
       <p className="hint">
         {authMode === 'direct'
           ? 'Il token è cifrato prima di essere salvato e non viene mai mostrato di nuovo. Usa un token a scadenza.'

@@ -97,6 +97,10 @@ export default function MigrationSetupPage() {
     })
   }
 
+  function removeEndpoint(endpointId: number) {
+    setEndpoints((prev) => prev.filter((e) => e.id !== endpointId))
+  }
+
   async function handleStartPreflight() {
     setStarting(true)
     setPreflightError(null)
@@ -144,12 +148,14 @@ export default function MigrationSetupPage() {
           role="source"
           endpoint={source}
           onChanged={upsertEndpoint}
+          onRemoved={removeEndpoint}
         />
         <EndpointCard
           migrationId={migrationId}
           role="destination"
           endpoint={destination}
           onChanged={upsertEndpoint}
+          onRemoved={removeEndpoint}
         />
       </div>
 

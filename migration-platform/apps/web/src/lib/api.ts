@@ -60,6 +60,18 @@ export interface EndpointCreate {
   token?: string | null
 }
 
+// Edit an existing endpoint (role is immutable). token is optional: omit it to
+// keep the stored one when auth_type stays 'token'.
+export interface EndpointUpdate {
+  label?: string | null
+  host: string
+  port: number
+  username: string
+  auth_type: AuthType
+  auth_ref?: string | null
+  token?: string | null
+}
+
 export interface Job {
   id: number
   migration_id: number | null
@@ -239,6 +251,20 @@ export function updateEndpointCredentials(
     method: 'PATCH',
     body: JSON.stringify({ token }),
   })
+}
+
+export function updateEndpoint(
+  endpointId: number,
+  payload: EndpointUpdate,
+): Promise<Endpoint> {
+  return request<Endpoint>(`/api/endpoints/${endpointId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteEndpoint(endpointId: number): Promise<void> {
+  return request<void>(`/api/endpoints/${endpointId}`, { method: 'DELETE' })
 }
 
 // Preflight
