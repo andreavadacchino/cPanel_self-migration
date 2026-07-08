@@ -46,6 +46,7 @@ def create_endpoint(
         username=payload.username,
         auth_type=payload.auth_type.value,
         auth_ref=payload.auth_ref,
+        verify_tls=payload.verify_tls,
     )
     # A directly-entered token is encrypted at rest; the plaintext is dropped.
     if payload.auth_type == AuthType.TOKEN and payload.token:
@@ -83,6 +84,7 @@ def update_endpoint(
     endpoint.port = payload.port
     endpoint.username = payload.username
     endpoint.auth_type = payload.auth_type.value
+    endpoint.verify_tls = payload.verify_tls
 
     if payload.auth_type == AuthType.TOKEN:
         endpoint.auth_ref = None
@@ -158,6 +160,7 @@ def _probe_endpoint(endpoint: Endpoint) -> tuple[str, str | None, dict | None]:
             username=endpoint.username,
             auth_ref=endpoint.auth_ref,
             token=token,
+            verify_tls=endpoint.verify_tls,
             resolver=resolve_credential,
         )
     except CredentialResolverNotImplemented as exc:

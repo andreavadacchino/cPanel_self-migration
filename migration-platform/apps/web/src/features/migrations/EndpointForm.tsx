@@ -45,6 +45,7 @@ export default function EndpointForm({
   const [authMode, setAuthMode] = useState<AuthMode>(modeOf(endpoint))
   const [token, setToken] = useState('')
   const [authRef, setAuthRef] = useState('')
+  const [skipTls, setSkipTls] = useState(endpoint ? !endpoint.verify_tls : false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -70,6 +71,7 @@ export default function EndpointForm({
         auth_type: authType,
         auth_ref: authMode === 'env' ? authRef.trim() : null,
         token: authMode === 'direct' && token.trim() !== '' ? token.trim() : null,
+        verify_tls: !skipTls,
       }
       const saved =
         isEdit && endpoint
@@ -162,6 +164,19 @@ export default function EndpointForm({
             onChange={(e) => setAuthRef(e.target.value)}
             placeholder="env://SOURCE_CPANEL_TOKEN"
           />
+        </label>
+      )}
+      {authMode !== 'mock' && (
+        <label className="checkbox-field">
+          <input
+            type="checkbox"
+            checked={skipTls}
+            onChange={(e) => setSkipTls(e.target.checked)}
+          />
+          <span>
+            Salta verifica certificato TLS (host con certificato self-signed o
+            non corrispondente)
+          </span>
         </label>
       )}
       {error && <div className="state-msg state-msg--error">{error}</div>}

@@ -158,7 +158,7 @@ class MockInventorySource:
 
 
 def _cpanel_source(
-    *, host, port, username, token, timeout_seconds, transport
+    *, host, port, username, token, timeout_seconds, verify_tls, transport
 ) -> InventorySource:
     # Lazy import avoids a circular import (cpanel.inventory imports us).
     from adapters.cpanel.client import CpanelClient
@@ -169,6 +169,7 @@ def _cpanel_source(
         username,
         token,
         timeout_seconds=timeout_seconds,
+        verify=verify_tls,
         transport=transport,
     )
     return CpanelInventorySource(client, host=host)
@@ -182,6 +183,7 @@ def build_inventory_source(
     username: str,
     auth_ref: str | None,
     token: str | None = None,
+    verify_tls: bool = True,
     resolver=None,
     timeout_seconds: float = 10.0,
     transport=None,
@@ -191,6 +193,7 @@ def build_inventory_source(
     ``mock`` → offline deterministic source. ``token`` → real cPanel client with
     the (already decrypted) ``token`` supplied by the caller. ``token_ref`` →
     real cPanel client with the token resolved via ``resolver(auth_ref)``.
+    ``verify_tls`` False skips certificate verification (self-signed hosts).
     Anything else is not supported.
     """
     if auth_type == "mock":
@@ -207,6 +210,7 @@ def build_inventory_source(
             username=username,
             token=token,
             timeout_seconds=timeout_seconds,
+            verify_tls=verify_tls,
             transport=transport,
         )
 
@@ -223,6 +227,7 @@ def build_inventory_source(
             username=username,
             token=resolver(auth_ref),
             timeout_seconds=timeout_seconds,
+            verify_tls=verify_tls,
             transport=transport,
         )
 

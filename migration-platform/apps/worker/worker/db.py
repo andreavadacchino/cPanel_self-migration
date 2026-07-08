@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Integer,
     MetaData,
@@ -75,6 +76,7 @@ endpoints = Table(
     Column("auth_type", String(16), nullable=False, default="mock"),
     Column("auth_ref", String(255), nullable=True),
     Column("auth_secret_enc", Text, nullable=True),
+    Column("verify_tls", Boolean, nullable=False, default=True),
     Column("connection_status", String(16), nullable=False, default="unknown"),
     Column("last_checked_at", DateTime(timezone=True), nullable=True),
     Column("last_error", Text, nullable=True),
@@ -211,6 +213,7 @@ def get_endpoints_for_migration(engine: Engine, migration_id: int) -> list:
                 endpoints.c.auth_type,
                 endpoints.c.auth_ref,
                 endpoints.c.auth_secret_enc,
+                endpoints.c.verify_tls,
             )
             .where(endpoints.c.migration_id == migration_id)
             .order_by(endpoints.c.id)

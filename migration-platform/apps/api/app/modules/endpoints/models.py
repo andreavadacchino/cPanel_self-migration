@@ -12,7 +12,17 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    func,
+    true,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -63,6 +73,11 @@ class Endpoint(Base):
     # Fernet ciphertext of a directly-entered token (auth_type "token"). The
     # plaintext is never stored here and never returned by the API.
     auth_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # When False, skip TLS certificate verification (self-signed / hostname-
+    # mismatched cPanel certs). Opt-in and insecure; default is to verify.
+    verify_tls: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true(), nullable=False
+    )
     connection_status: Mapped[str] = mapped_column(
         String(16),
         default=ConnectionStatus.UNKNOWN.value,
