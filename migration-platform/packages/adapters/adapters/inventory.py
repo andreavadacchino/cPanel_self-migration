@@ -14,6 +14,32 @@ from pydantic import BaseModel, Field
 DNS_LIMITATION = "dns_read_unavailable_or_unsupported"
 
 
+# --- coverage matrix (Sprint 3.5) -------------------------------------------
+# One status per inventory category, finer-grained than the boolean
+# can_read_<x>. Persisted (secret-free) in InventoryResult.data["coverage"].
+COVERAGE_SUCCEEDED = "succeeded"  # read ok, at least one item
+COVERAGE_EMPTY = "empty"  # read ok, zero items
+COVERAGE_PARTIAL = "partial"  # some parts read, others not (e.g. DNS per-zone)
+COVERAGE_UNSUPPORTED = "unsupported"  # function not available on this host (404)
+COVERAGE_UNAVAILABLE = "unavailable"  # function exists but not available/disabled
+COVERAGE_FAILED = "failed"  # unexpected technical error / bad shape
+COVERAGE_UNVERIFIED = "unverified"  # not implemented (no verified read-only fn)
+
+# A category is "readable" (safe to compare per-item) only when the read
+# actually succeeded — including the legitimate empty result.
+READABLE_COVERAGE_STATUSES = frozenset({COVERAGE_SUCCEEDED, COVERAGE_EMPTY})
+
+
+class CoverageEntry(BaseModel):
+    """What we know about one inventory category on one endpoint."""
+
+    status: str
+    method: str | None = None  # e.g. "DNS::parse_zone"; None if not attempted
+    read_only_verified: bool = False
+    items_count: int | None = None
+    message: str | None = None
+
+
 class InventoryError(Exception):
     """A source could not produce an inventory (connection/auth/mock failure)."""
 
@@ -29,6 +55,9 @@ class CapabilityReport(BaseModel):
     can_read_cron: bool = False
     can_read_dns: bool = False
     can_read_ssl: bool = False
+    can_read_forwarders: bool = False
+    can_read_autoresponders: bool = False
+    can_read_ftp: bool = False
     limitations: list[str] = Field(default_factory=list)
 
 
@@ -75,6 +104,75 @@ def build_summary(
     }
 
 
+# Categories we deliberately do NOT read because no read-only function is
+# verified for them in this sprint. They appear in the coverage matrix as
+# ``unverified`` so the UI is honest about the gap (never "everything read").
+UNVERIFIED_CATEGORIES: tuple[str, ...] = (
+    "redirects",
+    "email_filters",
+    "mailing_lists",
+    "php_settings",
+    "postgres_databases",
+    "subaccounts",
+)
+
+
+def unverified_coverage() -> dict[str, CoverageEntry]:
+    """Coverage entries for the categories left unimplemented (P2)."""
+    return {
+        cat: CoverageEntry(
+            status=COVERAGE_UNVERIFIED,
+            method=None,
+            read_only_verified=False,
+            items_count=None,
+            message="No verified read-only cPanel function implemented yet.",
+        )
+        for cat in UNVERIFIED_CATEGORIES
+    }
+
+
+def _limitations_from_coverage(coverage: dict[str, CoverageEntry]) -> list[str]:
+    """A stable ``<category>_<status>`` list for actual read gaps.
+
+    ``unverified`` categories (never attempted) are excluded — they are not a
+    limitation of the connection/account, only of this sprint's scope, and are
+    already surfaced in the coverage matrix. This keeps ``warnings_count`` from
+    being permanently inflated by the P2 backlog.
+    """
+    return [
+        f"{cat}_{entry.status}"
+        for cat, entry in coverage.items()
+        if entry.status not in READABLE_COVERAGE_STATUSES
+        and entry.status != COVERAGE_UNVERIFIED
+    ]
+
+
+def _mock_coverage() -> dict[str, CoverageEntry]:
+    ok = lambda method, n: CoverageEntry(  # noqa: E731
+        status=COVERAGE_SUCCEEDED if n else COVERAGE_EMPTY,
+        method=method,
+        read_only_verified=True,
+        items_count=n,
+    )
+    coverage = {
+        "domains": ok("DomainInfo::list_domains", 2),
+        "account": CoverageEntry(
+            status=COVERAGE_SUCCEEDED, method="StatsBar::get_stats",
+            read_only_verified=True, items_count=None,
+        ),
+        "email_accounts": ok("Email::list_pops", 3),
+        "databases": ok("Mysql::list_databases", 2),
+        "cron_jobs": ok("Cron::listcron", 1),
+        "ssl": ok("SSL::installed_hosts", 1),
+        "dns_records": ok("DNS::parse_zone", 2),
+        "email_forwarders": ok("Email::list_forwarders", 1),
+        "email_autoresponders": ok("Email::list_auto_responders", 0),
+        "ftp_accounts": ok("Ftp::list_ftp", 1),
+    }
+    coverage.update(unverified_coverage())
+    return coverage
+
+
 class MockInventorySource:
     """Deterministic, offline source for local testing (auth_type=mock).
 
@@ -112,6 +210,12 @@ class MockInventorySource:
         if self._refused():
             raise InventoryError(f"Mock connection refused by {self._host}")
 
+        dns_records = [
+            {"domain": self._host, "name": f"{self._host}.", "type": "A",
+             "value": "203.0.113.10", "ttl": 14400},
+            {"domain": self._host, "name": f"{self._host}.", "type": "MX",
+             "value": f"mail.{self._host}.", "ttl": 14400},
+        ]
         data = {
             "account": {"available": True, "user": self._username},
             "domains": [
@@ -125,11 +229,22 @@ class MockInventorySource:
             ],
             "databases": [{"name": "mockdb1"}, {"name": "mockdb2"}],
             # Schedule only — a cron command can embed secrets, never persisted.
-            "cron_jobs": [{"minute": "0", "hour": "3", "weekday": "*"}],
+            "cron_jobs": [
+                {"minute": "0", "hour": "3", "weekday": "*", "command_present": True}
+            ],
             "ssl": [{"host": self._host}],
+            "dns_records": dns_records,
+            "email_forwarders": [
+                {"source": f"contact@{self._host}", "destination": f"info@{self._host}"}
+            ],
+            "email_autoresponders": [],
+            "ftp_accounts": [{"user": f"deploy@{self._host}", "type": "sub"}],
+            # Kept for backward compatibility with Sprint 2 consumers.
             "dns": None,
-            "warnings": [DNS_LIMITATION],
+            "warnings": [],
         }
+        coverage = _mock_coverage()
+        data["coverage"] = {k: v.model_dump() for k, v in coverage.items()}
         capabilities = CapabilityReport(
             source="mock",
             can_connect=True,
@@ -140,17 +255,20 @@ class MockInventorySource:
             can_read_databases=True,
             can_read_cron=True,
             can_read_ssl=True,
-            can_read_dns=False,
-            limitations=[DNS_LIMITATION],
+            can_read_dns=True,
+            can_read_forwarders=True,
+            can_read_autoresponders=True,
+            can_read_ftp=True,
+            limitations=_limitations_from_coverage(coverage),
         )
         summary = build_summary(
             domains_count=2,
             email_accounts_count=3,
             databases_count=2,
             cron_jobs_count=1,
-            dns_records_count=None,
+            dns_records_count=len(dns_records),
             ssl_items_count=1,
-            warnings_count=1,
+            warnings_count=len(data["warnings"]),
         )
         return InventoryResult(
             capabilities=capabilities, summary=summary, data=data

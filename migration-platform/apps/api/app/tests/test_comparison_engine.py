@@ -261,3 +261,108 @@ def test_entries_sorted_by_severity_then_category() -> None:
     rank = {"blocker": 0, "warning": 1, "info": 2}
     ranks = [rank[e["severity"]] for e in output.entries]
     assert ranks == sorted(ranks)
+
+
+# --- coverage (Sprint 3.5) --------------------------------------------------
+
+_ALL_COVERAGE_CATS = (
+    "domains", "email_accounts", "databases", "cron_jobs", "ssl",
+    "dns_records", "email_forwarders", "email_autoresponders", "ftp_accounts",
+)
+
+
+def _coverage(**status_overrides) -> dict:
+    cov = {
+        cat: {"status": "succeeded", "method": "m", "read_only_verified": True,
+              "items_count": 1}
+        for cat in _ALL_COVERAGE_CATS
+    }
+    for cat, status in status_overrides.items():
+        cov[cat] = {"status": status, "method": None, "read_only_verified": True,
+                    "items_count": None}
+    return cov
+
+
+def _caps(**overrides) -> dict:
+    return {**_snapshot()["capabilities"], **overrides}
+
+
+def test_unreadable_dns_no_false_blocker_and_coverage_warning() -> None:
+    caps = _caps(can_read_dns=False)
+    cov = _coverage(dns_records="unsupported")
+    rec = {"domain": "x.com", "name": "x.com.", "type": "A", "value": "1.2.3.4"}
+    src = _snapshot(dns_records=[rec], capabilities=caps, coverage=cov)
+    dst = _snapshot(dns_records=[], capabilities=caps, coverage=cov)
+    output = compare(src, dst)
+
+    # No fabricated per-record delta for a category that isn't readable.
+    assert not any(e["category"] == "dns_records" for e in output.entries)
+    assert output.summary["by_category"]["dns_records"]["skipped"] is True
+    # A coverage/unknown warning is emitted instead.
+    hits = [e for e in output.entries
+            if e["category"] == "coverage" and e["key"] == "dns_records"]
+    assert len(hits) == 1
+    assert hits[0]["state"] == "unknown"
+    assert hits[0]["severity"] == "warning"
+
+
+def test_unreadable_cron_yields_coverage_warning() -> None:
+    caps = _caps(can_read_cron=False)
+    cov = _coverage(cron_jobs="unavailable")
+    src = _snapshot(capabilities=caps, coverage=cov)
+    dst = _snapshot(capabilities=caps, coverage=cov)
+    output = compare(src, dst)
+
+    assert output.summary["by_category"]["cron_jobs"]["skipped"] is True
+    hits = [e for e in output.entries
+            if e["category"] == "coverage" and e["key"] == "cron_jobs"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+
+
+def test_readable_dns_missing_on_destination_is_warning() -> None:
+    caps = _caps(can_read_dns=True)
+    cov = _coverage()  # everything readable
+    rec = {"domain": "x.com", "name": "x.com.", "type": "A", "value": "1.2.3.4",
+           "ttl": 14400}
+    src = _snapshot(dns_records=[rec], capabilities=caps, coverage=cov)
+    dst = _snapshot(dns_records=[], capabilities=caps, coverage=cov)
+    output = compare(src, dst)
+
+    hits = _entries_by(output, "dns_records", "missing_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+    # Readable on both sides → no coverage warning for dns_records.
+    assert not any(
+        e["category"] == "coverage" and e["key"] == "dns_records"
+        for e in output.entries
+    )
+
+
+def test_readable_cron_missing_on_destination_is_warning_with_coverage() -> None:
+    caps = _caps(can_read_cron=True)
+    cov = _coverage()
+    src = _snapshot(capabilities=caps, coverage=cov)
+    dst = _snapshot(cron_jobs=[], capabilities=caps, coverage=cov)
+    output = compare(src, dst)
+
+    hits = _entries_by(output, "cron_jobs", "missing_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+
+
+def test_fully_readable_coverage_emits_no_coverage_warning() -> None:
+    cov = _coverage()
+    caps = _caps(can_read_dns=True)
+    output = compare(
+        _snapshot(capabilities=caps, coverage=cov),
+        _snapshot(capabilities=caps, coverage=cov),
+    )
+    assert not any(e["category"] == "coverage" for e in output.entries)
+    assert "coverage" in output.summary["categories"]  # section present, empty
+
+
+def test_legacy_snapshot_without_coverage_has_no_coverage_section() -> None:
+    output = compare(_snapshot(), _snapshot())  # no coverage key
+    assert "coverage" not in output.summary["categories"]
+    assert not any(e["category"] == "coverage" for e in output.entries)

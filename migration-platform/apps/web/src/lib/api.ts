@@ -25,8 +25,32 @@ export interface Capabilities {
   can_read_cron: boolean
   can_read_dns: boolean
   can_read_ssl: boolean
+  can_read_forwarders: boolean
+  can_read_autoresponders: boolean
+  can_read_ftp: boolean
   limitations: string[]
 }
+
+// Coverage matrix (Sprint 3.5): one entry per inventory category, carried in
+// InventorySnapshot.data.coverage. Finer-grained than the boolean can_read_*.
+export type CoverageStatus =
+  | 'succeeded'
+  | 'empty'
+  | 'partial'
+  | 'unsupported'
+  | 'unavailable'
+  | 'failed'
+  | 'unverified'
+
+export interface CoverageEntry {
+  status: CoverageStatus
+  method: string | null
+  read_only_verified: boolean
+  items_count: number | null
+  message: string | null
+}
+
+export type CoverageMatrix = Record<string, CoverageEntry>
 
 export interface Endpoint {
   id: number

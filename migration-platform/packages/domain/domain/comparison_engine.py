@@ -145,6 +145,19 @@ def _key_cron(item: dict) -> str:
     return " ".join(str(item.get(f) or "*") for f in _CRON_FIELDS)
 
 
+def _key_dns(item: dict) -> str:
+    # A DNS record's identity is domain + name + type + value; two records with
+    # the same name/type but different values are distinct rows.
+    return "|".join(
+        (
+            str(item.get("domain") or "").strip().lower(),
+            str(item.get("name") or "").strip().lower(),
+            str(item.get("type") or "").strip().upper(),
+            str(item.get("value") or "").strip().lower(),
+        )
+    )
+
+
 @dataclass(frozen=True)
 class _CategorySpec:
     name: str
@@ -217,11 +230,41 @@ _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
             State.DIFFERENT: Severity.WARNING,
         },
     ),
+    _CategorySpec(
+        "dns_records",
+        "Record DNS",
+        "dns_records",
+        "dns",
+        _key_dns,
+        {
+            # DNS is re-pointed at cutover; a delta is advisory, never a blocker.
+            State.MISSING_ON_DESTINATION: Severity.WARNING,
+            State.ONLY_ON_DESTINATION: Severity.INFO,
+            State.DIFFERENT: Severity.WARNING,
+        },
+    ),
 )
 
 # Capabilities compared (short names) and which are critical for a migration.
 _CAP_KEYS = ("domains", "email", "databases", "cron", "ssl", "dns", "account_info")
 _CAP_CRITICAL = frozenset({"domains", "email", "databases"})
+
+# --- coverage (Sprint 3.5) --------------------------------------------------
+# A category read is trustworthy only when it actually succeeded (empty counts).
+_READABLE_COVERAGE = frozenset({"succeeded", "empty"})
+# Data categories that get a per-category coverage signal. P2 ``unverified``
+# categories live only in the coverage matrix (UI), not here, to avoid noise.
+_COVERAGE_CATEGORIES: tuple[tuple[str, str], ...] = (
+    ("domains", "Dominio"),
+    ("email_accounts", "Account email"),
+    ("databases", "Database"),
+    ("cron_jobs", "Cron job"),
+    ("ssl", "Certificato SSL"),
+    ("dns_records", "Record DNS"),
+    ("email_forwarders", "Inoltro email"),
+    ("email_autoresponders", "Risponditore automatico"),
+    ("ftp_accounts", "Account FTP"),
+)
 
 
 # --- output -----------------------------------------------------------------
@@ -406,6 +449,12 @@ def compare(source: dict, destination: dict) -> ComparisonOutput:
         by_category["capabilities"] = cap_stats
         entries.extend(cap_entries)
 
+    cov_entries, cov_stats = _compare_coverage(source, destination)
+    if cov_stats is not None:
+        categories.append("coverage")
+        by_category["coverage"] = cov_stats
+        entries.extend(cov_entries)
+
     entries.sort(
         key=lambda e: (
             SEVERITY_RANK[e["severity"]],
@@ -484,5 +533,64 @@ def _compare_capabilities(
         # exists should reflect the capability booleans, so patch them here.
         entries[-1]["source"]["exists"] = s
         entries[-1]["destination"]["exists"] = d
+
+    return entries, stats
+
+
+def _coverage_status(coverage: object, key: str) -> str | None:
+    if not isinstance(coverage, dict):
+        return None
+    entry = coverage.get(key)
+    return entry.get("status") if isinstance(entry, dict) else None
+
+
+def _compare_coverage(
+    source: dict, destination: dict
+) -> tuple[list[dict], dict | None]:
+    """Emit a ``coverage`` warning for each data category that is not fully
+    readable on source or destination, so a read gap is surfaced explicitly and
+    never mistaken for a real (missing/only) delta. Returns ([], None) when
+    neither snapshot carries a coverage matrix (legacy snapshots)."""
+    src_cov = source.get("coverage")
+    dst_cov = destination.get("coverage")
+    if not isinstance(src_cov, dict) and not isinstance(dst_cov, dict):
+        return [], None
+
+    entries: list[dict] = []
+    stats = _empty_category_stats()
+    for key, label in _COVERAGE_CATEGORIES:
+        s = _coverage_status(src_cov, key)
+        d = _coverage_status(dst_cov, key)
+        s_ok = s in _READABLE_COVERAGE
+        d_ok = d in _READABLE_COVERAGE
+        stats["source"] += int(s_ok)
+        stats["destination"] += int(d_ok)
+        if s_ok and d_ok:
+            stats["match"] += 1
+            continue
+
+        stats["warning"] += 1
+        gaps = []
+        if not s_ok:
+            gaps.append(f"sorgente: {s or 'assente'}")
+        if not d_ok:
+            gaps.append(f"destinazione: {d or 'assente'}")
+        entry = _entry(
+            "coverage",
+            label,
+            key,
+            State.UNKNOWN,
+            Severity.WARNING,
+            src_fp=None,
+            dst_fp=None,
+        )
+        entry["title"] = f"Copertura incompleta: {label}"
+        entry["message"] = (
+            f"La categoria '{key}' non è pienamente leggibile ({', '.join(gaps)}); "
+            "il confronto per questa categoria è incompleto."
+        )
+        entry["source"]["exists"] = s_ok
+        entry["destination"]["exists"] = d_ok
+        entries.append(entry)
 
     return entries, stats
