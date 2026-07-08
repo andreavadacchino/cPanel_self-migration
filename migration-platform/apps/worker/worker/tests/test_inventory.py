@@ -119,6 +119,28 @@ def test_capabilities_saved_on_endpoints(engine) -> None:
     assert row.capabilities["can_read_domains"] is True
 
 
+def test_snapshot_persists_coverage_matrix(engine) -> None:
+    from worker import db
+    from worker.actors.preflight import execute_preflight
+
+    job_id = _insert_job(engine)
+    _insert_endpoint(engine, 1, "source")
+    _insert_endpoint(engine, 1, "destination")
+
+    execute_preflight(job_id, engine=engine)
+
+    with engine.connect() as conn:
+        data = conn.execute(
+            select(db.inventory_snapshots.c.data).where(
+                db.inventory_snapshots.c.endpoint_role == "source"
+            )
+        ).scalar_one()
+    coverage = data["coverage"]
+    assert coverage["dns_records"]["status"] == "succeeded"
+    assert coverage["cron_jobs"]["method"] == "Cron::listcron"
+    assert coverage["redirects"]["status"] == "unverified"
+
+
 def test_snapshot_contains_no_secrets(engine) -> None:
     from worker import db
     from worker.actors.preflight import execute_preflight

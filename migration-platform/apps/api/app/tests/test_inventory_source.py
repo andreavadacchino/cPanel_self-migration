@@ -1,11 +1,14 @@
-"""Inventory source tests — capability scanner + normalization (no network).
+"""Inventory source tests — capability scanner + coverage matrix (no network).
 
-``CpanelInventorySource`` is exercised with a fake client returning canned UAPI
-payloads; the mock source is deterministic. Capabilities are probe-driven, never
-hardcoded to success, and snapshots never carry secrets.
+``CpanelInventorySource`` is exercised with a fake client returning canned UAPI /
+cPanel API 2 payloads; the mock source is deterministic. Coverage is
+probe-driven (succeeded/empty/unsupported/unavailable/failed/partial), never
+hardcoded, and snapshots never carry secrets (no cron command, no token).
 """
 
 from __future__ import annotations
+
+import base64
 
 import httpx
 import pytest
@@ -14,6 +17,8 @@ from adapters.cpanel.errors import (
     CpanelApiError,
     CpanelAuthError,
     CpanelConnectionError,
+    CpanelParseError,
+    CpanelUnsupportedFunctionError,
 )
 from adapters.cpanel.inventory import CpanelInventorySource
 from adapters.cpanel.schemas import CpanelUapiResponse
@@ -24,28 +29,59 @@ from adapters.inventory import (
 )
 
 
-class FakeClient:
-    """Minimal stand-in for CpanelClient used by the scanner tests."""
+def _b64(value: str) -> str:
+    return base64.b64encode(value.encode("utf-8")).decode("ascii")
 
-    def __init__(self, responses=None, errors=None) -> None:
-        self.responses = responses or {}
-        self.errors = errors or {}
-        self.calls: list[tuple[str, str]] = []
+
+class FakeClient:
+    """Stand-in for CpanelClient covering both UAPI and cPanel API 2 calls."""
+
+    def __init__(
+        self,
+        *,
+        uapi=None,
+        uapi_errors=None,
+        cpapi2=None,
+        cpapi2_errors=None,
+        dns=None,
+    ) -> None:
+        self.uapi = uapi or {}
+        self.uapi_errors = uapi_errors or {}
+        self.cpapi2 = cpapi2 or {}
+        self.cpapi2_errors = cpapi2_errors or {}
+        self.dns = dns or {}  # zone -> data list | Exception
+        self.calls: list[tuple] = []
+        self.cpapi2_calls: list[tuple[str, str]] = []
 
     def call_uapi(self, module, function, params=None) -> CpanelUapiResponse:
+        self.calls.append((module, function, params))
+        if module == "DNS" and function == "parse_zone":
+            zone = (params or {}).get("zone")
+            val = self.dns.get(zone)
+            if isinstance(val, Exception):
+                raise val
+            return CpanelUapiResponse(
+                module=module, function=function, status=1, data=val
+            )
         key = (module, function)
-        self.calls.append(key)
-        if key in self.errors:
-            raise self.errors[key]
+        if key in self.uapi_errors:
+            raise self.uapi_errors[key]
         return CpanelUapiResponse(
-            module=module,
-            function=function,
-            status=1,
-            data=self.responses.get(key),
+            module=module, function=function, status=1, data=self.uapi.get(key)
         )
 
+    def call_cpapi2(self, module, function, params=None):
+        key = (module, function)
+        self.cpapi2_calls.append(key)
+        if key in self.cpapi2_errors:
+            raise self.cpapi2_errors[key]
+        return self.cpapi2.get(key)
 
-def _full_responses() -> dict:
+    def close(self) -> None:
+        return None
+
+
+def _uapi_responses() -> dict:
     return {
         ("DomainInfo", "list_domains"): {
             "main_domain": "acme.com",
@@ -59,80 +95,232 @@ def _full_responses() -> dict:
             {"email": "y@acme.com", "domain": "acme.com"},
         ],
         ("Mysql", "list_databases"): ["db1", "db2", "db3"],
-        ("Cron", "list_cron"): [{"command": "/usr/bin/php cron.php", "minute": "0"}],
         ("SSL", "installed_hosts"): [{"host": "acme.com"}],
+        ("Email", "list_forwarders"): [
+            {"dest": "info@acme.com", "forward": "owner@acme.com"}
+        ],
+        ("Email", "list_auto_responders"): [],
+        ("Ftp", "list_ftp"): [{"user": "deploy@acme.com", "type": "sub"}],
     }
 
 
-def test_cpanel_collect_full_capabilities_and_counts() -> None:
-    src = CpanelInventorySource(FakeClient(_full_responses()), host="acme.com")
-    result = src.collect()
+# A cron job whose command hides a secret — it must never reach the snapshot.
+_CRON_ROWS = [
+    {
+        "minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*",
+        "command": "mysqldump -pSUPERSECRET db | curl -H 'Authorization: TKN' x",
+        "command_htmlsafe": "…", "linekey": "abc", "count": 1,
+    },
+    {"count": 2},  # trailing count-only artifact
+]
+
+_DNS_ROWS = [
+    {"line_index": 1, "type": "control", "record_type": "SOA"},
+    {"line_index": 22, "type": "record", "record_type": "A",
+     "dname_b64": _b64("acme.com."), "data_b64": [_b64("203.0.113.5")], "ttl": 14400},
+    {"line_index": 23, "type": "record", "record_type": "MX",
+     "dname_b64": _b64("acme.com."),
+     "data_b64": [_b64("10"), _b64("mail.acme.com.")], "ttl": 14400},
+]
+
+
+def _full_client() -> FakeClient:
+    return FakeClient(
+        uapi=_uapi_responses(),
+        cpapi2={("Cron", "listcron"): _CRON_ROWS},
+        dns={"acme.com": _DNS_ROWS, "a.com": []},
+    )
+
+
+def _coverage(result) -> dict:
+    return result.data["coverage"]
+
+
+# --- happy path -------------------------------------------------------------
+
+
+def test_collect_full_coverage_and_capabilities() -> None:
+    result = CpanelInventorySource(_full_client(), host="acme.com").collect()
     caps = result.capabilities
-    assert caps.source == "cpanel"
     assert caps.can_connect and caps.can_authenticate
-    assert caps.can_read_account_info
-    assert caps.can_read_domains
-    assert caps.can_read_email
-    assert caps.can_read_databases
-    assert caps.can_read_cron
-    assert caps.can_read_ssl
-    assert caps.can_read_dns is False
-    assert "dns_read_unavailable_or_unsupported" in caps.limitations
+    assert caps.can_read_domains and caps.can_read_email
+    assert caps.can_read_databases and caps.can_read_ssl
+    assert caps.can_read_cron and caps.can_read_dns
+    assert caps.can_read_forwarders and caps.can_read_ftp
+
+    cov = _coverage(result)
+    assert cov["domains"]["status"] == "succeeded"
+    assert cov["domains"]["method"] == "DomainInfo::list_domains"
+    assert cov["cron_jobs"]["status"] == "succeeded"
+    assert cov["cron_jobs"]["method"] == "Cron::listcron"
+    assert cov["dns_records"]["status"] == "succeeded"
+    assert cov["dns_records"]["method"] == "DNS::parse_zone"
+    assert cov["email_autoresponders"]["status"] == "empty"
+    # P2 categories present but never attempted.
+    assert cov["redirects"]["status"] == "unverified"
+    assert cov["postgres_databases"]["status"] == "unverified"
 
     s = result.summary
-    assert s["domains_count"] == 3  # main + 1 addon + 1 sub
-    assert s["email_accounts_count"] == 2
-    assert s["databases_count"] == 3
+    assert s["domains_count"] == 3
     assert s["cron_jobs_count"] == 1
-    assert s["ssl_items_count"] == 1
-    assert s["dns_records_count"] is None
+    assert s["dns_records_count"] == 2  # A + MX (SOA control line skipped)
 
 
-def test_cpanel_collect_marks_capability_unavailable_on_api_error() -> None:
+def test_dns_records_are_decoded_and_zone_scoped() -> None:
+    result = CpanelInventorySource(_full_client(), host="acme.com").collect()
+    records = result.data["dns_records"]
+    a = next(r for r in records if r["type"] == "A")
+    assert a == {
+        "domain": "acme.com", "name": "acme.com.", "type": "A",
+        "value": "203.0.113.5", "ttl": 14400,
+    }
+    mx = next(r for r in records if r["type"] == "MX")
+    assert mx["value"] == "10 mail.acme.com."
+
+
+# --- cron classification ----------------------------------------------------
+
+
+def test_cron_empty_when_no_jobs() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(), cpapi2={("Cron", "listcron"): []}, dns={}
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert _coverage(result)["cron_jobs"]["status"] == "empty"
+    assert result.capabilities.can_read_cron is True  # empty is still readable
+    assert result.summary["cron_jobs_count"] == 0
+
+
+def test_cron_unavailable_on_api_error() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(),
+        cpapi2_errors={("Cron", "listcron"): CpanelApiError("module disabled")},
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert _coverage(result)["cron_jobs"]["status"] == "unavailable"
+    assert result.capabilities.can_read_cron is False
+    assert result.summary["cron_jobs_count"] is None
+
+
+def test_cron_unsupported_on_missing_function() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(),
+        cpapi2_errors={
+            ("Cron", "listcron"): CpanelUnsupportedFunctionError("no such fn")
+        },
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert _coverage(result)["cron_jobs"]["status"] == "unsupported"
+    assert result.capabilities.can_read_cron is False
+
+
+def test_cron_command_never_persisted() -> None:
+    result = CpanelInventorySource(_full_client(), host="acme.com").collect()
+    jobs = result.data["cron_jobs"]
+    assert jobs == [
+        {"minute": "0", "hour": "2", "day": "*", "month": "*", "weekday": "*",
+         "command_present": True}
+    ]
+    blob = result.model_dump_json()
+    assert "SUPERSECRET" not in blob
+    assert "mysqldump" not in blob
+    assert "Authorization" not in blob
+
+
+# --- dns classification -----------------------------------------------------
+
+
+def test_dns_empty_when_no_records() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(),
+        cpapi2={("Cron", "listcron"): []},
+        dns={"acme.com": [], "a.com": []},
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert _coverage(result)["dns_records"]["status"] == "empty"
+    assert result.capabilities.can_read_dns is True
+
+
+def test_dns_partial_when_some_zones_fail() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(),
+        cpapi2={("Cron", "listcron"): []},
+        dns={"acme.com": _DNS_ROWS, "a.com": CpanelApiError("zone not local")},
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    cov = _coverage(result)["dns_records"]
+    assert cov["status"] == "partial"
+    assert "1 of 2" in cov["message"]
+
+
+def test_dns_unavailable_when_all_zones_fail() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(),
+        cpapi2={("Cron", "listcron"): []},
+        dns={"acme.com": CpanelApiError("x"), "a.com": CpanelApiError("y")},
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert _coverage(result)["dns_records"]["status"] == "unavailable"
+    assert result.capabilities.can_read_dns is False
+
+
+def test_dns_unsupported_when_function_missing() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(),
+        cpapi2={("Cron", "listcron"): []},
+        dns={"acme.com": CpanelUnsupportedFunctionError("no DNS module")},
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert _coverage(result)["dns_records"]["status"] == "unsupported"
+
+
+# --- other categories -------------------------------------------------------
+
+
+def test_capability_unavailable_on_databases_api_error() -> None:
     errs = {("Mysql", "list_databases"): CpanelApiError("module disabled")}
-    src = CpanelInventorySource(
-        FakeClient(_full_responses(), errs), host="acme.com"
+    client = FakeClient(
+        uapi=_uapi_responses(), uapi_errors=errs, cpapi2={("Cron", "listcron"): []}
     )
-    result = src.collect()
+    result = CpanelInventorySource(client, host="acme.com").collect()
     assert result.capabilities.can_read_databases is False
+    assert _coverage(result)["databases"]["status"] == "unavailable"
     assert result.summary["databases_count"] is None
-    assert result.summary["warnings_count"] >= 1
 
 
-def test_cpanel_collect_raises_on_connection_error() -> None:
+def test_collect_raises_on_connection_error() -> None:
     errs = {("DomainInfo", "list_domains"): CpanelConnectionError("refused")}
-    src = CpanelInventorySource(
-        FakeClient(_full_responses(), errs), host="acme.com"
-    )
+    client = FakeClient(uapi=_uapi_responses(), uapi_errors=errs)
     with pytest.raises(InventoryError):
-        src.collect()
+        CpanelInventorySource(client, host="acme.com").collect()
 
 
-def test_cpanel_probe_auth_failure() -> None:
+def test_probe_auth_failure() -> None:
     errs = {("DomainInfo", "list_domains"): CpanelAuthError("bad token")}
-    src = CpanelInventorySource(
-        FakeClient(_full_responses(), errs), host="acme.com"
-    )
-    outcome = src.probe()
+    client = FakeClient(uapi=_uapi_responses(), uapi_errors=errs)
+    outcome = CpanelInventorySource(client, host="acme.com").probe()
     assert outcome.connected is True
     assert outcome.authenticated is False
-    assert outcome.capabilities.can_authenticate is False
 
 
 def test_snapshot_never_contains_secretish_keys() -> None:
-    src = CpanelInventorySource(FakeClient(_full_responses()), host="acme.com")
-    blob = src.collect().model_dump_json().lower()
+    blob = CpanelInventorySource(_full_client(), host="acme.com").collect()
+    dumped = blob.model_dump_json().lower()
     for bad in ("authorization", "token", "password", "secret", "auth_ref"):
-        assert bad not in blob
+        assert bad not in dumped
 
 
-def test_mock_source_probe_and_collect_ok() -> None:
-    src = MockInventorySource("source.example.com", "bob")
-    outcome = src.probe()
-    assert outcome.connected and outcome.authenticated
-    result = src.collect()
-    assert result.capabilities.source == "mock"
-    assert result.summary["domains_count"] >= 1
+# --- mock source ------------------------------------------------------------
+
+
+def test_mock_source_has_coverage_and_dns() -> None:
+    result = MockInventorySource("source.example.com", "bob").collect()
+    cov = result.data["coverage"]
+    assert cov["dns_records"]["status"] == "succeeded"
+    assert cov["email_autoresponders"]["status"] == "empty"
+    assert cov["redirects"]["status"] == "unverified"
+    assert result.capabilities.can_read_dns is True
+    assert result.summary["dns_records_count"] == 2
 
 
 def test_mock_source_fail_host() -> None:

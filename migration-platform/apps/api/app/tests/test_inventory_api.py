@@ -159,3 +159,94 @@ def test_capabilities_endpoint_reflects_test_connection(
 def test_capabilities_missing_endpoint_404(client: TestClient) -> None:
     resp = client.get("/api/endpoints/999/capabilities")
     assert resp.status_code == 404
+
+
+# --- coverage matrix (Sprint 3.5) -------------------------------------------
+
+
+def _seed_snapshot_with_coverage(
+    db_session: Session, *, migration_id: int, endpoint_id: int, role: str
+) -> int:
+    snap = InventorySnapshot(
+        migration_id=migration_id,
+        endpoint_id=endpoint_id,
+        endpoint_role=role,
+        status="succeeded",
+        captured_at=datetime.now(timezone.utc),
+        summary={
+            "domains_count": 1, "email_accounts_count": 0, "databases_count": 0,
+            "cron_jobs_count": 0, "dns_records_count": 2, "ssl_items_count": 0,
+            "warnings_count": 1,
+        },
+        data={
+            "domains": [{"domain": f"{role}.example.com", "type": "main"}],
+            "dns_records": [
+                {"domain": f"{role}.example.com", "name": f"{role}.example.com.",
+                 "type": "A", "value": "203.0.113.7", "ttl": 14400},
+            ],
+            "coverage": {
+                "domains": {"status": "succeeded", "method": "DomainInfo::list_domains",
+                            "read_only_verified": True, "items_count": 1,
+                            "message": None},
+                "dns_records": {"status": "succeeded", "method": "DNS::parse_zone",
+                                "read_only_verified": True, "items_count": 2,
+                                "message": None},
+                "cron_jobs": {"status": "unavailable", "method": "Cron::listcron",
+                              "read_only_verified": True, "items_count": None,
+                              "message": "module disabled"},
+                "redirects": {"status": "unverified", "method": None,
+                              "read_only_verified": False, "items_count": None,
+                              "message": "not implemented"},
+            },
+        },
+        error=None,
+    )
+    db_session.add(snap)
+    db_session.commit()
+    db_session.refresh(snap)
+    return snap.id
+
+
+def test_inventory_response_includes_coverage(
+    client: TestClient, db_session: Session
+) -> None:
+    migration_id = _new_migration(client)
+    src = _endpoint(client, migration_id, "source")
+    _seed_snapshot_with_coverage(
+        db_session, migration_id=migration_id, endpoint_id=src, role="source"
+    )
+    body = client.get(f"/api/migrations/{migration_id}/inventory/source").json()
+    coverage = body["data"]["coverage"]
+    assert coverage["dns_records"]["status"] == "succeeded"
+    assert coverage["dns_records"]["method"] == "DNS::parse_zone"
+    assert coverage["cron_jobs"]["status"] == "unavailable"
+    assert coverage["redirects"]["status"] == "unverified"
+
+
+def test_coverage_response_has_no_secret_fields(
+    client: TestClient, db_session: Session
+) -> None:
+    migration_id = _new_migration(client)
+    src = _endpoint(client, migration_id, "source")
+    _seed_snapshot_with_coverage(
+        db_session, migration_id=migration_id, endpoint_id=src, role="source"
+    )
+    text = client.get(
+        f"/api/migrations/{migration_id}/inventory/source"
+    ).text.lower()
+    for bad in ("authorization", "auth_ref", "password", "token", "secret"):
+        assert bad not in text
+
+
+def test_legacy_snapshot_without_coverage_still_serves(
+    client: TestClient, db_session: Session
+) -> None:
+    migration_id = _new_migration(client)
+    src = _endpoint(client, migration_id, "source")
+    # _seed_snapshot writes data WITHOUT a coverage key (Sprint 2 shape).
+    _seed_snapshot(
+        db_session, migration_id=migration_id, endpoint_id=src, role="source"
+    )
+    resp = client.get(f"/api/migrations/{migration_id}/inventory/source")
+    assert resp.status_code == 200
+    assert "coverage" not in (resp.json()["data"] or {})
