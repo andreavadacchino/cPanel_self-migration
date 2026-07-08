@@ -90,6 +90,7 @@ def _inventory_role(
             username=endpoint.username,
             auth_ref=endpoint.auth_ref,
             token=token,
+            verify_tls=endpoint.verify_tls,
         )
     except (InventoryError, CredentialError) as exc:
         _fail(exc)

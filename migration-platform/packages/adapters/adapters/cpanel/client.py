@@ -33,6 +33,23 @@ def _as_list(value: Any) -> list[str]:
     return [str(value)]
 
 
+def _describe(response: httpx.Response) -> str:
+    """A short, non-sensitive description of a response for diagnostics.
+
+    Surfaces the HTTP status, Content-Type and a whitespace-collapsed snippet of
+    the body so an "unexpected envelope" error is diagnosable (Cloudflare/WAF,
+    login page, wrong port, …) instead of opaque. The body is the *server's*
+    response — it never contains our request token.
+    """
+    ctype = response.headers.get("content-type", "?")
+    try:
+        body = response.text or ""
+    except Exception:  # pragma: no cover - defensive on odd encodings
+        body = ""
+    snippet = " ".join(body.split())[:180]
+    return f"HTTP {response.status_code}, {ctype}: {snippet!r}"
+
+
 class CpanelClient:
     def __init__(
         self,
@@ -41,6 +58,7 @@ class CpanelClient:
         token: str,
         *,
         timeout_seconds: float = 10.0,
+        verify: bool = True,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         base = base_url.strip().rstrip("/")
@@ -49,8 +67,13 @@ class CpanelClient:
         self._base_url = base
         self._username = username
         self._token = token
+        # follow_redirects stays False: with token auth a 3xx means the token
+        # was NOT accepted and cpsrvd fell back to the session login — following
+        # it would just fetch a login page, so we treat it as an auth failure.
         self._client = httpx.Client(
             timeout=httpx.Timeout(timeout_seconds),
+            verify=verify,
+            follow_redirects=False,
             transport=transport,
         )
 
@@ -73,7 +96,10 @@ class CpanelClient:
         self, module: str, function: str, params: dict | None = None
     ) -> CpanelUapiResponse:
         url = f"{self._base_url}/execute/{module}/{function}"
-        headers = {"Authorization": f"cpanel {self._username}:{self._token}"}
+        headers = {
+            "Authorization": f"cpanel {self._username}:{self._token}",
+            "Accept": "application/json",
+        }
 
         try:
             response = self._client.get(url, params=params, headers=headers)
@@ -81,9 +107,11 @@ class CpanelClient:
             raise CpanelTimeoutError(
                 f"Timed out calling {module}/{function}"
             ) from exc
-        except httpx.HTTPError as exc:  # ConnectError, transport errors, …
+        except httpx.HTTPError as exc:  # ConnectError, TLS/SSL, transport, …
+            # Include the underlying cause (e.g. SSL cert failure, refused, DNS)
+            # so the operator can tell a TLS problem from a firewall/DNS one.
             raise CpanelConnectionError(
-                f"Could not reach cPanel for {module}/{function}"
+                f"Could not reach cPanel for {module}/{function}: {exc}"
             ) from exc
 
         code = response.status_code
@@ -91,27 +119,43 @@ class CpanelClient:
             raise CpanelAuthError(
                 f"Authentication rejected for {module}/{function} (HTTP {code})"
             )
+        if 300 <= code < 400:
+            # Token auth should never redirect; a 3xx = token not accepted.
+            raise CpanelAuthError(
+                f"cPanel redirected {module}/{function} to a login page "
+                f"(HTTP {code}) — the API token was not accepted. Check the "
+                f"token/username and that it is a cPanel token on the cPanel "
+                f"port (2083)."
+            )
         if code == 404:
             raise CpanelUnsupportedFunctionError(
                 f"{module}/{function} is not available on this host (HTTP 404)"
             )
         if code >= 400:
             raise CpanelApiError(
-                f"cPanel returned HTTP {code} for {module}/{function}"
+                f"cPanel returned HTTP {code} for {module}/{function} "
+                f"({_describe(response)})"
             )
 
         try:
             body = response.json()
         except (ValueError, UnicodeDecodeError) as exc:
             raise CpanelParseError(
-                f"Non-JSON response for {module}/{function}"
+                f"Non-JSON response for {module}/{function} "
+                f"({_describe(response)})"
             ) from exc
 
+        # Accept both the wrapped envelope ({"result": {...}}) and the flat one
+        # ({"status": .., "data": ..}) some cPanel builds emit.
         result = body.get("result") if isinstance(body, dict) else None
         if not isinstance(result, dict):
-            raise CpanelParseError(
-                f"Unexpected UAPI envelope for {module}/{function}"
-            )
+            if isinstance(body, dict) and "status" in body and "data" in body:
+                result = body
+            else:
+                raise CpanelParseError(
+                    f"Unexpected UAPI envelope for {module}/{function} "
+                    f"({_describe(response)})"
+                )
         status = result.get("status")
         if status is None:
             raise CpanelParseError(

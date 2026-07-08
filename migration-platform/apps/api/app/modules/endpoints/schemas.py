@@ -76,6 +76,8 @@ class EndpointCreate(BaseModel):
     # Write-only: the plaintext token for auth_type 'token'. It is encrypted on
     # create and never read back (EndpointRead exposes only ``has_auth_secret``).
     token: str | None = Field(default=None, max_length=4096, repr=False)
+    # False skips TLS certificate verification (self-signed / mismatched certs).
+    verify_tls: bool = True
 
     @model_validator(mode="after")
     def _enforce_credentials(self) -> "EndpointCreate":
@@ -100,6 +102,7 @@ class EndpointUpdate(BaseModel):
     auth_type: AuthType = AuthType.MOCK
     auth_ref: str | None = Field(default=None, max_length=255)
     token: str | None = Field(default=None, max_length=4096, repr=False)
+    verify_tls: bool = True
 
     @model_validator(mode="after")
     def _enforce_credentials(self) -> "EndpointUpdate":
@@ -130,6 +133,7 @@ class EndpointRead(BaseModel):
     # boolean flags tell the UI whether a credential is configured.
     has_auth_ref: bool
     has_auth_secret: bool
+    verify_tls: bool
     connection_status: str
     last_checked_at: datetime | None
     last_error: str | None

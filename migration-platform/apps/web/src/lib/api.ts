@@ -40,6 +40,7 @@ export interface Endpoint {
   // The opaque auth_ref and the encrypted token are never returned — only flags.
   has_auth_ref: boolean
   has_auth_secret: boolean
+  verify_tls: boolean
   connection_status: ConnectionStatus
   last_checked_at: string | null
   last_error: string | null
@@ -58,6 +59,8 @@ export interface EndpointCreate {
   auth_ref?: string | null
   // Plaintext token for auth_type 'token' — sent once, never returned.
   token?: string | null
+  // False skips TLS certificate verification (self-signed / mismatched certs).
+  verify_tls?: boolean
 }
 
 // Edit an existing endpoint (role is immutable). token is optional: omit it to
@@ -70,6 +73,7 @@ export interface EndpointUpdate {
   auth_type: AuthType
   auth_ref?: string | null
   token?: string | null
+  verify_tls?: boolean
 }
 
 export interface Job {
