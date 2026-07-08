@@ -19,7 +19,8 @@ credenziali)?
 
 ## Risposta in una riga
 
-**Sì, ma non nel modo che sembrava più comodo.** Le credenziali possono viaggiare
+**Potenzialmente sì, ma non dimostrato — e non nel modo che sembrava più comodo.**
+Le credenziali possono viaggiare
 **solo dentro un archivio di backup ufficiale ripristinato** sulla destinazione;
 l'idea di **saltare l'homedir** per snellire l'archivio **non è disponibile con
 accesso a livello di account** (richiede root) e per l'email è **auto-contraddittoria**
@@ -159,10 +160,11 @@ Legenda: ✅ atteso preservato · 🟡 plausibile ma **da confermare con smoke**
 
 ## Cosa è confermato da documentazione ufficiale
 
-1. **Full backup con sola password cPanel** via UAPI `Backup::fullbackup_to_homedir`
-   / `_to_ftp` / `_to_scp_with_password` / `_to_scp_with_key`, endpoint
-   `https://host:2083/execute/Backup/fullbackup_to_*`. Titolo ufficiale
-   dell'operazione: *"Back up cPanel account to home directory"*.
+1. **Full backup dell'account via UAPI `Backup::fullbackup_to_homedir`**, endpoint
+   `https://host:2083/execute/Backup/fullbackup_to_homedir`. Titolo ufficiale
+   dell'operazione: *"Back up cPanel account to home directory"*. È **l'unica**
+   funzione del modulo Backup con una pagina ufficiale renderizzata (vedi M1 in
+   "deduzione" per le varianti di backup remoto).
 2. **Skip-homedir esiste solo a livello root** via `pkgacct --skiphomedir`
    (anche `--skipmail`), pensato per "trasferire /home con un altro metodo".
    `--userbackup` produce file compatibili con "Transfer or Restore a cPanel
@@ -172,8 +174,10 @@ Legenda: ✅ atteso preservato · 🟡 plausibile ma **da confermare con smoke**
 4. **Remote pull** ("Transfer from Remote cPanel Account") si autentica con
    **Remote username + Remote password = credenziali del cPanel source**; la
    destinazione richiede WHM.
-5. **Solo la 2FA è documentata come NON trasferita** dal restore/transfer — il che
-   implica che il resto (credenziali incluse) è pensato per essere trasferito.
+5. **Solo la 2FA è documentata come NON trasferita** dal restore/transfer (unica
+   eccezione esplicita nella doc ufficiale). *(L'inferenza "quindi il resto,
+   credenziali incluse, si trasferisce" è una **deduzione**, non un fatto — vedi
+   sezione seguente.)*
 6. **Requisiti di spazio:** la directory di staging deve contenere il file di
    backup più grande da ripristinare; WHM ha un controllo "Check the Available
    Disk Space".
@@ -185,7 +189,14 @@ Fonti ufficiali (vedi elenco in fondo).
 - Che le password **email/FTP/MySQL** e i **GRANT** sopravvivano al restore
   perché i loro hash stanno dentro l'archivio (dedotto da: struttura archivio di
   fonti community + la singola eccezione documentata = 2FA). **Non** c'è una
-  frase ufficiale che lo dica testualmente.
+  frase ufficiale che lo dica testualmente. In particolare, l'inferenza
+  "l'eccezione documentata è solo la 2FA ⇒ tutto il resto (credenziali incluse) si
+  trasferisce" è **deduzione**, non un'affermazione testuale della doc.
+- **(M1)** Le varianti di **backup remoto** `Backup::fullbackup_to_ftp` /
+  `_to_scp_with_password` / `_to_scp_with_key` (spedizione FTP/SCP): la loro
+  esistenza/firma proviene da un **mirror CLI di terze parti** (semi-ufficiale),
+  **non** da una pagina `docs.cpanel.net` renderizzata — da confermare sul portale
+  API ufficiale. Solo `fullbackup_to_homedir` ha una pagina ufficiale.
 - La **struttura del tarball** e i **path esatti** dei file credenziali
   (`~/etc/<domain>/shadow`, `mysql/*.create`, proftpd/pureftpd, `cp/`, `dnszones/`,
   `sslcerts/`, …) provengono da fonti community, non da una pagina ufficiale

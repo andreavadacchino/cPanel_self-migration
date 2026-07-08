@@ -150,3 +150,33 @@ def test_result_contract_is_exactly_three_string_keys() -> None:
         "reason",
     }
     assert all(isinstance(v, str) for v in out.values())
+
+
+def test_skip_homedir_and_restore_without_backup_is_not_a_restore_path() -> None:
+    # A destination that can restore + can_skip_homedir, but NO source backup:
+    # you cannot restore an archive you cannot generate → must fall back to
+    # api_rebuild, never a restore/config-clone path.
+    out = recommend_strategy(
+        {
+            "access_profile": "whm_reseller",
+            "can_generate_full_backup": False,
+            "can_skip_homedir": True,
+            "has_whm_reseller": True,
+            "can_restore_cpanel_account": True,
+        }
+    )
+    assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
+    assert out["credential_preservation"] in _NO_PRESERVATION
+
+
+def test_reseller_alone_without_backup_yields_no_restore_path() -> None:
+    # has_whm_reseller on its own (no source backup capability) must NOT unlock a
+    # restore-based recommendation.
+    out = recommend_strategy(
+        {
+            "access_profile": "whm_reseller",
+            "has_whm_reseller": True,
+        }
+    )
+    assert out["recommended_strategy"] == MigrationStrategy.API_REBUILD.value
+    assert out["credential_preservation"] in _NO_PRESERVATION
