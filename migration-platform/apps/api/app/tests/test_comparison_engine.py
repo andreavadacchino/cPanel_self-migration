@@ -446,6 +446,159 @@ def test_mysql_users_unreadable_on_destination_no_false_blocker() -> None:
     assert hits[0]["severity"] == "warning"
 
 
+# --- prefix normalization: cross-account identity (this PR) ------------------
+
+
+def _db(name: str, logical: str, prefix: str | None) -> dict:
+    return {"name": name, "logical_name": logical, "prefix": prefix}
+
+
+def _mysql_user_logical(
+    user: str, logical_user: str, prefix: str | None,
+    dbs: list[str], logical_dbs: list[str],
+) -> dict:
+    return {
+        "user": user,
+        "logical_user": logical_user,
+        "prefix": prefix,
+        "databases": dbs,
+        "logical_databases": logical_dbs,
+        "relationship_present": True,
+    }
+
+
+def test_cross_prefix_database_same_logical_is_match() -> None:
+    # vecchio123_wp vs nuovo456_wp represent the same logical DB → no blocker.
+    src = _snapshot(databases=[_db("vecchio123_wp", "wp", "vecchio123")])
+    dst = _snapshot(databases=[_db("nuovo456_wp", "wp", "nuovo456")])
+    output = compare(src, dst)
+    assert not any(e["category"] == "databases" for e in output.entries)
+    assert output.summary["by_category"]["databases"]["match"] == 1
+
+
+def test_cross_prefix_database_missing_logical_is_blocker() -> None:
+    # Source has a logical DB (shop) that the destination lacks entirely.
+    src = _snapshot(
+        databases=[_db("vecchio123_wp", "wp", "vecchio123"),
+                   _db("vecchio123_shop", "shop", "vecchio123")]
+    )
+    dst = _snapshot(databases=[_db("nuovo456_wp", "wp", "nuovo456")])
+    output = compare(src, dst)
+    hits = _entries_by(output, "databases", "missing_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["key"] == "shop"
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_cross_prefix_mysql_user_same_logical_is_match() -> None:
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("vecchio123_app", "app", "vecchio123",
+                                ["vecchio123_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("nuovo456_app", "app", "nuovo456",
+                                ["nuovo456_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    # Only the full name differs; logical identity + relation match → no blocker.
+    assert not any(e["category"] == "mysql_users" for e in output.entries)
+    assert output.summary["by_category"]["mysql_users"]["match"] == 1
+    assert output.blockers_count == 0
+
+
+def test_cross_prefix_mysql_user_relation_extra_db_is_blocker() -> None:
+    # Same logical user, but source reaches an extra logical DB → relation
+    # diverges → blocker, even across different prefixes.
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("vecchio123_app", "app", "vecchio123",
+                                ["vecchio123_wp", "vecchio123_shop"], ["shop", "wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("nuovo456_app", "app", "nuovo456",
+                                ["nuovo456_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "different")
+    assert len(hits) == 1
+    assert hits[0]["key"] == "app"
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_cross_prefix_mysql_user_missing_logical_user_is_blocker() -> None:
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("vecchio123_app", "app", "vecchio123",
+                                ["vecchio123_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("nuovo456_other", "other", "nuovo456",
+                                ["nuovo456_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "missing_on_destination")
+    assert any(h["key"] == "app" and h["severity"] == "blocker" for h in hits)
+
+
+def test_same_prefix_still_matches_like_today() -> None:
+    # Identical prefix (the pre-PR happy path) still yields a clean match.
+    src = _snapshot(
+        databases=[_db("giorginisposi_wp", "wp", "giorginisposi")],
+        mysql_users=[
+            _mysql_user_logical("giorginisposi_app", "app", "giorginisposi",
+                                ["giorginisposi_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, src)
+    assert output.blockers_count == 0
+    assert output.summary["by_category"]["databases"]["match"] == 1
+    assert output.summary["by_category"]["mysql_users"]["match"] == 1
+
+
+def test_giorginisposi_regression_two_real_blockers() -> None:
+    # Mirrors the real-smoke: source has 3 MySQL users (same prefix), destination
+    # has 1. The 2 users absent on destination remain real blockers.
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("giorginisposi_wp", "wp", "giorginisposi", [], []),
+            _mysql_user_logical("giorginisposi_user", "user", "giorginisposi", [], []),
+            _mysql_user_logical("giorginisposi_shop", "shop", "giorginisposi", [], []),
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("giorginisposi_wp", "wp", "giorginisposi", [], []),
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    blockers = [
+        e for e in output.entries
+        if e["category"] == "mysql_users" and e["severity"] == "blocker"
+    ]
+    assert len(blockers) == 2
+    assert {b["key"] for b in blockers} == {"user", "shop"}
+    assert all(b["state"] == "missing_on_destination" for b in blockers)
+
+
 def test_mysql_users_relation_degraded_on_one_side_no_false_blocker() -> None:
     # list_users succeeded on both sides, but the user↔db relation degraded on
     # the destination (coverage "partial", can_read_db_users False there). The

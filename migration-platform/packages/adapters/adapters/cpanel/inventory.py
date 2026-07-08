@@ -75,6 +75,26 @@ _COVERAGE_ERROR_MESSAGE = {
 # --- normalizers ------------------------------------------------------------
 
 
+def _split_identity(name: str) -> tuple[str | None, str]:
+    """Split a cPanel identity ``<prefix>_<logical>`` into ``(prefix, logical)``.
+
+    cPanel forces ``<account>_`` on every database and MySQL user. Only the FIRST
+    underscore separates the account prefix from the (possibly underscore-bearing)
+    logical part, so ``foo_bar_baz`` → ``("foo", "bar_baz")``. If either side of
+    that split would be empty (``_wp`` / ``foo_``), the name is left whole with
+    ``prefix=None`` so a degenerate name never collapses distinct identities.
+
+    The prefix is derived from the name, never assumed equal to the cPanel
+    username: two accounts with different usernames still normalize to the same
+    logical identity, which is what the cross-account comparison relies on
+    (see docs/MYSQL_PREFIX_NORMALIZATION.md).
+    """
+    prefix, sep, logical = name.partition("_")
+    if sep and prefix and logical:
+        return prefix, logical
+    return None, name
+
+
 def _norm_domains(data: object) -> tuple[list, int]:
     if not isinstance(data, dict):
         return [], 0
@@ -107,11 +127,19 @@ def _norm_email(data: object) -> tuple[list, int]:
 
 
 def _norm_databases(data: object) -> tuple[list, int]:
+    """Normalize database names, deriving the account-independent logical name.
+
+    Keeps the original ``name`` and adds ``logical_name`` / ``prefix`` so the
+    comparison can match the same logical database across cPanel accounts whose
+    username (hence prefix) differs. ``vecchio_wp`` and ``nuovo_wp`` both carry
+    ``logical_name="wp"``.
+    """
     rows = data if isinstance(data, list) else []
     out: list[dict] = []
     for r in rows:
         name = (r.get("database") or r.get("name")) if isinstance(r, dict) else str(r)
-        out.append({"name": name})
+        prefix, logical = _split_identity(str(name)) if name else (None, name)
+        out.append({"name": name, "logical_name": logical, "prefix": prefix})
     return out, len(out)
 
 
@@ -202,6 +230,12 @@ def _norm_mysql_users(data: object) -> tuple[list, int]:
     missing the ``databases`` field yields ``relationship_present=False``
     (defensive; the live shape always includes it); a bare-string row degrades to
     a name only.
+
+    Alongside the full identity, the account-independent view is kept:
+    ``logical_user`` / ``prefix`` for the user and ``logical_databases`` for its
+    grants. This lets the comparison match the same logical user↔db relation
+    across cPanel accounts whose prefix differs (``vecchio_app``→``{vecchio_wp}``
+    equals ``nuovo_app``→``{nuovo_wp}`` because both reduce to ``app``→``{wp}``).
     """
     rows = data if isinstance(data, list) else []
     out: list[dict] = []
@@ -217,16 +251,29 @@ def _norm_mysql_users(data: object) -> tuple[list, int]:
                 if has_rel
                 else []
             )
+            prefix, logical_user = _split_identity(str(user))
+            logical_dbs = sorted({_split_identity(d)[1] for d in dbs})
             out.append(
                 {
                     "user": str(user),
+                    "logical_user": logical_user,
+                    "prefix": prefix,
                     "databases": dbs,
+                    "logical_databases": logical_dbs,
                     "relationship_present": has_rel,
                 }
             )
         elif r:
+            prefix, logical_user = _split_identity(str(r))
             out.append(
-                {"user": str(r), "databases": [], "relationship_present": False}
+                {
+                    "user": str(r),
+                    "logical_user": logical_user,
+                    "prefix": prefix,
+                    "databases": [],
+                    "logical_databases": [],
+                    "relationship_present": False,
+                }
             )
     return out, len(out)
 

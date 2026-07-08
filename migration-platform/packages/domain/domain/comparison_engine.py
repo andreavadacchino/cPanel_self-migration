@@ -129,11 +129,50 @@ def _key_email(item: dict) -> str:
 
 
 def _key_db(item: dict) -> str:
-    return str(item.get("name") or "").strip().lower()
+    # Prefer the account-independent logical name so ``vecchio_wp`` and
+    # ``nuovo_wp`` index under the same key; fall back to the full name for
+    # legacy snapshots that predate normalization.
+    key = item.get("logical_name") or item.get("name")
+    return str(key or "").strip().lower()
 
 
 def _key_mysql_user(item: dict) -> str:
-    return str(item.get("user") or "").strip().lower()
+    # Prefer the logical user (``app``) over the prefixed one (``vecchio_app``)
+    # so the same user matches across accounts; fall back to the full user for
+    # legacy snapshots.
+    key = item.get("logical_user") or item.get("user")
+    return str(key or "").strip().lower()
+
+
+def _fingerprint_db(item: dict) -> str:
+    """Fingerprint a database on its logical identity, ignoring the account
+    prefix. A database is just a name here, so same logical name ⇒ match; a
+    prefix-only difference (``vecchio_wp`` vs ``nuovo_wp``) must never read as
+    ``different``. Legacy items without ``logical_name`` fall back to ``name``."""
+    logical = item.get("logical_name") or item.get("name")
+    return stable_fingerprint(
+        {"logical_name": str(logical or "").strip().lower()}
+    )
+
+
+def _fingerprint_mysql_user(item: dict) -> str:
+    """Fingerprint a MySQL user on ``(logical_user, sorted logical_databases)``,
+    ignoring the account prefix. Same logical user reaching the same set of
+    logical databases ⇒ match across differing prefixes; a diverging logical
+    grant set ⇒ ``different``. Legacy items without ``logical_databases`` fall
+    back to the full ``databases`` list (unchanged same-prefix behavior)."""
+    logical_user = item.get("logical_user") or item.get("user")
+    logical_dbs = item.get("logical_databases")
+    if logical_dbs is None:
+        logical_dbs = item.get("databases") or []
+    return stable_fingerprint(
+        {
+            "logical_user": str(logical_user or "").strip().lower(),
+            "logical_databases": sorted(
+                str(d or "").strip().lower() for d in logical_dbs
+            ),
+        }
+    )
 
 
 def _key_ssl(item: dict) -> str:
@@ -171,6 +210,11 @@ class _CategorySpec:
     cap: str
     key_fn: Callable[[dict], str]
     severity: dict[State, Severity]
+    # Optional per-category fingerprint. When set it decides match-vs-different
+    # for items sharing a key; when None the generic ``stable_fingerprint`` (the
+    # whole cleaned item) is used. Categories with account-specific prefixes use
+    # a logical fingerprint so a prefix-only difference is not a false delta.
+    fingerprint_fn: Callable[[dict], str] | None = None
 
 
 _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
@@ -209,6 +253,7 @@ _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
             State.ONLY_ON_DESTINATION: Severity.WARNING,
             State.DIFFERENT: Severity.WARNING,
         },
+        fingerprint_fn=_fingerprint_db,
     ),
     _CategorySpec(
         "mysql_users",
@@ -223,6 +268,7 @@ _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
             State.ONLY_ON_DESTINATION: Severity.WARNING,
             State.DIFFERENT: Severity.BLOCKER,
         },
+        fingerprint_fn=_fingerprint_mysql_user,
     ),
     _CategorySpec(
         "cron_jobs",
@@ -430,11 +476,12 @@ def compare(source: dict, destination: dict) -> ComparisonOutput:
             by_category[spec.name] = stats
             continue
 
+        fp_fn = spec.fingerprint_fn or stable_fingerprint
         for key in sorted(set(src_map) | set(dst_map)):
             in_src = key in src_map
             in_dst = key in dst_map
-            src_fp = stable_fingerprint(src_map[key]) if in_src else None
-            dst_fp = stable_fingerprint(dst_map[key]) if in_dst else None
+            src_fp = fp_fn(src_map[key]) if in_src else None
+            dst_fp = fp_fn(dst_map[key]) if in_dst else None
 
             if in_src and in_dst:
                 if src_fp == dst_fp:
