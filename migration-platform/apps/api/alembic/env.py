@@ -16,6 +16,7 @@ from app.modules.endpoints import models as _endpoints_models  # noqa: F401
 from app.modules.inventory import models as _inventory_models  # noqa: F401
 from app.modules.jobs import models as _jobs_models  # noqa: F401
 from app.modules.migrations import models as _migrations_models  # noqa: F401
+from app.modules.plan import models as _plan_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

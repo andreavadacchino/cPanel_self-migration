@@ -19,6 +19,7 @@ from app.modules.inventory.router import (
 )
 from app.modules.jobs.router import router as jobs_router
 from app.modules.migrations.router import router as migrations_router
+from app.modules.plan.router import router as plan_router
 from app.modules.preflight.router import router as preflight_router
 
 
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(inventory_router)
     app.include_router(capabilities_router)
     app.include_router(comparison_router)
+    app.include_router(plan_router)
 
     return app
 
