@@ -539,24 +539,47 @@ def compare(source: dict, destination: dict) -> ComparisonOutput:
 
         for key in sorted(collided):
             # A logical-identity collision: never silently drop the extra item.
-            stats["warning"] += 1
+            # If the ambiguous key is present on only one side, the items are
+            # unambiguously missing/only-on-that-side (just of unknown count), so
+            # inherit the category's real severity (a blocker for databases /
+            # mysql_users absent on the destination) instead of a soft warning —
+            # otherwise real to-migrate objects would be hidden from a blocker
+            # filter. Present on both sides ⇒ genuinely ambiguous ⇒ warning.
+            in_src = key in src_map
+            in_dst = key in dst_map
+            if in_src and not in_dst:
+                state = State.MISSING_ON_DESTINATION
+                detail = (
+                    "nessuno è presente sulla destinazione: risultano mancanti "
+                    "(numero esatto non determinabile)"
+                )
+            elif in_dst and not in_src:
+                state = State.ONLY_ON_DESTINATION
+                detail = (
+                    "presenti solo sulla destinazione (numero esatto non "
+                    "determinabile)"
+                )
+            else:
+                state = State.UNKNOWN
+                detail = "il confronto per questa chiave è incompleto"
+            severity = spec.severity.get(state, Severity.WARNING)
+            stats[severity.value] += 1
             sides = []
             if key in src_collisions:
                 sides.append("sorgente")
             if key in dst_collisions:
                 sides.append("destinazione")
             entry = _entry(
-                spec.name, spec.label, key, State.UNKNOWN, Severity.WARNING,
+                spec.name, spec.label, key, state, severity,
                 src_fp=None, dst_fp=None,
             )
             entry["title"] = f"{spec.label}: identità logica ambigua"
             entry["message"] = (
                 f"Più oggetti condividono l'identità logica '{key}' "
-                f"({', '.join(sides)}); il confronto per questa chiave è "
-                "incompleto."
+                f"({', '.join(sides)}); {detail}."
             )
-            entry["source"]["exists"] = key in src_map
-            entry["destination"]["exists"] = key in dst_map
+            entry["source"]["exists"] = in_src
+            entry["destination"]["exists"] = in_dst
             entries.append(entry)
 
         by_category[spec.name] = stats

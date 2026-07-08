@@ -666,6 +666,58 @@ def test_intra_snapshot_logical_collision_mysql_user_is_surfaced() -> None:
     assert hits[0]["state"] == "unknown"
 
 
+def test_logical_collision_absent_on_destination_is_blocker() -> None:
+    # Two distinct source DBs share logical "wp" and NEITHER exists on the
+    # destination: they are genuinely missing, so the ambiguity entry must carry
+    # the missing_on_destination severity (blocker), not a soft warning — else an
+    # operator filtering by blockers would miss two real to-migrate databases.
+    src = _snapshot(
+        databases=[_db("shop_wp", "wp", "shop"), _db("blog_wp", "wp", "blog")]
+    )
+    dst = _snapshot(databases=[_db("other", "other", None)])
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "databases" and e["key"] == "wp"]
+    assert len(hits) == 1
+    assert hits[0]["state"] == "missing_on_destination"
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_logical_collision_only_on_destination_keeps_lower_severity() -> None:
+    # Collision only on the destination (key absent on source) → the ambiguity
+    # is only_on_destination severity (warning for databases), never a blocker.
+    src = _snapshot(databases=[_db("other", "other", None)])
+    dst = _snapshot(
+        databases=[_db("shop_wp", "wp", "shop"), _db("blog_wp", "wp", "blog")]
+    )
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "databases" and e["key"] == "wp"]
+    assert len(hits) == 1
+    assert hits[0]["state"] == "only_on_destination"
+    assert hits[0]["severity"] == "warning"
+
+
+def test_logical_collision_mysql_user_absent_on_destination_is_blocker() -> None:
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("shop_app", "app", "shop", ["shop_wp"], ["wp"]),
+            _mysql_user_logical("blog_app", "app", "blog", ["blog_wp"], ["wp"]),
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[_mysql_user_logical("x_other", "other", "x", [], [])],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "mysql_users" and e["key"] == "app"]
+    assert len(hits) == 1
+    assert hits[0]["state"] == "missing_on_destination"
+    assert hits[0]["severity"] == "blocker"
+
+
 def test_no_logical_collision_when_full_dedup_is_exact_duplicate() -> None:
     # Two identical rows are a harmless duplicate, not an ambiguous collision.
     src = _snapshot(databases=[_db("wp", "wp", None), _db("wp", "wp", None)])

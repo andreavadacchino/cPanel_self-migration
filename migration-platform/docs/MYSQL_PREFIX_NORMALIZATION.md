@@ -204,11 +204,15 @@ uguale resta identico bit-per-bit.
   UI, ma su account legacy/self-migrati possono esistere oggetti non prefissati:
   la collisione è quindi plausibile sul target reale. **Mitigato**: `_index`
   rileva la collisione (due item distinti sotto la stessa chiave logica) e
-  `compare()` emette un warning esplicito («identità logica ambigua») per quella
+  `compare()` emette un'entry esplicita («identità logica ambigua») per quella
   chiave invece di scartare silenziosamente il secondo oggetto. La chiave
-  ambigua non viene confrontata item-per-item (niente falso match/blocker); il
-  gap è visibile all'operatore. Un duplicato esatto (stesso contenuto) non è una
-  collisione.
+  ambigua non viene confrontata item-per-item. La **severity** eredita lo stato
+  reale: se la key è presente su un solo lato gli oggetti sono comunque
+  inequivocabilmente mancanti / solo-su-destinazione (di numero non
+  determinabile) e l'entry usa la severity della categoria — per `databases` e
+  `mysql_users` assenti sulla destinazione è **blocker**, così un operatore che
+  filtra per blocker non li perde; presente su entrambi i lati ⇒ genuinamente
+  ambiguo ⇒ warning. Un duplicato esatto (stesso contenuto) non è una collisione.
 - **Snapshot misti (nuovo vs legacy).** Un confronto tra uno snapshot nuovo (con
   `logical_*`) e uno legacy (senza) userebbe la chiave logica su un lato e il
   nome completo sull'altro. In pratica non accade: i due snapshot di un confronto
