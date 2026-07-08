@@ -57,6 +57,18 @@ from adapters.inventory import (
 # Reaching the host but failing at TCP/TLS/timeout is fatal to a snapshot.
 _FATAL = (CpanelConnectionError, CpanelTimeoutError)
 
+# Fixed, category-safe coverage messages. Deliberately NOT derived from the
+# exception text: a parse/api error can embed a raw response-body snippet, and
+# for Cron::listcron that body is the cron listing whose command may hold
+# secrets — storing it would leak into the snapshot/API/UI.
+_COVERAGE_ERROR_MESSAGE = {
+    COVERAGE_UNSUPPORTED: "The function is not available on this host.",
+    COVERAGE_UNAVAILABLE: (
+        "The read call failed (function unavailable or module disabled)."
+    ),
+    COVERAGE_FAILED: "The read returned an unexpected response shape.",
+}
+
 
 # --- normalizers ------------------------------------------------------------
 
@@ -191,22 +203,28 @@ def _norm_dns_records(data: object, zone: str) -> tuple[list, int]:
     """Normalize one zone's ``DNS::parse_zone`` output (base64-encoded records).
 
     Keeps only actual records (``type == "record"``) as
-    ``{domain, name, type, value, ttl}`` with decoded, length-capped values.
+    ``{domain, name, type, value, ttl}`` with fully decoded values. TXT RDATA is
+    split into &lt;=255-byte character-strings on the wire purely for the length
+    limit, so its segments are re-joined with NO separator; multi-field types
+    (MX/SRV) keep a space between their positional fields. The value is never
+    truncated — a cap would corrupt the comparison identity/fingerprint and make
+    two distinct DKIM/TXT records collapse into a false "match".
     """
     rows = data if isinstance(data, list) else []
     out: list[dict] = []
     for r in rows:
         if not isinstance(r, dict) or r.get("type") != "record":
             continue
-        value = " ".join(
-            part for part in (_b64decode(x) for x in (r.get("data_b64") or [])) if part
-        )
+        rtype = r.get("record_type")
+        segments = [_b64decode(x) for x in (r.get("data_b64") or [])]
+        sep = "" if str(rtype).upper() == "TXT" else " "
+        value = sep.join(s for s in segments if s)
         out.append(
             {
                 "domain": zone,
                 "name": _b64decode(r.get("dname_b64")),
-                "type": r.get("record_type"),
-                "value": value[:255],
+                "type": rtype,
+                "value": value,
                 "ttl": r.get("ttl"),
             }
         )
@@ -283,7 +301,16 @@ class CpanelInventorySource:
         return InventoryError(f"Cannot reach {self._host}: {exc}")
 
     def _coverage_for_error(self, method: str, exc: Exception) -> CoverageEntry:
-        """Map a non-fatal read failure to a coverage status."""
+        """Map a non-fatal read failure to a coverage status.
+
+        The persisted ``message`` is a FIXED, category-safe string — never the
+        exception text. A parse/api error can embed a snippet of the raw
+        response body (see client._describe), and for ``Cron::listcron`` that
+        body IS the cron listing, whose ``command`` field may contain secrets.
+        Storing ``str(exc)`` would leak it into the snapshot / API / UI, defeating
+        the "cron command is never persisted" invariant. The rich exception text
+        remains available to the caller for transient handling, just not stored.
+        """
         if isinstance(exc, CpanelUnsupportedFunctionError):
             status = COVERAGE_UNSUPPORTED
         elif isinstance(exc, CpanelApiError):
@@ -291,7 +318,10 @@ class CpanelInventorySource:
         else:  # CpanelParseError / unexpected shape
             status = COVERAGE_FAILED
         return CoverageEntry(
-            status=status, method=method, read_only_verified=True, message=str(exc)
+            status=status,
+            method=method,
+            read_only_verified=True,
+            message=_COVERAGE_ERROR_MESSAGE[status],
         )
 
     def _read(
@@ -354,9 +384,21 @@ class CpanelInventorySource:
         Subdomains share the parent zone, so only main/addon/parked are parsed.
         """
         method = "DNS::parse_zone"
+        if not isinstance(domains, list):
+            # Domains soft-failed (non-fatal): we don't know which zones exist,
+            # so DNS is a read gap, not "successfully verified as empty".
+            return (
+                None,
+                None,
+                CoverageEntry(
+                    status=COVERAGE_UNAVAILABLE, method=method,
+                    read_only_verified=True,
+                    message="Domains could not be read; DNS was not attempted.",
+                ),
+            )
         zones = [
             str(d["domain"])
-            for d in (domains if isinstance(domains, list) else [])
+            for d in domains
             if isinstance(d, dict)
             and d.get("type") in ("main", "addon", "parked")
             and d.get("domain")
@@ -383,16 +425,21 @@ class CpanelInventorySource:
                 raise InventoryError(
                     f"Authentication failed for {self._host}: {exc}"
                 ) from exc
-            except CpanelUnsupportedFunctionError as exc:
-                # The function is absent entirely — no point trying more zones.
-                return (
-                    None,
-                    None,
-                    CoverageEntry(
-                        status=COVERAGE_UNSUPPORTED, method=method,
-                        read_only_verified=True, message=str(exc),
-                    ),
-                )
+            except CpanelUnsupportedFunctionError:
+                if ok == 0:
+                    # The function is absent entirely — no point trying more zones.
+                    return (
+                        None,
+                        None,
+                        CoverageEntry(
+                            status=COVERAGE_UNSUPPORTED, method=method,
+                            read_only_verified=True,
+                            message="DNS::parse_zone is not available on this host.",
+                        ),
+                    )
+                # It worked for earlier zones, so this is a per-zone gap.
+                failed += 1
+                continue
             except CpanelError:
                 failed += 1
                 continue

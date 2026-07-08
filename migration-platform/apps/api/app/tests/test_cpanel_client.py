@@ -210,3 +210,26 @@ def test_cpapi2_404_maps_to_unsupported() -> None:
     client = _client(lambda r: httpx.Response(404, text="not found"))
     with pytest.raises(CpanelUnsupportedFunctionError):
         client.call_cpapi2("Cron", "listcron")
+
+
+def test_cpapi2_accepts_boolean_true_event_result() -> None:
+    body = {
+        "cpanelresult": {
+            "func": "listcron",
+            "module": "Cron",
+            "data": [{"minute": "0"}],
+            "event": {"result": True},  # JSON boolean, not integer 1
+        }
+    }
+    data = _client(lambda r: httpx.Response(200, json=body)).call_cpapi2(
+        "Cron", "listcron"
+    )
+    assert data == [{"minute": "0"}]
+
+
+def test_cpapi2_params_cannot_override_reserved_keys() -> None:
+    client = _client(lambda r: httpx.Response(200, json=_api2_ok([])))
+    with pytest.raises(ValueError):
+        client.call_cpapi2(
+            "Cron", "listcron", {"cpanel_jsonapi_func": "add_line"}
+        )

@@ -221,6 +221,14 @@ class CpanelClient:
             "cpanel_jsonapi_func": function,
         }
         if params:
+            # Never let a caller-supplied param clobber the envelope routing keys
+            # (module/func/apiversion/user) — defense in depth for a read-only verb.
+            collisions = set(params) & set(query)
+            if collisions:
+                raise ValueError(
+                    f"cpapi2 params may not override reserved keys: "
+                    f"{sorted(collisions)}"
+                )
             query.update(params)
         response, body = self._get_json(
             url, query, module=module, function=function
@@ -238,7 +246,9 @@ class CpanelClient:
         event_result = event.get("result") if isinstance(event, dict) else None
         if error:
             raise CpanelApiError(str(error))
-        if event_result is not None and str(event_result) not in ("1", "true"):
+        # Success is documented as integer 1; tolerate a JSON boolean true and
+        # case variants ("True") that some builds emit.
+        if event_result is not None and str(event_result).lower() not in ("1", "true"):
             raise CpanelApiError(
                 f"cPanel API 2 {module}/{function} failed "
                 f"(event.result={event_result})"

@@ -20,7 +20,8 @@ from adapters.cpanel.errors import (
     CpanelParseError,
     CpanelUnsupportedFunctionError,
 )
-from adapters.cpanel.inventory import CpanelInventorySource
+from adapters.cpanel.client import CpanelClient
+from adapters.cpanel.inventory import CpanelInventorySource, _norm_dns_records
 from adapters.cpanel.schemas import CpanelUapiResponse
 from adapters.inventory import (
     InventoryError,
@@ -272,6 +273,78 @@ def test_dns_unsupported_when_function_missing() -> None:
     )
     result = CpanelInventorySource(client, host="acme.com").collect()
     assert _coverage(result)["dns_records"]["status"] == "unsupported"
+
+
+def test_dns_unavailable_when_domains_not_readable() -> None:
+    # Domains soft-fails (non-fatal) → DNS must be a read gap, not "empty".
+    errs = {("DomainInfo", "list_domains"): CpanelApiError("stats module disabled")}
+    client = FakeClient(
+        uapi=_uapi_responses(), uapi_errors=errs, cpapi2={("Cron", "listcron"): []}
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    cov = _coverage(result)
+    assert cov["domains"]["status"] == "unavailable"
+    assert cov["dns_records"]["status"] == "unavailable"
+    assert result.capabilities.can_read_dns is False
+
+
+def test_dns_txt_multichunk_joined_without_separator_and_not_truncated() -> None:
+    long_key = "v=DKIM1; k=rsa; p=" + "A" * 400
+    chunk1, chunk2 = long_key[:200], long_key[200:]
+    rows = [
+        {"type": "record", "record_type": "TXT",
+         "dname_b64": _b64("dkim._domainkey.acme.com."),
+         "data_b64": [_b64(chunk1), _b64(chunk2)], "ttl": 3600},
+    ]
+    records, count = _norm_dns_records(rows, "acme.com")
+    assert count == 1
+    # TXT segments re-joined with NO separator and never truncated.
+    assert records[0]["value"] == long_key
+    assert len(records[0]["value"]) == len(long_key)
+
+
+def test_dns_mx_fields_joined_with_space() -> None:
+    rows = [
+        {"type": "record", "record_type": "MX",
+         "dname_b64": _b64("acme.com."),
+         "data_b64": [_b64("10"), _b64("mail.acme.com.")], "ttl": 14400},
+    ]
+    records, _ = _norm_dns_records(rows, "acme.com")
+    assert records[0]["value"] == "10 mail.acme.com."
+
+
+def test_cron_command_never_leaks_via_malformed_envelope() -> None:
+    """A valid-JSON but wrong-envelope API 2 response for Cron::listcron carries
+    the raw cron listing (command included). The parse error must not persist it
+    into the coverage message — go through the real CpanelClient end-to-end."""
+    secret_cmd = "mysqldump -pSUPERSECRET123 | curl -H 'Authorization: Bearer TKN'"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/json-api/cpanel":
+            # Valid JSON, non-standard envelope, containing the secret command.
+            return httpx.Response(
+                200, json={"cron": [{"minute": "0", "command": secret_cmd}]}
+            )
+        if path == "/execute/DomainInfo/list_domains":
+            return httpx.Response(200, json={"result": {"status": 1, "data": {
+                "main_domain": "acme.com", "addon_domains": [],
+                "parked_domains": [], "sub_domains": []}}})
+        # Every other UAPI read → empty success (incl. DNS::parse_zone).
+        return httpx.Response(200, json={"result": {"status": 1, "data": []}})
+
+    client = CpanelClient(
+        "https://acme.com:2083", "bob", "TKN",
+        transport=httpx.MockTransport(handler),
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+
+    cov = _coverage(result)["cron_jobs"]
+    assert cov["status"] == "failed"  # unexpected envelope shape
+    blob = result.model_dump_json()
+    assert "SUPERSECRET123" not in blob
+    assert "mysqldump" not in blob
+    assert "Authorization" not in blob
 
 
 # --- other categories -------------------------------------------------------
