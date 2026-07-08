@@ -18,6 +18,7 @@ import imaplib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.parse
@@ -202,7 +203,7 @@ def build_dry_run_plan(cfg: SmokeConfig | None, missing: list[str]) -> dict[str,
         )
     if cfg is not None:
         auth_mode = "token" if cfg.dest_cpanel_token else "password"
-        ssh_mode = "key" if cfg.source_ssh_key_path else "password"
+        ssh_mode = "key" if cfg.source_ssh_key_path else "password_declared_but_live_unsupported"
         notes.extend(
             [
                 f"Dry-run only. Live mode requires both flags: {' '.join(_LIVE_FLAGS)}.",
@@ -213,6 +214,8 @@ def build_dry_run_plan(cfg: SmokeConfig | None, missing: list[str]) -> dict[str,
                 f"Mailbox source={cfg.smoke_mailbox_user}@{cfg.smoke_domain} "
                 f"destination={cfg.smoke_dest_mailbox_user}@{cfg.smoke_domain}.",
                 "Maildir copy is optional and skipped by default by this harness.",
+                "Live mode requires SOURCE_SSH_KEY_PATH. "
+                "SOURCE_SSH_PASSWORD is not supported by this harness.",
                 "Private key path is redacted to basename only: "
                 f"{_path_basename(cfg.source_ssh_key_path) or 'n/a'}.",
             ]
@@ -235,6 +238,10 @@ def _require_live_flags(ns: argparse.Namespace) -> bool:
 
 
 def _ssh_base_command(cfg: SmokeConfig) -> list[str]:
+    if not cfg.source_ssh_key_path:
+        raise RuntimeError(
+            "SOURCE_SSH_PASSWORD is not supported by this harness; use SOURCE_SSH_KEY_PATH"
+        )
     cmd = [
         "ssh",
         "-p",
@@ -250,8 +257,14 @@ def _ssh_base_command(cfg: SmokeConfig) -> list[str]:
     return cmd
 
 
-def _read_source_hash(cfg: SmokeConfig) -> str:
-    command = (
+def _build_remote_hash_read_command(cfg: SmokeConfig) -> str:
+    prefix = " ".join(
+        [
+            f"SMOKE_DOMAIN={shlex.quote(cfg.smoke_domain)}",
+            f"SMOKE_MAILBOX_USER={shlex.quote(cfg.smoke_mailbox_user)}",
+        ]
+    )
+    script = (
         "python3 - <<'PY'\n"
         "from pathlib import Path\n"
         "import os\n"
@@ -268,16 +281,16 @@ def _read_source_hash(cfg: SmokeConfig) -> str:
         "raise SystemExit(42)\n"
         "PY"
     )
+    return f"{prefix} {script}"
+
+
+def _read_source_hash(cfg: SmokeConfig) -> str:
+    command = _build_remote_hash_read_command(cfg)
     proc = subprocess.run(
         _ssh_base_command(cfg) + [command],
         check=False,
         capture_output=True,
         text=True,
-        env={
-            **os.environ,
-            "SMOKE_DOMAIN": cfg.smoke_domain,
-            "SMOKE_MAILBOX_USER": cfg.smoke_mailbox_user,
-        },
     )
     if proc.returncode == 41:
         raise RuntimeError("source shadow not readable")

@@ -64,6 +64,34 @@ def test_live_requires_both_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     assert mod.main(["--i-understand-this-uses-sacrificial-accounts"]) == 0
 
 
+def test_remote_hash_command_quotes_values() -> None:
+    mod = _load_module()
+    cfg = mod.SmokeConfig(
+        source_ssh_host="source.example.test",
+        source_ssh_port=22,
+        source_ssh_user="cpanelsrc",
+        source_ssh_key_path="/tmp/keys/id_ed25519",
+        source_ssh_password=None,
+        dest_cpanel_host="https://dest.example.test:2083",
+        dest_cpanel_user="cpaneldst",
+        dest_cpanel_token="tok_secret_123",
+        dest_cpanel_password=None,
+        smoke_domain="exa'mple.test",
+        smoke_mailbox_user="source box",
+        smoke_mailbox_old_password="OldSecret!123",
+        smoke_dest_mailbox_user="destbox",
+        dest_imap_host="dest.example.test",
+        dest_imap_port=993,
+        source_maildir_path=None,
+        dest_maildir_path=None,
+    )
+    command = mod._build_remote_hash_read_command(cfg)
+    assert "SMOKE_DOMAIN='exa'\"'\"'mple.test'" in command
+    assert "SMOKE_MAILBOX_USER='source box'" in command
+    assert "os.environ['SMOKE_DOMAIN']" in command
+    assert "os.environ['SMOKE_MAILBOX_USER']" in command
+
+
 def test_redaction_removes_hash_password_token_and_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -133,6 +161,37 @@ def test_missing_env_fails_closed_in_live(monkeypatch: pytest.MonkeyPatch) -> No
         )
         == 2
     )
+
+
+def test_live_with_only_ssh_password_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mod = _load_module()
+    _base_env(monkeypatch)
+    monkeypatch.delenv("SOURCE_SSH_KEY_PATH", raising=False)
+    monkeypatch.setenv("SOURCE_SSH_PASSWORD", "ssh-password-only")
+    assert (
+        mod.main(
+            ["--live", "--i-understand-this-uses-sacrificial-accounts"]
+        )
+        == 2
+    )
+    out = capsys.readouterr().out
+    assert "SOURCE_SSH_PASSWORD is not supported by this harness; use SOURCE_SSH_KEY_PATH" in out
+
+
+def test_dry_run_mentions_key_path_required_for_live(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mod = _load_module()
+    _base_env(monkeypatch)
+    monkeypatch.delenv("SOURCE_SSH_KEY_PATH", raising=False)
+    monkeypatch.setenv("SOURCE_SSH_PASSWORD", "ssh-password-only")
+    assert mod.main([]) == 0
+    out = capsys.readouterr().out
+    assert "Live mode requires SOURCE_SSH_KEY_PATH" in out
 
 
 def test_hash_like_sample_never_left_visible(

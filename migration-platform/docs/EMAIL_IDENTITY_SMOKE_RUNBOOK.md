@@ -65,7 +65,7 @@ Segreti solo via env, mai in argv:
 - `SOURCE_SSH_HOST`
 - `SOURCE_SSH_PORT` opzionale, default `22`
 - `SOURCE_SSH_USER`
-- `SOURCE_SSH_KEY_PATH` oppure `SOURCE_SSH_PASSWORD`
+- `SOURCE_SSH_KEY_PATH`
 - `DEST_CPANEL_HOST`
 - `DEST_CPANEL_USER`
 - `DEST_CPANEL_TOKEN` oppure `DEST_CPANEL_PASSWORD`
@@ -80,6 +80,12 @@ Opzionali:
 - `DEST_IMAP_PORT` default: `993`
 - `SOURCE_MAILDIR_PATH`
 - `DEST_MAILDIR_PATH`
+
+Nota:
+
+- `SOURCE_SSH_PASSWORD` può comparire come env dichiarata legacy, ma **non è
+  supportata** dal live harness.
+- Il live smoke richiede `SOURCE_SSH_KEY_PATH`.
 
 ## Modalità di lettura shadow source
 
@@ -171,6 +177,12 @@ Se uno dei due flag manca:
 - nessuna connessione
 - nessuna lettura shadow
 - nessuna scrittura destination
+
+Se in live manca `SOURCE_SSH_KEY_PATH`:
+
+- fail closed
+- messaggio esplicito:
+  `SOURCE_SSH_PASSWORD is not supported by this harness; use SOURCE_SSH_KEY_PATH`
 
 ## Rollback / cleanup
 
