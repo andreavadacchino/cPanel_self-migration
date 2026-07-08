@@ -99,9 +99,16 @@ export default function MigrationPlanPanel({
 
   useEffect(() => {
     let active = true
-    fetchPlan(migrationId).then((p) => {
-      if (active) setPlan(p)
-    })
+    // fetchPlan returns null only on 404 (no plan yet); any other failure
+    // (500, network, …) rejects and must be shown, not silently swallowed.
+    fetchPlan(migrationId)
+      .then((p) => {
+        if (active) setPlan(p)
+      })
+      .catch((err: unknown) => {
+        if (active)
+          setError(err instanceof Error ? err.message : 'Errore sconosciuto')
+      })
     return () => {
       active = false
     }
