@@ -85,32 +85,52 @@ def _coverage_status(coverage: object, key: str) -> str | None:
     return entry.get("status") if isinstance(entry, dict) else None
 
 
-def _inventory_manual_tasks(source_inventory: dict) -> list[dict]:
-    coverage = source_inventory.get("coverage") or {}
+def _count_readable(inventory: dict, coverage: dict, category: str) -> int | None:
+    """Item count for a category only when its coverage says it was read; None
+    when the category is not readable (so the count would be misleading)."""
+    if _coverage_status(coverage, category) not in _READABLE_COVERAGE:
+        return None
+    items = inventory.get(category)
+    return len(items) if isinstance(items, list) else 0
+
+
+def _inventory_manual_tasks(
+    source_inventory: dict, destination_inventory: dict
+) -> list[dict]:
+    src_cov = source_inventory.get("coverage") or {}
+    dst_cov = destination_inventory.get("coverage") or {}
     out: list[dict] = []
     for category, label in _INVENTORY_MANUAL_CATEGORIES:
-        items = source_inventory.get(category) or []
-        readable = _coverage_status(coverage, category) in _READABLE_COVERAGE
-        if readable and items:
-            out.append(
-                {
-                    "category": category,
-                    "key": category,
-                    "state": None,
-                    "severity": "warning",
-                    "title": f"{label}: intervento manuale",
-                    "message": (
-                        f"{len(items)} elemento/i presenti sul source non sono "
-                        "confrontati e non vengono migrati automaticamente: "
-                        "vanno ricreati/verificati manualmente."
-                    ),
-                }
-            )
+        src_count = _count_readable(source_inventory, src_cov, category)
+        if not src_count:  # None (unreadable) or 0 → nothing to flag from source
+            continue
+        dst_count = _count_readable(destination_inventory, dst_cov, category)
+        dst_note = (
+            f"{dst_count} sulla destinazione"
+            if dst_count is not None
+            else "destinazione non verificata"
+        )
+        out.append(
+            {
+                "category": category,
+                "key": category,
+                "state": None,
+                "severity": "warning",
+                "title": f"{label}: intervento manuale",
+                "message": (
+                    f"{src_count} sul source ({dst_note}) non sono confrontati "
+                    "e non vengono migrati automaticamente: vanno "
+                    "ricreati/verificati manualmente."
+                ),
+            }
+        )
     return out
 
 
 def _ready_steps(summary: dict) -> list[dict]:
-    by_category = (summary or {}).get("by_category") or {}
+    by_category = (summary or {}).get("by_category")
+    if not isinstance(by_category, dict):
+        return []
     out: list[dict] = []
     for category in _READY_STEP_CATEGORIES:
         stats = by_category.get(category)
@@ -185,10 +205,15 @@ def build_migration_plan(
     read-gap (capabilities/coverage) is an unknown, never a blocker; a
     non-blocker delta in a non-automatable category is a manual task.
     """
-    source_inventory = source_inventory or {}
-    comparison = comparison or {}
-    entries = comparison.get("entries") or []
-    summary = comparison.get("summary") or {}
+    source_inventory = source_inventory if isinstance(source_inventory, dict) else {}
+    destination_inventory = (
+        destination_inventory if isinstance(destination_inventory, dict) else {}
+    )
+    comparison = comparison if isinstance(comparison, dict) else {}
+    entries = comparison.get("entries")
+    entries = entries if isinstance(entries, list) else []
+    summary = comparison.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
 
     blockers: list[dict] = []
     warnings: list[dict] = []
@@ -196,6 +221,8 @@ def build_migration_plan(
     unknowns: list[dict] = []
 
     for entry in entries:
+        if not isinstance(entry, dict):
+            continue  # corrupt/legacy row — never crash on it
         category = entry.get("category")
         severity = entry.get("severity")
         if category in _UNKNOWN_CATEGORIES:
@@ -207,7 +234,9 @@ def build_migration_plan(
         else:
             warnings.append(_plan_item(entry))
 
-    manual_tasks.extend(_inventory_manual_tasks(source_inventory))
+    manual_tasks.extend(
+        _inventory_manual_tasks(source_inventory, destination_inventory)
+    )
     ready_steps = _ready_steps(summary)
     cutover_notes = _cutover_notes(source_inventory)
 

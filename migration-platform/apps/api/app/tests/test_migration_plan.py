@@ -252,6 +252,45 @@ def test_summary_counts_match_sections() -> None:
     assert s["ready_steps_count"] == len(plan.sections["ready_steps"])
 
 
+def test_manual_task_uses_destination_inventory() -> None:
+    # The destination-side count is surfaced in the manual task, proving the
+    # destination inventory actually participates in the plan.
+    src = _inv(email_forwarders=[{"source": "a@x", "destination": "b@x"}])
+    dst = _inv(email_forwarders=[
+        {"source": "a@x", "destination": "b@x"},
+        {"source": "c@x", "destination": "d@x"},
+    ])
+    plan = build_migration_plan(
+        src, dst,
+        {"summary": compare(src, dst).summary, "entries": compare(src, dst).entries},
+    )
+    task = next(
+        i for i in plan.sections["manual_tasks"]
+        if i["category"] == "email_forwarders"
+    )
+    assert "2 sulla destinazione" in task["message"]
+
+
+def test_malformed_entries_do_not_crash() -> None:
+    # Non-dict entries (corrupt/legacy data) are skipped, never crash.
+    comparison = {"entries": ["not-a-dict", 42, None], "summary": {}}
+    plan = build_migration_plan(_inv(), _inv(), comparison)
+    assert plan.status == "ready_for_review"
+    assert plan.sections["blockers"] == []
+
+
+def test_malformed_summary_by_category_does_not_crash() -> None:
+    comparison = {"entries": [], "summary": {"by_category": "not-a-dict"}}
+    plan = build_migration_plan(_inv(), _inv(), comparison)
+    assert plan.sections["ready_steps"] == []
+
+
+def test_none_inputs_do_not_crash() -> None:
+    plan = build_migration_plan(None, None, None)
+    assert plan.status == "ready_for_review"
+    assert plan.summary["blockers_count"] == 0
+
+
 def test_plan_output_has_no_secret() -> None:
     src = _inv(databases=[
         {"name": "acme_wp", "logical_name": "wp", "prefix": "acme"},
