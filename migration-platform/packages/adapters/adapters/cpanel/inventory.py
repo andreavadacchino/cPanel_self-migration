@@ -11,6 +11,8 @@ Verified functions (api.docs.cpanel.net, cPanel & WHM v136):
   domains         → DomainInfo::list_domains       (UAPI, connect/auth gate)
   email_accounts  → Email::list_pops               (UAPI)
   databases       → Mysql::list_databases          (UAPI)
+  mysql_users     → Mysql::list_users               (UAPI; each user carries its
+                    own databases inline — never the password)
   ssl             → SSL::installed_hosts           (UAPI)
   cron_jobs       → Cron::listcron                 (cPanel API 2 — no UAPI Cron)
   dns_records     → DNS::parse_zone                (UAPI, one call per zone)
@@ -187,6 +189,45 @@ def _norm_ftp(data: object) -> tuple[list, int]:
             out.append({"user": r.get("user") or r.get("login"), "type": r.get("type")})
         else:
             out.append({"user": str(r), "type": None})
+    return out, len(out)
+
+
+def _norm_mysql_users(data: object) -> tuple[list, int]:
+    """Normalize ``Mysql::list_users`` — each user with the databases it owns.
+
+    cPanel's ``Mysql::list_users`` returns, per user, ``{shortuser, user,
+    databases: [...]}``: the grant relation is already attached to each user, so
+    there is no second call and no direction guessing. Only the (full) username
+    and the sorted set of its database names are kept — never the password. A row
+    missing the ``databases`` field yields ``relationship_present=False``
+    (defensive; the live shape always includes it); a bare-string row degrades to
+    a name only.
+    """
+    rows = data if isinstance(data, list) else []
+    out: list[dict] = []
+    for r in rows:
+        if isinstance(r, dict):
+            user = r.get("user") or r.get("shortuser") or r.get("username")
+            if not user:
+                continue
+            dbs_raw = r.get("databases")
+            has_rel = isinstance(dbs_raw, list)
+            dbs = (
+                sorted({str(d).strip() for d in dbs_raw if str(d).strip()})
+                if has_rel
+                else []
+            )
+            out.append(
+                {
+                    "user": str(user),
+                    "databases": dbs,
+                    "relationship_present": has_rel,
+                }
+            )
+        elif r:
+            out.append(
+                {"user": str(r), "databases": [], "relationship_present": False}
+            )
     return out, len(out)
 
 
@@ -486,6 +527,7 @@ class CpanelInventorySource:
             can_read_domains=readable("domains"),
             can_read_email=readable("email_accounts"),
             can_read_databases=readable("databases"),
+            can_read_db_users=readable("mysql_users"),
             can_read_cron=readable("cron_jobs"),
             can_read_dns=readable("dns_records"),
             can_read_ssl=readable("ssl"),
@@ -511,6 +553,11 @@ class CpanelInventorySource:
         )
         databases, databases_count, coverage["databases"] = self._read(
             "Mysql", "list_databases", _norm_databases, method="Mysql::list_databases"
+        )
+        # Mysql::list_users already carries each user's databases, so it is a
+        # plain single-call read like the others.
+        mysql_users, mysql_users_count, coverage["mysql_users"] = self._read(
+            "Mysql", "list_users", _norm_mysql_users, method="Mysql::list_users"
         )
         ssl, ssl_count, coverage["ssl"] = self._read(
             "SSL", "installed_hosts", _norm_ssl, method="SSL::installed_hosts"
@@ -538,6 +585,7 @@ class CpanelInventorySource:
             "domains": domains,
             "email_accounts": email,
             "databases": databases,
+            "mysql_users": mysql_users,
             "cron_jobs": cron,
             "ssl": ssl,
             "dns_records": dns_records,
@@ -555,6 +603,7 @@ class CpanelInventorySource:
             cron_jobs_count=cron_count,
             dns_records_count=dns_count,
             ssl_items_count=ssl_count,
+            mysql_users_count=mysql_users_count,
             warnings_count=len(warnings),
         )
         return InventoryResult(capabilities=caps, summary=summary, data=data)

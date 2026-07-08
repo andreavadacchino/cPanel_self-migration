@@ -9,6 +9,7 @@ hardcoded, and snapshots never carry secrets (no cron command, no token).
 from __future__ import annotations
 
 import base64
+import json
 
 import httpx
 import pytest
@@ -21,7 +22,11 @@ from adapters.cpanel.errors import (
     CpanelUnsupportedFunctionError,
 )
 from adapters.cpanel.client import CpanelClient
-from adapters.cpanel.inventory import CpanelInventorySource, _norm_dns_records
+from adapters.cpanel.inventory import (
+    CpanelInventorySource,
+    _norm_dns_records,
+    _norm_mysql_users,
+)
 from adapters.cpanel.schemas import CpanelUapiResponse
 from adapters.inventory import (
     InventoryError,
@@ -102,6 +107,12 @@ def _uapi_responses() -> dict:
         ],
         ("Email", "list_auto_responders"): [],
         ("Ftp", "list_ftp"): [{"user": "deploy@acme.com", "type": "sub"}],
+        # Mysql::list_users carries each user's databases inline — the real cPanel
+        # v136 shape: {shortuser, user, databases:[...]}.
+        ("Mysql", "list_users"): [
+            {"shortuser": "wp", "user": "acme_wp", "databases": ["db1"]},
+            {"shortuser": "app", "user": "acme_app", "databases": ["db2"]},
+        ],
     }
 
 
@@ -440,3 +451,131 @@ def test_factory_builds_cpanel_for_token_ref_env() -> None:
     )
     assert isinstance(src, CpanelInventorySource)
     assert src.probe().connected is True
+
+
+# --- mysql users (Sprint 4 collector #1) ------------------------------------
+
+
+def test_mysql_users_collected_with_databases() -> None:
+    result = CpanelInventorySource(_full_client(), host="acme.com").collect()
+    assert result.capabilities.can_read_db_users is True
+
+    cov = _coverage(result)["mysql_users"]
+    assert cov["status"] == "succeeded"
+    assert cov["method"] == "Mysql::list_users"
+
+    users = {u["user"]: u for u in result.data["mysql_users"]}
+    assert users["acme_wp"]["databases"] == ["db1"]
+    assert users["acme_wp"]["relationship_present"] is True
+    assert users["acme_app"]["databases"] == ["db2"]
+    assert result.summary["mysql_users_count"] == 2
+
+
+def test_mysql_users_unavailable_on_api_error() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(),
+        uapi_errors={("Mysql", "list_users"): CpanelApiError("module disabled")},
+        cpapi2={("Cron", "listcron"): []},
+        dns={"acme.com": [], "a.com": []},
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert result.capabilities.can_read_db_users is False
+    assert _coverage(result)["mysql_users"]["status"] == "unavailable"
+    assert result.summary["mysql_users_count"] is None
+
+
+def test_mysql_users_unsupported_when_function_missing() -> None:
+    client = FakeClient(
+        uapi=_uapi_responses(),
+        uapi_errors={
+            ("Mysql", "list_users"): CpanelUnsupportedFunctionError("no such fn")
+        },
+        cpapi2={("Cron", "listcron"): []},
+        dns={"acme.com": [], "a.com": []},
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert result.capabilities.can_read_db_users is False
+    assert _coverage(result)["mysql_users"]["status"] == "unsupported"
+
+
+def test_mysql_users_empty_when_no_users() -> None:
+    uapi = _uapi_responses()
+    uapi[("Mysql", "list_users")] = []
+    client = FakeClient(
+        uapi=uapi, cpapi2={("Cron", "listcron"): []}, dns={"acme.com": [], "a.com": []}
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    assert _coverage(result)["mysql_users"]["status"] == "empty"
+    assert result.capabilities.can_read_db_users is True  # empty is still readable
+    assert result.summary["mysql_users_count"] == 0
+
+
+def test_mysql_users_snapshot_carries_no_password() -> None:
+    # Even if list_users returns password-bearing rows, none may reach the snapshot.
+    uapi = _uapi_responses()
+    uapi[("Mysql", "list_users")] = [
+        {"user": "acme_wp", "databases": ["db1"],
+         "password": "hunter2", "password_hash": "*ABCDEF"}
+    ]
+    client = FakeClient(
+        uapi=uapi, cpapi2={("Cron", "listcron"): []}, dns={"acme.com": [], "a.com": []}
+    )
+    result = CpanelInventorySource(client, host="acme.com").collect()
+    blob = result.model_dump_json().lower()
+    assert "hunter2" not in blob
+    assert "password" not in blob
+
+
+# --- _norm_mysql_users --------------------------------------------------------
+
+
+def test_norm_mysql_users_real_shape_keeps_user_and_databases() -> None:
+    # The real cPanel v136 shape: each user row carries its databases inline.
+    rows = [
+        {"shortuser": "db", "user": "acct_db", "databases": ["acct_sito"]},
+        {"shortuser": "ro", "user": "acct_ro",
+         "databases": ["acct_demo", "acct_sito"]},
+    ]
+    users, count = _norm_mysql_users(rows)
+    assert count == 2
+    by = {u["user"]: u for u in users}
+    assert by["acct_db"]["databases"] == ["acct_sito"]
+    assert by["acct_db"]["relationship_present"] is True
+    assert by["acct_ro"]["databases"] == ["acct_demo", "acct_sito"]  # sorted
+
+
+def test_norm_mysql_users_user_without_databases_field() -> None:
+    # A row lacking the databases field is honest: relationship_present False.
+    users, _ = _norm_mysql_users([{"user": "acct_x"}])
+    assert users == [
+        {"user": "acct_x", "databases": [], "relationship_present": False}
+    ]
+
+
+def test_norm_mysql_users_never_emits_password_or_secret() -> None:
+    rows = [{"user": "u_a", "databases": ["d1"], "password": "hunter2",
+             "password_hash": "$1$x", "host": "%"}]
+    users, _ = _norm_mysql_users(rows)
+    assert users == [
+        {"user": "u_a", "databases": ["d1"], "relationship_present": True}
+    ]
+    blob = json.dumps(users)
+    assert "hunter2" not in blob and "$1$x" not in blob
+
+
+def test_norm_mysql_users_bare_string_row_degrades_to_name() -> None:
+    users, count = _norm_mysql_users(["u_a", "u_b"])
+    assert count == 2
+    assert users[0] == {"user": "u_a", "databases": [], "relationship_present": False}
+
+
+def test_norm_mysql_users_non_list_yields_empty() -> None:
+    assert _norm_mysql_users("garbage") == ([], 0)
+    assert _norm_mysql_users(None) == ([], 0)
+
+
+def test_norm_mysql_users_databases_deduped_and_sorted() -> None:
+    users, _ = _norm_mysql_users(
+        [{"user": "u", "databases": ["z", "a", "z", " a "]}]
+    )
+    assert users[0]["databases"] == ["a", "z"]  # stripped, de-duplicated, sorted
