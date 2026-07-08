@@ -129,11 +129,60 @@ def _key_email(item: dict) -> str:
 
 
 def _key_db(item: dict) -> str:
-    return str(item.get("name") or "").strip().lower()
+    # Prefer the account-independent logical name so ``vecchio_wp`` and
+    # ``nuovo_wp`` index under the same key; fall back to the full name for
+    # legacy snapshots that predate normalization.
+    key = item.get("logical_name") or item.get("name")
+    return str(key or "").strip().lower()
 
 
 def _key_mysql_user(item: dict) -> str:
-    return str(item.get("user") or "").strip().lower()
+    # Prefer the logical user (``app``) over the prefixed one (``vecchio_app``)
+    # so the same user matches across accounts; fall back to the full user for
+    # legacy snapshots.
+    key = item.get("logical_user") or item.get("user")
+    return str(key or "").strip().lower()
+
+
+def _fingerprint_db(item: dict) -> str:
+    """Fingerprint a database on its logical identity, ignoring the account
+    prefix. A database is just a name here, so same logical name ⇒ match; a
+    prefix-only difference (``vecchio_wp`` vs ``nuovo_wp``) must never read as
+    ``different``. Legacy items without ``logical_name`` fall back to ``name``.
+
+    Case is preserved (only whitespace is trimmed): MySQL/Linux runs with
+    ``lower_case_table_names=0``, so ``ShopDB`` and ``shopdb`` are distinct
+    databases and must not fold into a false match. The ``_key_*`` functions
+    still lower-case for *indexing* only (grouping), matching pre-PR behavior.
+    """
+    logical = item.get("logical_name") or item.get("name")
+    return stable_fingerprint({"logical_name": str(logical or "").strip()})
+
+
+def _fingerprint_mysql_user(item: dict) -> str:
+    """Fingerprint a MySQL user on ``(logical_user, sorted logical_databases,
+    relationship_present)``, ignoring the account prefix. Same logical user
+    reaching the same set of logical databases ⇒ match across differing prefixes;
+    a diverging logical grant set ⇒ ``different``. Legacy items without
+    ``logical_databases`` fall back to the full ``databases`` list (unchanged
+    same-prefix behavior).
+
+    Case is preserved (see ``_fingerprint_db``): a case-only difference in the
+    grant set is a real divergence (a blocker for ``mysql_users``), not a match.
+    ``relationship_present`` stays in the fingerprint (pre-PR behavior) so a
+    row-level read divergence of the grant relation isn't masked into a match.
+    """
+    logical_user = item.get("logical_user") or item.get("user")
+    logical_dbs = item.get("logical_databases")
+    if logical_dbs is None:
+        logical_dbs = item.get("databases") or []
+    return stable_fingerprint(
+        {
+            "logical_user": str(logical_user or "").strip(),
+            "logical_databases": sorted(str(d or "").strip() for d in logical_dbs),
+            "relationship_present": bool(item.get("relationship_present", True)),
+        }
+    )
 
 
 def _key_ssl(item: dict) -> str:
@@ -171,6 +220,11 @@ class _CategorySpec:
     cap: str
     key_fn: Callable[[dict], str]
     severity: dict[State, Severity]
+    # Optional per-category fingerprint. When set it decides match-vs-different
+    # for items sharing a key; when None the generic ``stable_fingerprint`` (the
+    # whole cleaned item) is used. Categories with account-specific prefixes use
+    # a logical fingerprint so a prefix-only difference is not a false delta.
+    fingerprint_fn: Callable[[dict], str] | None = None
 
 
 _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
@@ -209,6 +263,7 @@ _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
             State.ONLY_ON_DESTINATION: Severity.WARNING,
             State.DIFFERENT: Severity.WARNING,
         },
+        fingerprint_fn=_fingerprint_db,
     ),
     _CategorySpec(
         "mysql_users",
@@ -223,6 +278,7 @@ _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
             State.ONLY_ON_DESTINATION: Severity.WARNING,
             State.DIFFERENT: Severity.BLOCKER,
         },
+        fingerprint_fn=_fingerprint_mysql_user,
     ),
     _CategorySpec(
         "cron_jobs",
@@ -362,17 +418,32 @@ def _entry(
     }
 
 
-def _index(items: object, key_fn: Callable[[dict], str]) -> dict[str, dict]:
-    """Map natural key -> item (first occurrence wins). Non-dicts are skipped."""
+def _index(
+    items: object, key_fn: Callable[[dict], str]
+) -> tuple[dict[str, dict], set[str]]:
+    """Map natural key -> item (first occurrence wins). Non-dicts are skipped.
+
+    Returns ``(index, collisions)``. The logical keys used for databases /
+    mysql_users are NOT guaranteed unique within a snapshot (a prefixed and an
+    unprefixed object can reduce to the same logical name), so two genuinely
+    distinct items can map to one slot. ``collisions`` collects every such key so
+    the caller can surface the ambiguity instead of silently dropping a real
+    item. An exact-duplicate row (identical content) is not a collision.
+    """
     out: dict[str, dict] = {}
+    collisions: set[str] = set()
     if not isinstance(items, list):
-        return out
+        return out, collisions
     for item in items:
         if not isinstance(item, dict):
             continue
         key = key_fn(item) or stable_fingerprint(item)
-        out.setdefault(key, item)
-    return out
+        existing = out.get(key)
+        if existing is None:
+            out[key] = item
+        elif stable_fingerprint(existing) != stable_fingerprint(item):
+            collisions.add(key)
+    return out, collisions
 
 
 def _empty_category_stats() -> dict:
@@ -414,8 +485,8 @@ def compare(source: dict, destination: dict) -> ComparisonOutput:
     for spec in _LIST_CATEGORIES:
         categories.append(spec.name)
         stats = _empty_category_stats()
-        src_map = _index(source.get(spec.data_key), spec.key_fn)
-        dst_map = _index(destination.get(spec.data_key), spec.key_fn)
+        src_map, src_collisions = _index(source.get(spec.data_key), spec.key_fn)
+        dst_map, dst_collisions = _index(destination.get(spec.data_key), spec.key_fn)
         stats["source"] = len(src_map)
         stats["destination"] = len(dst_map)
 
@@ -430,11 +501,17 @@ def compare(source: dict, destination: dict) -> ComparisonOutput:
             by_category[spec.name] = stats
             continue
 
+        collided = src_collisions | dst_collisions
+        fp_fn = spec.fingerprint_fn or stable_fingerprint
         for key in sorted(set(src_map) | set(dst_map)):
+            if key in collided:
+                # Two distinct items share this logical key; comparing the first
+                # occurrence would fabricate a (mis)match. Surfaced below instead.
+                continue
             in_src = key in src_map
             in_dst = key in dst_map
-            src_fp = stable_fingerprint(src_map[key]) if in_src else None
-            dst_fp = stable_fingerprint(dst_map[key]) if in_dst else None
+            src_fp = fp_fn(src_map[key]) if in_src else None
+            dst_fp = fp_fn(dst_map[key]) if in_dst else None
 
             if in_src and in_dst:
                 if src_fp == dst_fp:
@@ -459,6 +536,51 @@ def compare(source: dict, destination: dict) -> ComparisonOutput:
                     dst_fp=dst_fp,
                 )
             )
+
+        for key in sorted(collided):
+            # A logical-identity collision: never silently drop the extra item.
+            # If the ambiguous key is present on only one side, the items are
+            # unambiguously missing/only-on-that-side (just of unknown count), so
+            # inherit the category's real severity (a blocker for databases /
+            # mysql_users absent on the destination) instead of a soft warning —
+            # otherwise real to-migrate objects would be hidden from a blocker
+            # filter. Present on both sides ⇒ genuinely ambiguous ⇒ warning.
+            in_src = key in src_map
+            in_dst = key in dst_map
+            if in_src and not in_dst:
+                state = State.MISSING_ON_DESTINATION
+                detail = (
+                    "nessuno è presente sulla destinazione: risultano mancanti "
+                    "(numero esatto non determinabile)"
+                )
+            elif in_dst and not in_src:
+                state = State.ONLY_ON_DESTINATION
+                detail = (
+                    "presenti solo sulla destinazione (numero esatto non "
+                    "determinabile)"
+                )
+            else:
+                state = State.UNKNOWN
+                detail = "il confronto per questa chiave è incompleto"
+            severity = spec.severity.get(state, Severity.WARNING)
+            stats[severity.value] += 1
+            sides = []
+            if key in src_collisions:
+                sides.append("sorgente")
+            if key in dst_collisions:
+                sides.append("destinazione")
+            entry = _entry(
+                spec.name, spec.label, key, state, severity,
+                src_fp=None, dst_fp=None,
+            )
+            entry["title"] = f"{spec.label}: identità logica ambigua"
+            entry["message"] = (
+                f"Più oggetti condividono l'identità logica '{key}' "
+                f"({', '.join(sides)}); {detail}."
+            )
+            entry["source"]["exists"] = in_src
+            entry["destination"]["exists"] = in_dst
+            entries.append(entry)
 
         by_category[spec.name] = stats
 

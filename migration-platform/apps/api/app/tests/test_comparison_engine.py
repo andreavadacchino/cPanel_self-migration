@@ -446,6 +446,311 @@ def test_mysql_users_unreadable_on_destination_no_false_blocker() -> None:
     assert hits[0]["severity"] == "warning"
 
 
+# --- prefix normalization: cross-account identity (this PR) ------------------
+
+
+def _db(name: str, logical: str, prefix: str | None) -> dict:
+    return {"name": name, "logical_name": logical, "prefix": prefix}
+
+
+def _mysql_user_logical(
+    user: str, logical_user: str, prefix: str | None,
+    dbs: list[str], logical_dbs: list[str],
+) -> dict:
+    return {
+        "user": user,
+        "logical_user": logical_user,
+        "prefix": prefix,
+        "databases": dbs,
+        "logical_databases": logical_dbs,
+        "relationship_present": True,
+    }
+
+
+def test_cross_prefix_database_same_logical_is_match() -> None:
+    # vecchio123_wp vs nuovo456_wp represent the same logical DB → no blocker.
+    src = _snapshot(databases=[_db("vecchio123_wp", "wp", "vecchio123")])
+    dst = _snapshot(databases=[_db("nuovo456_wp", "wp", "nuovo456")])
+    output = compare(src, dst)
+    assert not any(e["category"] == "databases" for e in output.entries)
+    assert output.summary["by_category"]["databases"]["match"] == 1
+
+
+def test_cross_prefix_database_missing_logical_is_blocker() -> None:
+    # Source has a logical DB (shop) that the destination lacks entirely.
+    src = _snapshot(
+        databases=[_db("vecchio123_wp", "wp", "vecchio123"),
+                   _db("vecchio123_shop", "shop", "vecchio123")]
+    )
+    dst = _snapshot(databases=[_db("nuovo456_wp", "wp", "nuovo456")])
+    output = compare(src, dst)
+    hits = _entries_by(output, "databases", "missing_on_destination")
+    assert len(hits) == 1
+    assert hits[0]["key"] == "shop"
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_cross_prefix_mysql_user_same_logical_is_match() -> None:
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("vecchio123_app", "app", "vecchio123",
+                                ["vecchio123_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("nuovo456_app", "app", "nuovo456",
+                                ["nuovo456_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    # Only the full name differs; logical identity + relation match → no blocker.
+    assert not any(e["category"] == "mysql_users" for e in output.entries)
+    assert output.summary["by_category"]["mysql_users"]["match"] == 1
+    assert output.blockers_count == 0
+
+
+def test_cross_prefix_mysql_user_relation_extra_db_is_blocker() -> None:
+    # Same logical user, but source reaches an extra logical DB → relation
+    # diverges → blocker, even across different prefixes.
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("vecchio123_app", "app", "vecchio123",
+                                ["vecchio123_wp", "vecchio123_shop"], ["shop", "wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("nuovo456_app", "app", "nuovo456",
+                                ["nuovo456_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "different")
+    assert len(hits) == 1
+    assert hits[0]["key"] == "app"
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_cross_prefix_mysql_user_missing_logical_user_is_blocker() -> None:
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("vecchio123_app", "app", "vecchio123",
+                                ["vecchio123_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("nuovo456_other", "other", "nuovo456",
+                                ["nuovo456_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "missing_on_destination")
+    assert any(h["key"] == "app" and h["severity"] == "blocker" for h in hits)
+
+
+def test_same_prefix_still_matches_like_today() -> None:
+    # Identical prefix (the pre-PR happy path) still yields a clean match.
+    src = _snapshot(
+        databases=[_db("giorginisposi_wp", "wp", "giorginisposi")],
+        mysql_users=[
+            _mysql_user_logical("giorginisposi_app", "app", "giorginisposi",
+                                ["giorginisposi_wp"], ["wp"])
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, src)
+    assert output.blockers_count == 0
+    assert output.summary["by_category"]["databases"]["match"] == 1
+    assert output.summary["by_category"]["mysql_users"]["match"] == 1
+
+
+def test_giorginisposi_regression_two_real_blockers() -> None:
+    # Mirrors the real-smoke: source has 3 MySQL users (same prefix), destination
+    # has 1. The 2 users absent on destination remain real blockers.
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("giorginisposi_wp", "wp", "giorginisposi", [], []),
+            _mysql_user_logical("giorginisposi_user", "user", "giorginisposi", [], []),
+            _mysql_user_logical("giorginisposi_shop", "shop", "giorginisposi", [], []),
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("giorginisposi_wp", "wp", "giorginisposi", [], []),
+        ],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    blockers = [
+        e for e in output.entries
+        if e["category"] == "mysql_users" and e["severity"] == "blocker"
+    ]
+    assert len(blockers) == 2
+    assert {b["key"] for b in blockers} == {"user", "shop"}
+    assert all(b["state"] == "missing_on_destination" for b in blockers)
+
+
+# --- review fixes: case sensitivity + logical-key collisions -----------------
+
+
+def test_database_case_only_difference_is_not_false_match() -> None:
+    # MySQL DB identity is case-sensitive on Linux (lower_case_table_names=0):
+    # a case-only difference is a real delta, not a silent match.
+    src = _snapshot(databases=[_db("ShopDB", "ShopDB", None)])
+    dst = _snapshot(databases=[_db("shopdb", "shopdb", None)])
+    output = compare(src, dst)
+    hits = _entries_by(output, "databases", "different")
+    assert len(hits) == 1
+    assert hits[0]["source"]["fingerprint"] != hits[0]["destination"]["fingerprint"]
+
+
+def test_mysql_user_grant_case_only_difference_is_blocker() -> None:
+    # A case-only difference in the logical grant set is a real divergence and,
+    # for mysql_users, a blocker — it must not fold into a match.
+    src = _snapshot(
+        mysql_users=[_mysql_user_logical("acct_app", "app", "acct",
+                                         ["acct_WP"], ["WP"])],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[_mysql_user_logical("acct_app", "app", "acct",
+                                         ["acct_wp"], ["wp"])],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "different")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_intra_snapshot_logical_collision_database_is_surfaced() -> None:
+    # A prefixed and an unprefixed DB share the logical name "wp": two distinct
+    # objects. The second must not be silently deduped; the ambiguity surfaces.
+    src = _snapshot(databases=[_db("shop_wp", "wp", "shop"), _db("wp", "wp", None)])
+    dst = _snapshot(databases=[_db("wp", "wp", None)])
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "databases" and e["key"] == "wp"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+    assert hits[0]["state"] == "unknown"
+    assert "ambigu" in hits[0]["title"].lower()
+
+
+def test_intra_snapshot_logical_collision_mysql_user_is_surfaced() -> None:
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("shop_app", "app", "shop", ["shop_wp"], ["wp"]),
+            _mysql_user_logical("app", "app", None, ["wp"], ["wp"]),
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[_mysql_user_logical("app", "app", None, ["wp"], ["wp"])],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "mysql_users" and e["key"] == "app"]
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "warning"
+    assert hits[0]["state"] == "unknown"
+
+
+def test_logical_collision_absent_on_destination_is_blocker() -> None:
+    # Two distinct source DBs share logical "wp" and NEITHER exists on the
+    # destination: they are genuinely missing, so the ambiguity entry must carry
+    # the missing_on_destination severity (blocker), not a soft warning — else an
+    # operator filtering by blockers would miss two real to-migrate databases.
+    src = _snapshot(
+        databases=[_db("shop_wp", "wp", "shop"), _db("blog_wp", "wp", "blog")]
+    )
+    dst = _snapshot(databases=[_db("other", "other", None)])
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "databases" and e["key"] == "wp"]
+    assert len(hits) == 1
+    assert hits[0]["state"] == "missing_on_destination"
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_logical_collision_only_on_destination_keeps_lower_severity() -> None:
+    # Collision only on the destination (key absent on source) → the ambiguity
+    # is only_on_destination severity (warning for databases), never a blocker.
+    src = _snapshot(databases=[_db("other", "other", None)])
+    dst = _snapshot(
+        databases=[_db("shop_wp", "wp", "shop"), _db("blog_wp", "wp", "blog")]
+    )
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "databases" and e["key"] == "wp"]
+    assert len(hits) == 1
+    assert hits[0]["state"] == "only_on_destination"
+    assert hits[0]["severity"] == "warning"
+
+
+def test_logical_collision_mysql_user_absent_on_destination_is_blocker() -> None:
+    src = _snapshot(
+        mysql_users=[
+            _mysql_user_logical("shop_app", "app", "shop", ["shop_wp"], ["wp"]),
+            _mysql_user_logical("blog_app", "app", "blog", ["blog_wp"], ["wp"]),
+        ],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[_mysql_user_logical("x_other", "other", "x", [], [])],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = [e for e in output.entries
+            if e["category"] == "mysql_users" and e["key"] == "app"]
+    assert len(hits) == 1
+    assert hits[0]["state"] == "missing_on_destination"
+    assert hits[0]["severity"] == "blocker"
+
+
+def test_no_logical_collision_when_full_dedup_is_exact_duplicate() -> None:
+    # Two identical rows are a harmless duplicate, not an ambiguous collision.
+    src = _snapshot(databases=[_db("wp", "wp", None), _db("wp", "wp", None)])
+    dst = _snapshot(databases=[_db("wp", "wp", None)])
+    output = compare(src, dst)
+    assert not any(
+        e["category"] == "databases" and e["state"] == "unknown"
+        for e in output.entries
+    )
+
+
+def test_mysql_user_relationship_present_divergence_is_blocker() -> None:
+    # Both sides can read db users, but one row read the grant relation and the
+    # other did not (relationship_present differs) — a real row-level divergence
+    # that must not fold into a match.
+    src = _snapshot(
+        mysql_users=[{"user": "acct_app", "logical_user": "app", "prefix": "acct",
+                      "databases": [], "logical_databases": [],
+                      "relationship_present": True}],
+        capabilities=_mysql_caps(),
+    )
+    dst = _snapshot(
+        mysql_users=[{"user": "acct_app", "logical_user": "app", "prefix": "acct",
+                      "databases": [], "logical_databases": [],
+                      "relationship_present": False}],
+        capabilities=_mysql_caps(),
+    )
+    output = compare(src, dst)
+    hits = _entries_by(output, "mysql_users", "different")
+    assert len(hits) == 1
+    assert hits[0]["severity"] == "blocker"
+
+
 def test_mysql_users_relation_degraded_on_one_side_no_false_blocker() -> None:
     # list_users succeeded on both sides, but the user↔db relation degraded on
     # the destination (coverage "partial", can_read_db_users False there). The

@@ -24,6 +24,7 @@ from adapters.cpanel.errors import (
 from adapters.cpanel.client import CpanelClient
 from adapters.cpanel.inventory import (
     CpanelInventorySource,
+    _norm_databases,
     _norm_dns_records,
     _norm_mysql_users,
 )
@@ -548,7 +549,14 @@ def test_norm_mysql_users_user_without_databases_field() -> None:
     # A row lacking the databases field is honest: relationship_present False.
     users, _ = _norm_mysql_users([{"user": "acct_x"}])
     assert users == [
-        {"user": "acct_x", "databases": [], "relationship_present": False}
+        {
+            "user": "acct_x",
+            "logical_user": "x",
+            "prefix": "acct",
+            "databases": [],
+            "logical_databases": [],
+            "relationship_present": False,
+        }
     ]
 
 
@@ -557,7 +565,14 @@ def test_norm_mysql_users_never_emits_password_or_secret() -> None:
              "password_hash": "$1$x", "host": "%"}]
     users, _ = _norm_mysql_users(rows)
     assert users == [
-        {"user": "u_a", "databases": ["d1"], "relationship_present": True}
+        {
+            "user": "u_a",
+            "logical_user": "a",
+            "prefix": "u",
+            "databases": ["d1"],
+            "logical_databases": ["d1"],
+            "relationship_present": True,
+        }
     ]
     blob = json.dumps(users)
     assert "hunter2" not in blob and "$1$x" not in blob
@@ -566,7 +581,14 @@ def test_norm_mysql_users_never_emits_password_or_secret() -> None:
 def test_norm_mysql_users_bare_string_row_degrades_to_name() -> None:
     users, count = _norm_mysql_users(["u_a", "u_b"])
     assert count == 2
-    assert users[0] == {"user": "u_a", "databases": [], "relationship_present": False}
+    assert users[0] == {
+        "user": "u_a",
+        "logical_user": "a",
+        "prefix": "u",
+        "databases": [],
+        "logical_databases": [],
+        "relationship_present": False,
+    }
 
 
 def test_norm_mysql_users_non_list_yields_empty() -> None:
@@ -579,3 +601,99 @@ def test_norm_mysql_users_databases_deduped_and_sorted() -> None:
         [{"user": "u", "databases": ["z", "a", "z", " a "]}]
     )
     assert users[0]["databases"] == ["a", "z"]  # stripped, de-duplicated, sorted
+
+
+# --- prefix normalization: databases (cross-account identity) -----------------
+
+
+def test_norm_databases_with_prefix_derives_logical_and_prefix() -> None:
+    dbs, count = _norm_databases(["giorginisposi_wp", "giorginisposi_user"])
+    assert count == 2
+    assert dbs[0] == {
+        "name": "giorginisposi_wp",
+        "logical_name": "wp",
+        "prefix": "giorginisposi",
+    }
+    assert dbs[1] == {
+        "name": "giorginisposi_user",
+        "logical_name": "user",
+        "prefix": "giorginisposi",
+    }
+
+
+def test_norm_databases_without_prefix_keeps_name_and_null_prefix() -> None:
+    dbs, _ = _norm_databases(["wp"])
+    assert dbs[0] == {"name": "wp", "logical_name": "wp", "prefix": None}
+
+
+def test_norm_databases_only_first_underscore_splits() -> None:
+    dbs, _ = _norm_databases(["foo_bar_baz"])
+    assert dbs[0] == {
+        "name": "foo_bar_baz",
+        "logical_name": "bar_baz",
+        "prefix": "foo",
+    }
+
+
+def test_norm_databases_dict_row_shape_gets_logical_fields() -> None:
+    dbs, _ = _norm_databases([{"database": "acme_shop"}])
+    assert dbs[0] == {
+        "name": "acme_shop",
+        "logical_name": "shop",
+        "prefix": "acme",
+    }
+
+
+def test_norm_databases_degenerate_underscore_no_false_split() -> None:
+    # Empty prefix or empty logical must not collapse identities.
+    dbs, _ = _norm_databases(["_wp", "foo_"])
+    assert dbs[0] == {"name": "_wp", "logical_name": "_wp", "prefix": None}
+    assert dbs[1] == {"name": "foo_", "logical_name": "foo_", "prefix": None}
+
+
+# --- prefix normalization: mysql_users (cross-account identity) ---------------
+
+
+def test_norm_mysql_users_with_prefix_derives_logical_identity() -> None:
+    users, _ = _norm_mysql_users(
+        [{"user": "vecchio123_app", "databases": ["vecchio123_wp"]}]
+    )
+    assert users[0] == {
+        "user": "vecchio123_app",
+        "logical_user": "app",
+        "prefix": "vecchio123",
+        "databases": ["vecchio123_wp"],
+        "logical_databases": ["wp"],
+        "relationship_present": True,
+    }
+
+
+def test_norm_mysql_users_without_prefix_keeps_user_and_null_prefix() -> None:
+    users, _ = _norm_mysql_users([{"user": "app", "databases": ["wp"]}])
+    assert users[0] == {
+        "user": "app",
+        "logical_user": "app",
+        "prefix": None,
+        "databases": ["wp"],
+        "logical_databases": ["wp"],
+        "relationship_present": True,
+    }
+
+
+def test_norm_mysql_users_logical_databases_deduped_and_sorted() -> None:
+    # Two full db names sharing the same logical part collapse to one logical db.
+    users, _ = _norm_mysql_users(
+        [{"user": "acct_app", "databases": ["acct_wp", "acct_shop"]}]
+    )
+    assert users[0]["logical_databases"] == ["shop", "wp"]
+
+
+def test_norm_mysql_users_logical_fields_carry_no_secret() -> None:
+    rows = [{"user": "acct_app", "databases": ["acct_wp"],
+             "password": "hunter2", "password_hash": "$1$x"}]
+    users, _ = _norm_mysql_users(rows)
+    blob = json.dumps(users)
+    assert "hunter2" not in blob and "$1$x" not in blob
+    # the new logical fields exist and are non-sensitive
+    assert users[0]["logical_user"] == "app"
+    assert users[0]["logical_databases"] == ["wp"]
