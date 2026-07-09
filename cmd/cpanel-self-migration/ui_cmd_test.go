@@ -30,12 +30,27 @@ func TestNewUIServerValidation(t *testing.T) {
 	if srv.ReadHeaderTimeout == 0 {
 		t.Error("the server must set ReadHeaderTimeout (gosec G112, slowloris)")
 	}
+	// Operator-first landing: "/" redirects to the platform, whose empty state
+	// guides the operator to create a first migration. (The old technical
+	// dashboard hint — migration_checklist.json — was intentionally removed by
+	// the operator-first reset; the guidance now lives on the platform landing.)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "127.0.0.1:0" // the rebinding gate rejects httptest's example.com default
 	rr := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(rr, req)
-	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "migration_checklist.json") {
-		t.Errorf("dashboard = %d, want 200 with the empty-state hint", rr.Code)
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/platform/migrations" {
+		t.Errorf("landing / = %d loc %q, want 303 -> /platform/migrations",
+			rr.Code, rr.Header().Get("Location"))
+	}
+	req = httptest.NewRequest(http.MethodGet, "/platform/migrations", nil)
+	req.Host = "127.0.0.1:0"
+	rr = httptest.NewRecorder()
+	srv.Handler.ServeHTTP(rr, req)
+	// Store-independent assertion: the platform landing always renders the
+	// "Nuova migrazione" CTA (the operator-first analog of the old dashboard's
+	// create hint), regardless of how many sessions the store holds.
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "Nuova migrazione") {
+		t.Errorf("platform landing = %d, want 200 with the 'Nuova migrazione' CTA", rr.Code)
 	}
 }
 
