@@ -669,8 +669,12 @@ func sortedConfirms(f artifactFacts) []accountinventory.ManualAction {
 // buildWorkbenchView assembles the model for a screen. Read-only, fail-soft.
 // jobBusy is the live single-writer slot state, used ONLY to reconcile the job
 // journal (running + free slot → interrupted); it never triggers a write here.
-func buildWorkbenchView(dir, csrf, screen string, sess *workbench.Session, jobBusy bool) workbenchView {
+func buildWorkbenchView(dir, globalDir, csrf, screen string, sess *workbench.Session, jobBusy bool) workbenchView {
 	f := readArtifactFacts(dir)
+	// Credentials are "present" if the per-session host.yaml exists OR the global
+	// /config one does (the guided wizard / expert workbench write to the global
+	// target). Only the presence check falls back; OUTPUT stays per-session.
+	f.HostYAMLPresent = fileExists(resolveHostYAML(dir, globalDir))
 	scope := deriveContentScope(sess)
 	v := workbenchView{
 		Session:     sess,

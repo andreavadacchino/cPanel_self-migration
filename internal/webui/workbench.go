@@ -170,7 +170,7 @@ func (ws *workbenchServer) handleScreen(w http.ResponseWriter, r *http.Request, 
 	if ws.jobBusy != nil {
 		busy = ws.jobBusy()
 	}
-	view := buildWorkbenchView(sessionWorkDir(sess, ws.dir), ws.csrf, screen, sess, busy)
+	view := buildWorkbenchView(sessionWorkDir(sess, ws.dir), ws.dir, ws.csrf, screen, sess, busy)
 	// One-shot flashes from a redirect round-trip: the Fase 2 scope confirm
 	// (?scope=) or the Fase 3 orchestrator outcome (?migrate=). At most one is set.
 	view.Flash = scopeFlash(r.URL.Query().Get("scope"))

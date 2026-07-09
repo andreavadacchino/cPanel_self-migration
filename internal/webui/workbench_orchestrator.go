@@ -250,7 +250,7 @@ func (ws *workbenchExecServer) runPreflightInline(base context.Context, sessionI
 	defer cancel()
 	for _, st := range pipelineSteps(ws.dir) {
 		ws.journalPhaseRunning(sessionID, "Controllo iniziale: "+st.Name, startedAt)
-		err := ws.runner(ctx, tail, st.Name, st.Argv)
+		err := ws.runner(ctx, tail, st.Name, withConfigFallback(st.Argv, ws.globalDir))
 		if err != nil && !st.Tolerant {
 			return fmt.Errorf("%s: %w", st.Name, err)
 		}
@@ -263,7 +263,9 @@ func (ws *workbenchExecServer) runPreflightInline(base context.Context, sessionI
 func (ws *workbenchExecServer) runStep(base context.Context, tail *tailBuffer, st orchestratorStep) error {
 	ctx, cancel := context.WithTimeout(base, execTimeout)
 	defer cancel()
-	return ws.runner(ctx, tail, st.name, st.argv)
+	// Same host.yaml fallback as the single /exec action this step mirrors: the
+	// per-session --config path is rewritten to the global file when absent.
+	return ws.runner(ctx, tail, st.name, withConfigFallback(st.argv, ws.globalDir))
 }
 
 // attachOrchestratorArtifact attaches a produced artifact best-effort: a MISSING
@@ -421,7 +423,10 @@ func (ws *workbenchExecServer) handleSmartStartMigration(w http.ResponseWriter, 
 		http.Error(w, "missing start confirmation", http.StatusForbidden)
 		return
 	}
-	if _, err := os.Stat(filepath.Join(ws.dir, "host.yaml")); err != nil {
+	// Config presence uses the per-session host.yaml OR the global /config one:
+	// the guided wizard / expert workbench write credentials globally, so a
+	// per-session dir without host.yaml is still runnable via the global file.
+	if _, err := os.Stat(resolveHostYAML(ws.dir, ws.globalDir)); err != nil {
 		http.Redirect(w, r, dest+"?migrate=config_missing", http.StatusSeeOther)
 		return
 	}

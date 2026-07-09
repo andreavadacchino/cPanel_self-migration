@@ -304,7 +304,12 @@ type workbenchExecServer struct {
 	runner StepRunner
 	base   context.Context
 	job    *jobManager // shared single-writer slot with /run and /accept
-	dir    string      // webui working dir (plans, reports, host.yaml)
+	dir    string      // per-session working dir (plans, reports, OUTPUT); overridden per request
+	// globalDir is the shared /config working dir (never overridden per session).
+	// It backs the host.yaml fallback: when the per-session dir has no host.yaml
+	// (the guided wizard / expert workbench write credentials globally), --config
+	// and the presence checks fall back to globalDir. OUTPUT stays per-session.
+	globalDir string
 }
 
 // validateStrongConfirmation checks that confirm_account matches the session
@@ -338,12 +343,9 @@ func validateDoubleConfirmation(r *http.Request, sess *workbench.Session) error 
 // launches the subprocess synchronously, records the result in the timeline,
 // attaches produced artifacts, and attempts auto-transition after verify.
 func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request, sessionID string) {
-	// Keep the security-ordering contract visible in this wrapper too: the
-	// real execution path below still validates strong/double confirmation
-	// before any buildArgv-driven subprocess launch.
-	_ = validateStrongConfirmation
-	_ = validateDoubleConfirmation
-	_ = actionDef{}.buildArgv
+	// Security ordering is enforced in handleExecRedirect below: for a write op
+	// it validates strong (or double, for rollback) confirmation and re-checks
+	// the checklist apply-gate BEFORE building any argv or launching a subprocess.
 	ws.handleExecRedirect(w, r, sessionID, "/workbench/session/"+sessionID)
 }
 
@@ -387,6 +389,10 @@ func (ws *workbenchExecServer) handleExecRedirect(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// host.yaml fallback: the builders hardcode the per-session --config path, but
+	// credentials may live only in the global /config dir. Rewrite --config to the
+	// global file when the per-session one is absent; OUTPUT paths are untouched.
+	argv = withConfigFallback(argv, ws.globalDir)
 
 	// Single-writer slot (shared with /run and /accept to prevent concurrent
 	// writes to the same artifact directory). A busy slot is no longer an
@@ -419,7 +425,7 @@ func (ws *workbenchExecServer) handleExecRedirect(w http.ResponseWriter, r *http
 	var tolerated []string // names of tolerant steps that failed but did not abort
 	if action.pipeline {
 		for _, st := range pipelineSteps(ws.dir) {
-			if err := ws.runner(ctx, tail, st.Name, st.Argv); err != nil {
+			if err := ws.runner(ctx, tail, st.Name, withConfigFallback(st.Argv, ws.globalDir)); err != nil {
 				// A tolerant step's failure is surfaced in the tail but does
 				// not abort the pipeline — the remaining steps still run (same
 				// graceful degradation as the dashboard jobManager). Record it

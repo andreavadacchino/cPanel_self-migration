@@ -172,12 +172,13 @@ func New(o Options) (http.Handler, error) {
 			base = context.Background()
 		}
 		s.wbExec = &workbenchExecServer{
-			store:  o.SessionStore,
-			csrf:   s.csrf,
-			runner: s.job.runner,
-			base:   base,
-			job:    s.job,
-			dir:    o.Dir,
+			store:     o.SessionStore,
+			csrf:      s.csrf,
+			runner:    s.job.runner,
+			base:      base,
+			job:       s.job,
+			dir:       o.Dir,
+			globalDir: o.Dir,
 		}
 		// Platform UI V2: the operator-first product shell (/platform/*). It is a
 		// read-only presentation layer over the same store + shared artifact dir;

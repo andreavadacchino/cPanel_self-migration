@@ -119,7 +119,7 @@ func TestBuildPlatformSessionNoChecklist(t *testing.T) {
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
 
-	page := buildPlatformSession(sess.ArtifactDir, "csrf-x", sess, false, "cockpit")
+	page := buildPlatformSession(sess.ArtifactDir, "", "csrf-x", sess, false, "cockpit")
 	if page.Plan.Ready {
 		t.Error("plan must not be ready without a checklist")
 	}
@@ -146,7 +146,7 @@ func TestBuildPlatformSessionReusesStartGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := buildPlatformSession(sess.ArtifactDir, env.csrf, sess, false, "cockpit")
+	page := buildPlatformSession(sess.ArtifactDir, "", env.csrf, sess, false, "cockpit")
 	if page.Cockpit.CTA.Kind != "start" {
 		t.Fatalf("startable session must yield a start CTA, got kind %q (state %q)", page.Cockpit.CTA.Kind, page.Cockpit.StateLabel)
 	}
@@ -161,7 +161,7 @@ func TestBuildPlatformSessionDraftNotStartable(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
-	page := buildPlatformSession(sess.ArtifactDir, "csrf-x", sess, false, "cockpit")
+	page := buildPlatformSession(sess.ArtifactDir, "", "csrf-x", sess, false, "cockpit")
 	if page.Cockpit.CTA.Kind == "start" {
 		t.Error("a draft session must never expose a start CTA")
 	}
@@ -186,7 +186,7 @@ func TestBuildPlatformSessionReadyPlanButUnconfirmedScopeHighlightsScopeStep(t *
 		t.Fatal(err)
 	}
 	writeChecklist(t, sess.ArtifactDir, readyChecklist())
-	page := buildPlatformSession(sess.ArtifactDir, "csrf-x", sess, false, "cockpit")
+	page := buildPlatformSession(sess.ArtifactDir, "", "csrf-x", sess, false, "cockpit")
 	if page.CurrentStepIndex != 4 {
 		t.Fatalf("CurrentStepIndex = %d, want 4 when the plan is ready but the scope is not confirmed", page.CurrentStepIndex)
 	}

@@ -290,7 +290,7 @@ func TestJobJournalViewReconcile(t *testing.T) {
 	sess := &workbench.Session{ID: "mig_x", Name: "n", Status: workbench.StatusReadyForApply}
 
 	// Slot free → the running journal is presented as interrupted.
-	v := buildWorkbenchView(dir, "csrf", "", sess, false)
+	v := buildWorkbenchView(dir, "", "csrf", "", sess, false)
 	if v.Job == nil {
 		t.Fatal("view has no Job")
 	}
@@ -299,7 +299,7 @@ func TestJobJournalViewReconcile(t *testing.T) {
 	}
 
 	// Slot busy → the same journal stays running (a live exec in this process).
-	v2 := buildWorkbenchView(dir, "csrf", "", sess, true)
+	v2 := buildWorkbenchView(dir, "", "csrf", "", sess, true)
 	if v2.Job == nil || v2.Job.State != jobStateRunning {
 		t.Errorf("busy slot: want running, got %+v", v2.Job)
 	}
@@ -315,7 +315,7 @@ func TestJobLiveDrivesAutoRefresh(t *testing.T) {
 	dir := t.TempDir()
 	sess := &workbench.Session{ID: "mig_x", Name: "n", Status: workbench.StatusReadyForApply}
 
-	if v := buildWorkbenchView(dir, "c", "", sess, false); v.JobLive {
+	if v := buildWorkbenchView(dir, "", "c", "", sess, false); v.JobLive {
 		t.Error("no journal but JobLive is true")
 	}
 	now := time.Now().UTC()
@@ -325,18 +325,18 @@ func TestJobLiveDrivesAutoRefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	// running + slot busy → live (auto-refresh)
-	if v := buildWorkbenchView(dir, "c", "", sess, true); !v.JobLive {
+	if v := buildWorkbenchView(dir, "", "c", "", sess, true); !v.JobLive {
 		t.Error("running + busy slot but JobLive false")
 	}
 	// running + free slot → reconciled to interrupted → NOT live
-	if v := buildWorkbenchView(dir, "c", "", sess, false); v.JobLive {
+	if v := buildWorkbenchView(dir, "", "c", "", sess, false); v.JobLive {
 		t.Error("running + free slot (interrupted) must not drive auto-refresh")
 	}
 	// terminal state → not live
 	if err := writeJobJournal(dir, jobJournal{Action: "x", State: jobStateCompleted, StartedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	if v := buildWorkbenchView(dir, "c", "", sess, true); v.JobLive {
+	if v := buildWorkbenchView(dir, "", "c", "", sess, true); v.JobLive {
 		t.Error("completed job but JobLive true")
 	}
 }

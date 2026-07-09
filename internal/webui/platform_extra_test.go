@@ -142,7 +142,7 @@ func TestPlatformTasksPendingCountsNonAcceptable(t *testing.T) {
 			{Title: "Ricrea cron bloccante", Section: "cron", BlockingCutover: true, Acceptable: false, Accepted: false},
 		},
 	})
-	page := buildPlatformSession(sess.ArtifactDir, "csrf", sess, false, "tasks")
+	page := buildPlatformSession(sess.ArtifactDir, "", "csrf", sess, false, "tasks")
 	if page.TasksTotal != 1 {
 		t.Fatalf("TasksTotal = %d, want 1", page.TasksTotal)
 	}
@@ -233,7 +233,7 @@ func TestPlatformCockpitCTANoSelfLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := buildPlatformSession(blocked.ArtifactDir, "csrf", blocked, false, "cockpit")
+	page := buildPlatformSession(blocked.ArtifactDir, "", "csrf", blocked, false, "cockpit")
 	self := "/platform/migrations/" + sess.ID
 	if page.HeroCTAURL != self {
 		t.Errorf("blocked cockpit CTA = %q, want cockpit route %q", page.HeroCTAURL, self)
@@ -254,7 +254,7 @@ func TestPlatformFailedOrchestratorCTAStaysOnCockpit(t *testing.T) {
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		State: jobStateFailed, Phase: "Contenuti", Error: "migrate content: exit status 1",
 	})
-	page := buildPlatformSession(sess.ArtifactDir, env.csrf, sess, false, "cockpit")
+	page := buildPlatformSession(sess.ArtifactDir, "", env.csrf, sess, false, "cockpit")
 	if page.Cockpit.CTA.Kind != "link" {
 		t.Fatalf("failed orchestrator CTA kind = %q, want link", page.Cockpit.CTA.Kind)
 	}
@@ -274,7 +274,7 @@ func TestPlatformFailedStatusCTAStaysOnCockpit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := buildPlatformSession(failed.ArtifactDir, "csrf", failed, false, "cockpit")
+	page := buildPlatformSession(failed.ArtifactDir, "", "csrf", failed, false, "cockpit")
 	if page.Cockpit.CTA.Kind != "link" {
 		t.Fatalf("failed status CTA kind = %q, want link", page.Cockpit.CTA.Kind)
 	}
@@ -294,7 +294,7 @@ func TestPlatformBlockedCTAExplainsPlatformRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := buildPlatformSession(blocked.ArtifactDir, "csrf", blocked, false, "cockpit")
+	page := buildPlatformSession(blocked.ArtifactDir, "", "csrf", blocked, false, "cockpit")
 	if page.HeroCTAURL != "/platform/migrations/"+sess.ID {
 		t.Fatalf("blocked HeroCTAURL = %q, want cockpit route", page.HeroCTAURL)
 	}
@@ -311,7 +311,7 @@ func TestPlatformCockpitRendersGovernanceControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := renderPlatformPage(t, ps, "platform_cockpit.html", buildPlatformSession(blocked.ArtifactDir, "csrf-x", blocked, false, "cockpit"))
+	body := renderPlatformPage(t, ps, "platform_cockpit.html", buildPlatformSession(blocked.ArtifactDir, "", "csrf-x", blocked, false, "cockpit"))
 	for _, want := range []string{
 		"Gestione stato",
 		`action="/platform/migrations/` + sess.ID + `/status"`,
@@ -380,6 +380,36 @@ func TestPlatformStatusRecoverStaysInPlatform(t *testing.T) {
 	}
 }
 
+// A forged recover POST must be validated against the SAME set the UI exposes
+// (RecoveryTo). StatusArchived is never offered there, so a request forcing it
+// is rejected (400) and the session status is left untouched.
+func TestPlatformStatusRecoverRejectsArchived(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	blocked, err := store.SetStatus(sess.ID, workbench.StatusBlocked, true, "blocco test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(Options{Dir: dir, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+blocked.ID+"/status",
+		url.Values{"csrf": {csrf}, "gov_action": {"recover"}, "status": {string(workbench.StatusArchived)}, "reason": {"forged"}})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("recover to archived = %d, want 400", rr.Code)
+	}
+	got, err := store.Get(blocked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != workbench.StatusBlocked {
+		t.Errorf("status after rejected recover = %q, want unchanged %q", got.Status, workbench.StatusBlocked)
+	}
+}
+
 func TestPlatformVerificationCTAExplainsExpertMode(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
@@ -388,7 +418,7 @@ func TestPlatformVerificationCTAExplainsExpertMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := buildPlatformSession(done.ArtifactDir, "csrf", done, false, "cockpit")
+	page := buildPlatformSession(done.ArtifactDir, "", "csrf", done, false, "cockpit")
 	if page.HeroCTAURL != page.ExpertURL {
 		t.Fatalf("apply-done HeroCTAURL = %q, want expert route", page.HeroCTAURL)
 	}
@@ -427,7 +457,7 @@ func TestPlatformTasksRenderVerifyActions(t *testing.T) {
 	mustWrite(t, filepath.Join(sess.ArtifactDir, "dns_import_plan.json"), []byte(`{}`))
 	mustWrite(t, filepath.Join(sess.ArtifactDir, "email_apply_plan.json"), []byte(`{}`))
 	mustWrite(t, filepath.Join(sess.ArtifactDir, "cron_apply_plan.json"), []byte(`{}`))
-	page := buildPlatformSession(sess.ArtifactDir, "csrf", sess, false, "tasks")
+	page := buildPlatformSession(sess.ArtifactDir, "", "csrf", sess, false, "tasks")
 	body := renderPlatformPage(t, ps, "platform_tasks.html", page)
 	for _, want := range []string{"Verifica DNS", "Verifica configurazioni email", "Verifica cron"} {
 		if !strings.Contains(body, want) {

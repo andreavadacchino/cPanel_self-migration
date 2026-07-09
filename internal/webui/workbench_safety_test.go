@@ -143,9 +143,11 @@ func TestAllApplyVerbsRequireStrongConfirmation(t *testing.T) {
 }
 
 // TestExecLauncherConfirmationBeforeArgv verifies via AST that in
-// workbench_exec.go, the handleExec function calls validateStrongConfirmation
-// (or validateDoubleConfirmation) BEFORE calling buildArgv. This prevents a
-// code reordering from accidentally removing the security gate.
+// workbench_exec.go, the handleExecRedirect function — the REAL exec launcher,
+// which handleExec merely delegates to — calls validateStrongConfirmation (or
+// validateDoubleConfirmation) BEFORE calling buildArgv. This pins the security
+// gate to the actual execution path (not a decorative wrapper), so a code
+// reordering can never launch a write subprocess before the confirmation gate.
 func TestExecLauncherConfirmationBeforeArgv(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "workbench_exec.go", nil, 0)
@@ -153,18 +155,18 @@ func TestExecLauncherConfirmationBeforeArgv(t *testing.T) {
 		t.Fatalf("parse workbench_exec.go: %v", err)
 	}
 
-	// Find the handleExec function
+	// Find the handleExecRedirect function (the real launcher).
 	var handleExecBody *ast.BlockStmt
 	ast.Inspect(f, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
-		if ok && fn.Name.Name == "handleExec" {
+		if ok && fn.Name.Name == "handleExecRedirect" {
 			handleExecBody = fn.Body
 			return false
 		}
 		return true
 	})
 	if handleExecBody == nil {
-		t.Fatal("handleExec function not found in workbench_exec.go")
+		t.Fatal("handleExecRedirect function not found in workbench_exec.go")
 	}
 
 	// Walk the body statements and find positions of key calls
@@ -185,10 +187,10 @@ func TestExecLauncherConfirmationBeforeArgv(t *testing.T) {
 	}
 
 	if confirmPos == -1 {
-		t.Fatal("handleExec does not call validateStrongConfirmation or validateDoubleConfirmation")
+		t.Fatal("handleExecRedirect does not call validateStrongConfirmation or validateDoubleConfirmation")
 	}
 	if buildArgvPos == -1 {
-		t.Fatal("handleExec does not call buildArgv")
+		t.Fatal("handleExecRedirect does not call buildArgv")
 	}
 	if confirmPos >= buildArgvPos {
 		t.Errorf("confirmation (stmt %d) must appear BEFORE buildArgv (stmt %d) — security gate ordering violated", confirmPos, buildArgvPos)

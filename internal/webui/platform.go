@@ -316,7 +316,13 @@ func (ps *platformServer) handleWizardCreate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err := writeValidatedConfigAt(sessionWorkDir(sess, ps.dir), cfg); err != nil {
-		_ = os.RemoveAll(filepath.Dir(sessionWorkDir(sess, ps.dir)))
+		// Clean up ONLY the freshly created session directory, captured explicitly
+		// from sess.ArtifactDir (…/<id>/artifacts → its parent is the session dir).
+		// Never route this through sessionWorkDir: an empty ArtifactDir would make
+		// it fall back to ps.dir and RemoveAll the parent of the whole working tree.
+		if sess.ArtifactDir != "" {
+			_ = os.RemoveAll(filepath.Dir(sess.ArtifactDir))
+		}
 		http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -402,7 +408,11 @@ func (ps *platformServer) handleSetStatus(w http.ResponseWriter, r *http.Request
 		return
 	case "recover":
 		to := workbench.Status(strings.TrimSpace(r.FormValue("status")))
-		if !workbench.ValidStatus(to) || to == workbench.StatusBlocked || to == workbench.StatusFailed || to == sess.Status {
+		// Validate against the SAME set the UI exposes (RecoveryTo): this rejects a
+		// forged POST forcing StatusArchived (never offered) or a recover on a
+		// session that is not Blocked/Failed. Status is metadata — the real
+		// write-gates are unchanged — but it must not drift from what the UI shows.
+		if !statusInSet(to, recoveryTargets(sess)) {
 			http.Error(w, "stato di recupero non valido", http.StatusBadRequest)
 			return
 		}
@@ -434,7 +444,7 @@ func (ps *platformServer) handleSession(w http.ResponseWriter, r *http.Request, 
 		busy = ps.jobBusy()
 	}
 	dir := sessionWorkDir(sess, ps.dir)
-	page := buildPlatformSession(dir, ps.csrf, sess, busy, screen)
+	page := buildPlatformSession(dir, ps.dir, ps.csrf, sess, busy, screen)
 	// One-shot flashes from a redirect round-trip through the workbench POST
 	// handlers (scope confirm / orchestrator outcome), same query contract.
 	page.Flash = scopeFlash(r.URL.Query().Get("scope"))

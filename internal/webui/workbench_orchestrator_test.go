@@ -683,3 +683,76 @@ func TestOrchestratorRequiresCSRF(t *testing.T) {
 		t.Errorf("nothing must run without CSRF, got %v", e.callNames())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// HIGH-1 — host.yaml global fallback. The guided wizard / expert workbench write
+// credentials to the GLOBAL /config dir, never copying host.yaml into the
+// per-session artifact dir. A session must still be executable: both the
+// HostYAMLPresent read-model and the smart-start config gate fall back to the
+// global file. Before the fallback the session was wrongly reported
+// config_missing and could not run.
+// ---------------------------------------------------------------------------
+
+func TestGuidedSessionFallsBackToGlobalHostYAML(t *testing.T) {
+	dir := t.TempDir() // GLOBAL /config working dir passed to New(Options{Dir:...})
+	storeDir := filepath.Join(dir, "migrations")
+	if err := os.MkdirAll(storeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := workbench.NewStore(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Guided session: Setup present, an auto-runnable scope, advanced to
+	// ready_for_apply with a confirmed scope — a session the operator expects to run.
+	content := workbench.ContentSelection{Files: true, Databases: true}
+	sess, err := store.CreateWithSetup("giorginisposi", "src", "dst",
+		&workbench.SetupMeta{Content: content}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []workbench.Status{
+		workbench.StatusPreflightRequired, workbench.StatusInventoryReady,
+		workbench.StatusChecklistReady, workbench.StatusReadyForApply,
+	} {
+		if _, err := store.SetStatus(sess.ID, s, false, "", time.Now()); err != nil {
+			t.Fatalf("SetStatus %s: %v", s, err)
+		}
+	}
+	if _, err := store.ConfirmScope(sess.ID, content, time.Now().UTC()); err != nil {
+		t.Fatalf("ConfirmScope: %v", err)
+	}
+	// The analysis artifacts live per-session (this is the dir the view reads)…
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
+	// …but host.yaml exists ONLY in the global dir — the wizard/expert bug.
+	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(sess.ArtifactDir, "host.yaml")) {
+		t.Fatal("precondition: the per-session dir must NOT contain host.yaml")
+	}
+
+	// (a) The read-model resolves credentials as present via the global fallback.
+	v := buildWorkbenchView(sess.ArtifactDir, dir, "csrf", "", sess, false)
+	if !v.Facts.HostYAMLPresent {
+		t.Error("HostYAMLPresent = false: a guided session must see the global host.yaml")
+	}
+
+	// (b) The smart-start config gate must NOT refuse the run as config_missing.
+	fr := &fakeRunner{}
+	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doWorkbenchReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/smart-start",
+		url.Values{"csrf": {csrf}, "confirm_start": {"1"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("smart-start = %d, want 303 (%s)", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); strings.Contains(loc, "migrate=config_missing") {
+		t.Fatalf("guided session refused as config_missing despite a global host.yaml: %q", loc)
+	}
+	// Let the async run settle so its background writes don't race tempdir cleanup.
+	waitJobSettled(t, sess.ArtifactDir)
+}

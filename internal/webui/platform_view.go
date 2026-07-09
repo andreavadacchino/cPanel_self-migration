@@ -681,6 +681,39 @@ func buildPlatformVerifyActions(scope contentScope, f artifactFacts) []platformE
 	return actions
 }
 
+// recoveryTargets is the set of statuses the operator may recover a session
+// INTO from the platform cockpit — the SINGLE source of truth shared by the UI
+// (RecoveryTo) and the recover write-handler (handleSetStatus). Only Blocked and
+// Failed sessions are recoverable; Archived is deliberately excluded (the UI
+// never offers it), as are the current status and the two blocking states
+// themselves. Empty for a non-recoverable session, so a forged recover POST for
+// any other target is rejected.
+func recoveryTargets(sess *workbench.Session) []workbench.Status {
+	switch sess.Status {
+	case workbench.StatusBlocked, workbench.StatusFailed:
+		var out []workbench.Status
+		for _, st := range workbench.AllStatuses {
+			if st == sess.Status || st == workbench.StatusArchived {
+				continue
+			}
+			out = append(out, st)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+// statusInSet reports whether s is one of the allowed statuses.
+func statusInSet(s workbench.Status, allowed []workbench.Status) bool {
+	for _, a := range allowed {
+		if a == s {
+			return true
+		}
+	}
+	return false
+}
+
 func buildPlatformGovernance(sess *workbench.Session) platformGovernance {
 	g := platformGovernance{CurrentLabel: statusLabelIT(sess.Status)}
 	switch sess.Status {
@@ -689,12 +722,7 @@ func buildPlatformGovernance(sess *workbench.Session) platformGovernance {
 	case workbench.StatusBlocked, workbench.StatusFailed:
 		g.Show = true
 		g.CanRecover = true
-		for _, st := range workbench.AllStatuses {
-			if st == sess.Status || st == workbench.StatusArchived {
-				continue
-			}
-			g.RecoveryTo = append(g.RecoveryTo, st)
-		}
+		g.RecoveryTo = recoveryTargets(sess)
 		return g
 	default:
 		g.Show = true
@@ -718,8 +746,8 @@ func navForScreen(screen string) string {
 // buildPlatformSession assembles the read-model for a single session screen. It
 // reuses buildWorkbenchView (built on the Panoramica so the cockpit + monitor
 // are available) and maps the fields into the platform shape. Read-only.
-func buildPlatformSession(dir, csrf string, sess *workbench.Session, jobBusy bool, screen string) platformPage {
-	v := buildWorkbenchView(dir, csrf, screenPanoramica, sess, jobBusy)
+func buildPlatformSession(dir, globalDir, csrf string, sess *workbench.Session, jobBusy bool, screen string) platformPage {
+	v := buildWorkbenchView(dir, globalDir, csrf, screenPanoramica, sess, jobBusy)
 	v.Cockpit = platformSmartCockpit(v, sess)
 	expertURL := workbenchExpertURL(sess.ID, "")
 	currentStep := platformCurrentStepIndex(sess, v)
