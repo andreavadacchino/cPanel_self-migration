@@ -33,3 +33,8 @@ dogfood_giorginisposi/
 /migration_checklist.md
 /dns_import_plan.json
 /dns_import_plan.md
+
+# Local design mockups / iteration screenshots — kept out of git (binary bloat);
+# they are design reference cited by docs, not loaded by the app
+/screenshot/
+/*.png
