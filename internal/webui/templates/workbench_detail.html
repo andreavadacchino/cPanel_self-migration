@@ -47,7 +47,12 @@
       <span class="fdhead-next-lead">Prossima azione</span>
       <span class="fdhead-next-text">{{.Next.Text}}</span>
     </div>
+    {{if .Session.LastError}}<div class="fdhead-error">&#9888; Ultimo errore: {{.Session.LastError}}</div>{{end}}
     {{template "jobBanner" .}}
+    <div class="fdhead-mode">
+      {{if .Expert}}<a href="/workbench/session/{{.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}">&larr; Modalità operatore</a>
+      {{else}}<a href="/workbench/session/{{.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}?mode=expert">Modalità esperto / dettagli tecnici &rarr;</a>{{end}}
+    </div>
   </div>
 </header>{{end}}
 
@@ -56,7 +61,7 @@
      Attenzione) derived from artifacts+status, and the current phase is
      highlighted. It replaces the old pill nav without inventing new routes. */}}
 {{define "fdTimeline"}}<nav aria-label="Fasi della migrazione"><ol class="fd-steps">
-{{range .Timeline}}<li class="fd-step fd-{{.State}}{{if .Current}} fd-current{{end}}"><a href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}"{{if .Current}} aria-current="step"{{end}}>
+{{range .Timeline}}<li class="fd-step fd-{{.State}}{{if .Current}} fd-current{{end}}"><a href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}{{$.ModeQuery}}"{{if .Current}} aria-current="step"{{end}}>
   <span class="fd-step-dot dot {{fdDot .State}}"></span>
   <span class="fd-step-label">{{.Label}}</span>
   <span class="fd-step-state">{{fdStateLabel .State}}</span>
@@ -72,7 +77,7 @@
   <div class="lead">Prossima azione consigliata</div>
   <div class="act">{{.Next.Text}}</div>
   {{if .Next.Detail}}<div class="muted">{{.Next.Detail}}</div>{{end}}
-  {{if ne .Next.Screen ""}}<a href="/workbench/session/{{.Session.ID}}/{{.Next.Screen}}">Vai →</a>{{end}}
+  {{if ne .Next.Screen ""}}<a href="/workbench/session/{{.Session.ID}}/{{.Next.Screen}}{{.ModeQuery}}">Vai →</a>{{end}}
 </div>{{end}}
 
 {{/* Panoramica (screen 1) = the Migration Cockpit. The persistent fdHeader
@@ -86,8 +91,13 @@
 
 {{if and .Session.Setup (not .Facts.HostYAMLPresent)}}
 <div class="warnbox">
+  {{if .Expert}}
   <strong>Configurazione tecnica richiesta prima del preflight.</strong>
   Le credenziali (password SSH) non sono ancora impostate: completa il file <code>host.yaml</code> nella directory di lavoro. Puoi configurarle dalla <a href="/">pagina delle connessioni</a>.
+  {{else}}
+  <strong>Connessioni non configurate.</strong>
+  Completa le credenziali di sorgente e destinazione prima del preflight. Puoi configurarle dalla <a href="/">pagina delle connessioni</a>.
+  {{end}}
 </div>
 {{end}}
 
@@ -105,7 +115,7 @@
       {{else if eq .Kind "wait"}}
         <div class="cockpit-cta-wait">&#9203; {{.Label}}<br><span class="muted">La pagina si aggiorna automaticamente.</span></div>
       {{else}}
-        <a class="btn btn-primary cockpit-cta-btn" href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}">{{.Label}} &rarr;</a>
+        <a class="btn btn-primary cockpit-cta-btn" href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}{{$.ModeQuery}}">{{.Label}} &rarr;</a>
       {{end}}
     {{end}}
   </div>
@@ -114,7 +124,7 @@
 {{/* Horizontal journey stepper — reuses the seven Flight Director phases. */}}
 <nav class="cockpit-steps" aria-label="Percorso della migrazione">
   {{range .Cockpit.Steps}}
-  <a class="cockpit-step cockpit-{{.State}}{{if .Current}} cockpit-current{{end}}" href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}"{{if .Current}} aria-current="step"{{end}}>
+  <a class="cockpit-step cockpit-{{.State}}{{if .Current}} cockpit-current{{end}}" href="/workbench/session/{{$.Session.ID}}{{if .Screen}}/{{.Screen}}{{end}}{{$.ModeQuery}}"{{if .Current}} aria-current="step"{{end}}>
     <span class="cockpit-step-dot dot {{fdDot .State}}"></span>
     <span class="cockpit-step-label">{{.Label}}</span>
     <span class="cockpit-step-cap">{{.Caption}}</span>
@@ -165,7 +175,7 @@
       {{if .Cockpit.Plan.Excluded}}<ul class="stack">{{range .Cockpit.Plan.Excluded}}<li><strong>{{.Label}}</strong><span class="muted">{{.Summary}}</span></li>{{end}}</ul>{{else}}<p class="muted">Nessuna area esclusa.</p>{{end}}
     </div>
   </div>
-  <p class="cockpit-plan-link"><a href="/workbench/session/{{.Session.ID}}/migrazione">Apri il piano dettagliato e conferma lo scope &rarr;</a></p>
+  <p class="cockpit-plan-link"><a href="/workbench/session/{{.Session.ID}}/migrazione{{.ModeQuery}}">Apri il piano dettagliato e conferma lo scope &rarr;</a></p>
 </section>
 
 {{/* Blocker migrazione vs cutover — reso esplicito (dogfooding #4 §6.2). */}}
@@ -222,7 +232,11 @@
 {{end}}
 {{end}}
 
-{{/* Engineering surfaces — available but no longer the primary language. */}}
+{{/* Engineering surfaces — EXPERT MODE ONLY. In operator mode these never
+     render (they are not part of the guided path); ?mode=expert reveals them,
+     still collapsed under <details>. Nothing safety-critical is removed —
+     governance, artifacts and the state-change form are relocated, not deleted. */}}
+{{if .Expert}}
 <details class="section">
 <summary><strong>Dettagli tecnici</strong> — definizione, stato per fase, governance, cronologia, report</summary>
 
@@ -310,6 +324,7 @@
 </form>
 </fieldset>
 </details>
+{{end}}
 
 {{template "wbFooter" .}}
 

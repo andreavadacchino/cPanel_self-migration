@@ -595,7 +595,9 @@ func TestExecRunPipelineTolerantDNSPlanFailure(t *testing.T) {
 	// The workbench path has no per-step Failed UI (unlike the /run dashboard),
 	// so the tolerated failure MUST be recorded in the session timeline reason
 	// — otherwise the operator sees "ok=true" with no hint the DNS plan is gone.
-	detail := doWorkbenchReq(h, http.MethodGet, "/workbench/session/"+sessID, nil).Body.String()
+	// The full timeline is an expert/audit surface (Operator-First UX Reset), so
+	// assert the recorded reason there.
+	detail := doWorkbenchReq(h, http.MethodGet, "/workbench/session/"+sessID+"?mode=expert", nil).Body.String()
 	if !strings.Contains(detail, "tolerated") || !strings.Contains(detail, "inventory dns-plan") {
 		t.Error("session timeline must record the tolerated dns-plan failure, not just report ok=true")
 	}

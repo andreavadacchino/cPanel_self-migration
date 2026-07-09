@@ -4,7 +4,7 @@
 {{template "nextActionBox" .}}
 <p class="muted">Il preflight verifica le pre-condizioni prima di toccare i server. Le voci raggiungibilità si confermano eseguendo l'analisi; il cluster DNS va confermato fuori dalla UI.</p>
 <ul class="sema">
-  <li><span class="dot {{if .Facts.HostYAMLPresent}}ok{{else}}todo{{end}}"></span>Connessioni configurate {{if .Facts.HostYAMLPresent}}(host.yaml presente){{else}}(da configurare nel Cruscotto){{end}}</li>
+  <li><span class="dot {{if .Facts.HostYAMLPresent}}ok{{else}}todo{{end}}"></span>Connessioni configurate {{if .Expert}}{{if .Facts.HostYAMLPresent}}(host.yaml presente){{else}}(host.yaml mancante — da configurare nel Cruscotto){{end}}{{else}}{{if not .Facts.HostYAMLPresent}}(da configurare nel Cruscotto){{end}}{{end}}</li>
   <li><span class="dot {{if and .Facts.InventorySourcePresent .Facts.InventoryDestPresent}}ok{{else}}todo{{end}}"></span>Sorgente e destinazione raggiungibili {{if not (and .Facts.InventorySourcePresent .Facts.InventoryDestPresent)}}(da verificare con l'analisi){{end}}</li>
   <li><span class="dot todo"></span>Account presente sulla destinazione (da verificare sulla destinazione)</li>
   <li><span class="dot todo"></span>Spazio disponibile (da verificare)</li>
@@ -55,30 +55,38 @@
   </p>
   <p class="muted">{{.Plan.StartSummary}}</p>
 
-  <h3>Cosa verrà eseguito automaticamente</h3>
-  <ul class="stack">
-    {{range .Plan.Areas}}{{if .AutoRunnable}}<li><span class="badge {{.BadgeClass}}">{{.CategoryLabel}}</span> <strong>{{.Label}}</strong> — {{.Summary}}</li>{{end}}{{end}}
-    {{if not .Plan.CanStartMigration}}<li class="muted">Nessuna esecuzione automatica finché la migrazione non è pronta.</li>{{end}}
-  </ul>
-
-  <h3>Cosa resta manuale o verificabile</h3>
-  <ul class="stack">
-    {{range .Plan.Areas}}{{if and .Included (not .AutoRunnable)}}<li><span class="badge {{.BadgeClass}}">{{.CategoryLabel}}</span> <strong>{{.Label}}</strong> — {{.Summary}}</li>{{end}}{{end}}
-  </ul>
+  {{/* Tre card semplici: automatico / manuale-verificabile / escluso. I dettagli
+       tecnici (coverage, blocker completi) restano collassati più sotto. */}}
+  <div class="cockpit-plan-grid">
+    <div class="cockpit-plan-card cockpit-plan-auto">
+      <h3>Automatico</h3>
+      <ul class="stack">
+        {{range .Plan.Areas}}{{if .AutoRunnable}}<li><strong>{{.Label}}</strong><span class="muted">{{.Summary}}</span></li>{{end}}{{end}}
+        {{if not .Plan.CanStartMigration}}<li class="muted">Nessuna esecuzione automatica finché la migrazione non è pronta.</li>{{end}}
+      </ul>
+    </div>
+    <div class="cockpit-plan-card cockpit-plan-manual">
+      <h3>Manuale / verificabile</h3>
+      <ul class="stack">
+        {{range .Plan.Areas}}{{if and .Included (not .AutoRunnable)}}<li><strong>{{.Label}}</strong><span class="muted">{{.Summary}}</span></li>{{end}}{{end}}
+      </ul>
+    </div>
+    <div class="cockpit-plan-card cockpit-plan-excluded">
+      <h3>Escluso o non pronto</h3>
+      <ul class="stack">
+        {{range .Plan.Areas}}{{if not .Included}}<li><strong>{{.Label}}</strong><span class="muted">non incluso in questa migrazione.</span></li>{{end}}{{end}}
+      </ul>
+    </div>
+  </div>
 
   {{if .Plan.Blockers}}
-  <h3>Cosa blocca la migrazione</h3>
   <div class="warnbox">
+    <strong>Cosa blocca la migrazione</strong>
     <ul>{{range .Plan.Blockers}}<li><strong>{{.Area}}</strong>: {{.Detail}}</li>{{end}}</ul>
     Risolvi questi problemi e riesegui il preflight.
   </div>
   {{end}}
   {{if .Plan.ExcludedBlockers}}<p class="muted">&#9432; Altri problemi bloccanti riguardano aree non incluse in questa migrazione ({{len .Plan.ExcludedBlockers}}): non le migreremo, ma finché l'analisi complessiva è bloccata l'avvio automatico resta disabilitato.</p>{{end}}
-
-  <h3 class="muted">Cosa è escluso dallo scope</h3>
-  <ul class="stack muted">
-    {{range .Plan.Areas}}{{if not .Included}}<li>{{.Label}} — non incluso in questa migrazione.</li>{{end}}{{end}}
-  </ul>
 
   {{range .Plan.Warnings}}<p class="muted">&#9432; {{.Detail}}</p>{{end}}
 

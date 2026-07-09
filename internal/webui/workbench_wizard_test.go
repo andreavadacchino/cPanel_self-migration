@@ -293,9 +293,13 @@ func TestWizardRedirectLandsOnPreflightNextAction(t *testing.T) {
 	if !strings.Contains(strings.ToLower(body), "preflight") {
 		t.Errorf("Panoramica should point to preflight as next action")
 	}
-	// host.yaml is absent → the technical-config callout must be shown.
-	if !strings.Contains(body, "host.yaml") {
-		t.Errorf("expected host.yaml callout when credentials not yet configured")
+	// host.yaml is absent → the operator sees the NEUTRAL connection callout,
+	// never the host.yaml file jargon (that lives only in expert mode).
+	if strings.Contains(body, "host.yaml") {
+		t.Errorf("operator landing must not leak host.yaml jargon")
+	}
+	if !strings.Contains(body, "Connessioni non configurate") {
+		t.Errorf("expected the neutral 'Connessioni non configurate' callout when credentials not yet configured")
 	}
 }
 
@@ -316,11 +320,17 @@ func TestPanoramicaCalloutHiddenWhenHostYAMLPresent(t *testing.T) {
 	if strings.Contains(body, "Configurazione tecnica richiesta") {
 		t.Errorf("callout should be hidden when host.yaml exists")
 	}
-	if !strings.Contains(body, "Definizione della migrazione") {
-		t.Errorf("setup definition block should still render")
+	// The migration definition block is a technical surface — it now lives in
+	// expert mode; the operator landing stays free of it.
+	if strings.Contains(body, "Definizione della migrazione") {
+		t.Errorf("operator landing must not render the technical definition block")
 	}
-	if !strings.Contains(body, "giorginisposi.it") {
-		t.Errorf("primary domain should appear in the definition block")
+	expert := doReq(h, http.MethodGet, loc+"?mode=expert", nil).Body.String()
+	if !strings.Contains(expert, "Definizione della migrazione") {
+		t.Errorf("setup definition block should render in expert mode")
+	}
+	if !strings.Contains(expert, "giorginisposi.it") {
+		t.Errorf("primary domain should appear in the expert definition block")
 	}
 }
 
