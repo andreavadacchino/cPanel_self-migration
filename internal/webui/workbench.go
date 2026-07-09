@@ -19,7 +19,7 @@ type workbenchServer struct {
 	store *workbench.Store
 	tpl   *template.Template
 	csrf  string
-	dir   string // shared artifact dir (== server.dir): read-only artifact reads
+	dir   string // base UI dir; session screens prefer Session.ArtifactDir when present
 	// jobBusy reports whether the shared single-writer slot is currently held,
 	// so the view-model can reconcile a running job journal against the live
 	// slot (running + free slot → interrupted). Wired in New(); nil-safe.
@@ -170,7 +170,7 @@ func (ws *workbenchServer) handleScreen(w http.ResponseWriter, r *http.Request, 
 	if ws.jobBusy != nil {
 		busy = ws.jobBusy()
 	}
-	view := buildWorkbenchView(ws.dir, ws.csrf, screen, sess, busy)
+	view := buildWorkbenchView(sessionWorkDir(sess, ws.dir), ws.dir, ws.csrf, screen, sess, busy)
 	// One-shot flashes from a redirect round-trip: the Fase 2 scope confirm
 	// (?scope=) or the Fase 3 orchestrator outcome (?migrate=). At most one is set.
 	view.Flash = scopeFlash(r.URL.Query().Get("scope"))

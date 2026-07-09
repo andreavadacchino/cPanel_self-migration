@@ -15,11 +15,27 @@
   <div class="sess-head" style="margin-bottom:1rem">
     <div><h1 style="font-size:1.3rem">Piano migrazione</h1>
     <p class="muted">Ecco cosa verrà migrato, cosa richiede attenzione e cosa è escluso.</p></div>
-    <div class="sess-actions"><a class="btn btn-ghost btn-sm" href="{{.ExpertURL}}/preflight">Dettagli preflight</a></div>
+    <div class="sess-actions">
+      {{with .RunAnalysis}}
+      <form method="POST" action="/platform/migrations/{{$.Session.ID}}/exec">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="action" value="{{.Name}}">
+        <input type="hidden" name="return_to" value="{{.Return}}">
+        <button type="submit" class="btn btn-primary btn-sm">{{.Label}}</button>
+      </form>
+      {{end}}
+      <a class="btn btn-ghost btn-sm" href="{{.ExpertPreflightURL}}">Apri dettagli tecnici</a>
+    </div>
   </div>
 
   {{if not .Plan.Ready}}
   <div class="callout warn" style="margin-bottom:1rem">{{.Plan.NotReadyMessage}}</div>
+  {{end}}
+  {{with .RunAnalysis}}
+  <div class="callout info" style="margin-bottom:1rem">
+    <strong>{{.Label}}</strong>
+    <div style="margin-top:.25rem">{{.Detail}}</div>
+  </div>
   {{end}}
 
   {{/* 3 semantic buckets */}}
@@ -83,14 +99,14 @@
     {{/* Scope confirm — in-platform form (metadata mutation, reuses the shared
          workbench core; the operator stays on /platform). */}}
     <div class="card" style="background:linear-gradient(180deg,var(--accent-soft),#fff)">
-      <div class="card-h"><span class="ttl" style="color:var(--accent)">Conferma scope</span></div>
-      <p class="muted" style="font-size:.86rem">Scegli e conferma cosa includere nella migrazione.</p>
+      <div class="card-h"><span class="ttl" style="color:var(--accent)">Conferma cosa migrare</span></div>
+      <p class="muted" style="font-size:.86rem">Scegli e conferma le aree da includere nella migrazione.</p>
       {{if not .Plan.Ready}}
         <div class="callout" style="margin:.5rem 0">Esegui prima il preflight per poter confermare lo scope.</div>
       {{else if not .Plan.CanEditScope}}
         <div class="callout ok" style="margin:.5rem 0">Scope confermato e bloccato: la migrazione è già stata avviata.</div>
       {{else}}
-        {{if .Plan.ScopeConfirmed}}<div class="callout ok" style="margin:.5rem 0">Scope già confermato — puoi rivederlo.</div>{{end}}
+        {{if .Plan.ScopeConfirmed}}<div class="callout ok" style="margin:.5rem 0">Selezione già confermata — puoi rivederla.</div>{{end}}
         <form method="POST" action="/platform/migrations/{{.Session.ID}}/scope">
           <input type="hidden" name="csrf" value="{{.CSRF}}">
           <div class="stack" style="gap:.4rem; margin:.5rem 0">
@@ -110,14 +126,14 @@
             </div>
           </details>
           <label style="display:flex; gap:.5rem; align-items:center; font-size:.86rem; margin:.3rem 0"><input type="checkbox" name="dns" value="1"> Includi DNS <span class="sub">(resta task manuale verificabile)</span></label>
-          <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center">Conferma scope →</button>
+          <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center">Conferma selezione →</button>
         </form>
         <p class="faint" style="font-size:.78rem; text-align:center; margin-top:.5rem">Potrai rivederlo finché la migrazione non parte.</p>
       {{end}}
     </div>
   </div>
 
-  <div class="lastupd">Il piano usa solo dati reali dagli artifact. Dove un dato manca, viene mostrato «—» o un avviso onesto.</div>
+  <div class="lastupd">Il piano usa solo dati raccolti dai controlli. Dove un dato manca, viene mostrato «—» o un avviso.</div>
 </div>
 </body>
 </html>

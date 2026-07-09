@@ -182,9 +182,9 @@ func TestCockpitNoPreflightHonestEmpty(t *testing.T) {
 
 // Test #3: with a checklist present the comparison renders with real counts.
 func TestCockpitComparisonWithChecklist(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklist(t, dir, countingChecklist())
+	writeChecklist(t, sess.ArtifactDir, countingChecklist())
 	_, body := getBody(t, h, "/workbench/session/"+sess.ID)
 	if !strings.Contains(body, "Comparativa account") {
 		t.Error("comparison block must render with a checklist")
@@ -207,7 +207,7 @@ func TestCockpitScopeUnconfirmedAsksConfirm(t *testing.T) {
 		Content:     workbench.ContentSelection{Files: true, Databases: true},
 	}
 	sess := wizardSession(t, store, "giorgini", setup)
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 	_, body := getBody(t, h, "/workbench/session/"+sess.ID)
 	if !strings.Contains(body, "Conferma lo scope") {
 		t.Error("hero must ask to confirm the scope when the plan is ready but scope is unconfirmed")
@@ -239,7 +239,7 @@ func TestCockpitJobRunningMonitor(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeJobJournal(dir, jobJournal{
+	writeJobJournal(sess.ArtifactDir, jobJournal{
 		SessionID: sess.ID, Action: "migrazione automatica",
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		State: jobStateRunning, Phase: "Contenuti",
@@ -267,7 +267,7 @@ func TestCockpitJobFailedShowsError(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeJobJournal(dir, jobJournal{
+	writeJobJournal(sess.ArtifactDir, jobJournal{
 		SessionID: sess.ID, Action: "migrazione automatica",
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		State: jobStateFailed, Phase: "Contenuti", Error: "migrate content: exit status 1",
@@ -298,7 +298,7 @@ func TestCockpitBlockerLabelsDistinct(t *testing.T) {
 	mh, ms := wizardHandler(t, migDir)
 	mSetup := &workbench.SetupMeta{Source: workbench.Endpoint{Account: "a"}, Destination: workbench.Endpoint{Account: "a"}, Content: workbench.ContentSelection{Files: true}}
 	mSess := wizardSession(t, ms, "acct", mSetup)
-	writeChecklist(t, migDir, accountinventory.MigrationChecklist{
+	writeChecklist(t, mSess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1, ApplyBlocked: true,
 		OverallStatus: accountinventory.OverallNotReady,
 		Sections:      []accountinventory.ChecklistSection{{Section: "databases", BlockersApply: []string{"spazio insufficiente"}}},
@@ -313,7 +313,7 @@ func TestCockpitBlockerLabelsDistinct(t *testing.T) {
 	ch, cs := wizardHandler(t, cutDir)
 	cSetup := &workbench.SetupMeta{Source: workbench.Endpoint{Account: "a"}, Destination: workbench.Endpoint{Account: "a"}, Content: workbench.ContentSelection{Files: true}}
 	cSess := wizardSession(t, cs, "acct", cSetup)
-	writeChecklist(t, cutDir, accountinventory.MigrationChecklist{
+	writeChecklist(t, cSess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1, ApplyBlocked: false,
 		OverallStatus: accountinventory.OverallBlocked,
 		Sections:      []accountinventory.ChecklistSection{{Section: "dns", BlockersCutover: []string{"MX esterno non verificato"}}},
@@ -364,7 +364,11 @@ func TestCockpitTechnicalCollapsedAndAdvancedDemoted(t *testing.T) {
 // otherwise startable — the hero and the dominant CTA must agree.
 func TestCockpitFailedJobHidesStartForm(t *testing.T) {
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
-	writeJobJournal(env.dir, jobJournal{
+	sess, err := env.store.Get(env.sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeJobJournal(sess.ArtifactDir, jobJournal{
 		SessionID: env.sessID, Action: orchestratorAction,
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		State: jobStateFailed, Phase: "Contenuti", Error: "migrate content: exit status 1",
@@ -383,7 +387,11 @@ func TestCockpitFailedJobHidesStartForm(t *testing.T) {
 // already-migrated destination).
 func TestCockpitAppliedHidesStartForm(t *testing.T) {
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
-	if err := os.WriteFile(filepath.Join(env.dir, "report.json"), []byte(`{"mode":"apply"}`), 0o600); err != nil {
+	sess, err := env.store.Get(env.sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "report.json"), []byte(`{"mode":"apply"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, body := getBody(t, env.h, "/workbench/session/"+env.sessID)
@@ -408,8 +416,8 @@ func TestCockpitGovernanceBlockedHidesStartForm(t *testing.T) {
 // Regression (go-review Important #2): a failed single /exec action routes to the
 // advanced screen; a failed orchestrator run routes to the plan screen.
 func TestFailedJobNextScreenRouting(t *testing.T) {
-	if s := failedJobNextScreen(&jobJournal{Action: orchestratorAction}); s != screenMigrazione {
-		t.Errorf("orchestrator failure routes to %q, want %q", s, screenMigrazione)
+	if s := failedJobNextScreen(&jobJournal{Action: orchestratorAction}); s != screenPanoramica {
+		t.Errorf("orchestrator failure routes to %q, want %q", s, screenPanoramica)
 	}
 	if s := failedJobNextScreen(&jobJournal{Action: "dns_apply"}); s != screenApplica {
 		t.Errorf("single-exec failure routes to %q, want %q", s, screenApplica)
@@ -418,9 +426,9 @@ func TestFailedJobNextScreenRouting(t *testing.T) {
 
 // Test #13: a valid events.jsonl produces real item-level content progress.
 func TestCockpitEventsProduceRealProgress(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeMonitorEvents(t, dir,
+	writeMonitorEvents(t, sess.ArtifactDir,
 		monEv("run-1", 0, "", events.EventRunStarted, events.LevelInfo, "", nil),
 		monEv("run-1", time.Second, events.PhaseMigrateMail, events.EventPhaseCompleted, events.LevelInfo, "", map[string]any{
 			"items":  []map[string]any{{"item": "a@x.it", "status": "migrated"}, {"item": "b@x.it", "status": "migrated"}},
@@ -434,7 +442,47 @@ func TestCockpitEventsProduceRealProgress(t *testing.T) {
 	if !strings.Contains(body, "Posta (per casella)") {
 		t.Error("the run monitor phase must be labelled in Italian")
 	}
-	if !strings.Contains(body, "item(s)") {
+	if !strings.Contains(body, "caselle") {
 		t.Error("the real per-mailbox summary must be shown")
+	}
+}
+
+func TestCockpitRealActivityShowsRealEntitiesAndHonestFileMessage(t *testing.T) {
+	h, store, _ := newTestWorkbenchHandler(t)
+	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+	writeMonitorEvents(t, sess.ArtifactDir,
+		monEv("run-1", 0, "", events.EventRunStarted, events.LevelInfo, "", nil),
+		monEv("run-1", time.Second, events.PhaseCreateDomains, events.EventPhaseCompleted, events.LevelInfo, "", map[string]any{
+			"failed_domains":  []string{"bad.example.com"},
+			"blocked_domains": []string{"hold.example.com"},
+		}),
+		monEv("run-1", 2*time.Second, events.PhaseMigrateMail, events.EventPhaseCompleted, events.LevelInfo, "", map[string]any{
+			"items": []map[string]any{
+				{"item": "info@example.com", "status": "migrated"},
+				{"item": "sales@example.com", "status": "unverified"},
+			},
+			"failed": 0, "unverified": 1,
+		}),
+		monEv("run-1", 3*time.Second, events.PhaseMigrateDB, events.EventPhaseCompleted, events.LevelInfo, "", map[string]any{
+			"migrated": []string{"dst_wp", "dst_shop"},
+			"failed":   0, "config_not_rewritten": 0, "config_unmigrated": 0,
+		}),
+		monEv("run-1", 4*time.Second, events.PhaseCopyFiles, events.EventPhaseStarted, events.LevelInfo, "", nil),
+	)
+	_, body := getBody(t, h, "/workbench/session/"+sess.ID)
+	for _, want := range []string{
+		"Attività reale",
+		"Fase corrente",
+		"File del sito",
+		"info@example.com",
+		"sales@example.com",
+		"dst_wp",
+		"bad.example.com",
+		"hold.example.com",
+		"il motore non espone ancora il file corrente",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("real activity box missing %q", want)
+		}
 	}
 }

@@ -217,9 +217,9 @@ func TestMigrationPlanLegacyNoSetup(t *testing.T) {
 // the deferred (disabled) CTA, and the DNS manual note. A clean checklist yields
 // "Pronto per migrare".
 func TestMigrationPlanScreenRendersReady(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})
@@ -244,9 +244,9 @@ func TestMigrationPlanScreenRendersReady(t *testing.T) {
 // Render — an apply-blocking checklist shows "Non ancora pronto" and surfaces
 // the blocker reason in human terms.
 func TestMigrationPlanScreenRendersBlocked(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallNotReady,
 		ApplyBlocked:  true,

@@ -257,6 +257,51 @@ func fileExists(path string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
+// resolveHostYAML returns the host.yaml path to use for --config and for
+// presence checks. The rule (single, consistent everywhere): the PER-SESSION
+// file wins when it exists, otherwise the GLOBAL one is used as a fallback. The
+// guided wizard / expert workbench write credentials to the global /config
+// target, so a session whose per-session dir has no host.yaml is still
+// executable via the global file. OUTPUT dirs are never affected — only the
+// config path falls back. An empty globalDir keeps the per-session path (no
+// fallback available).
+func resolveHostYAML(sessionDir, globalDir string) string {
+	perSession := filepath.Join(sessionDir, "host.yaml")
+	if globalDir == "" || fileExists(perSession) {
+		return perSession
+	}
+	return filepath.Join(globalDir, "host.yaml")
+}
+
+// withConfigFallback rewrites the value following each "--config" flag in argv:
+// when the pointed host.yaml does NOT exist but the GLOBAL one does, the global
+// path is substituted. Only --config is touched — OUTPUT flags (--output-dir,
+// --output-json, …) are left exactly as built, so artifacts always stay
+// per-session. Returns argv unchanged when globalDir is empty or no substitution
+// applies; copy-on-write, so the caller's slice is never mutated.
+func withConfigFallback(argv []string, globalDir string) []string {
+	if globalDir == "" {
+		return argv
+	}
+	globalHost := filepath.Join(globalDir, "host.yaml")
+	out := argv
+	copied := false
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] != "--config" {
+			continue
+		}
+		if fileExists(out[i+1]) || !fileExists(globalHost) {
+			continue
+		}
+		if !copied {
+			out = append([]string(nil), argv...)
+			copied = true
+		}
+		out[i+1] = globalHost
+	}
+	return out
+}
+
 // isApplyReport reports whether path holds a report.json from an APPLY run
 // — the only kind the checklist accepts as migration evidence. An
 // account-inventory report (or garbage) is skipped instead of triggering a

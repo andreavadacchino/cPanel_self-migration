@@ -91,9 +91,13 @@ var csrfRe = regexp.MustCompile(`name="csrf" value="([a-f0-9]+)"`)
 
 func fetchCSRF(t *testing.T, h http.Handler) string {
 	t.Helper()
-	rr := doReq(h, http.MethodGet, "/", nil)
+	// The phase-1 dashboard form (carrying the global CSRF token) is served at
+	// "/advanced": with the platform shell mounted "/" now 303-redirects to
+	// /platform/migrations, while /advanced serves the console at 200 whether or
+	// not the store is present. The token is the same server-wide s.csrf.
+	rr := doReq(h, http.MethodGet, "/advanced", nil)
 	if rr.Code != http.StatusOK {
-		t.Fatalf("GET / = %d, want 200", rr.Code)
+		t.Fatalf("GET /advanced = %d, want 200", rr.Code)
 	}
 	m := csrfRe.FindStringSubmatch(rr.Body.String())
 	if m == nil {
@@ -113,6 +117,21 @@ func validConfigForm(csrf string) url.Values {
 		"dest_port": {"22"},
 		"dest_user": {"demoacct"},
 		"dest_pass": {"dest-secret"},
+	}
+}
+
+// The phase-1 console lives at /advanced now, so its POST actions must land the
+// operator back on /advanced (not "/", which is the platform landing).
+func TestPhase1ConfigPostRedirectsToAdvanced(t *testing.T) {
+	dir := t.TempDir()
+	h, err := NewHandler(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/config", validConfigForm(csrf))
+	if rr.Code != http.StatusSeeOther || rr.Header().Get("Location") != "/advanced" {
+		t.Errorf("POST /config = %d loc=%q, want 303 → /advanced", rr.Code, rr.Header().Get("Location"))
 	}
 }
 

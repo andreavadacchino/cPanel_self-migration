@@ -3,6 +3,8 @@
 
 # Real config with credentials — never commit
 /configs/host.yaml
+# Same file when a run writes it into the working root (dogfooding) — never commit
+/host.yaml
 
 # Generated artifacts
 *.log
@@ -12,3 +14,27 @@
 /diagnostics/
 dns_verify_report.md
 dogfood_giorginisposi/
+
+# OS / editor / tooling noise
+.DS_Store
+/.tmp/
+/.playwright-mcp/
+
+# Run-artifacts written to the working root by tool runs (not source; root-anchored
+# so tracked internal/testdata/* is never affected)
+/acceptances.json
+/events.jsonl
+/job.json
+/inventory_*.json
+/inventory_*.md
+/policy_report.json
+/policy_report.md
+/migration_checklist.json
+/migration_checklist.md
+/dns_import_plan.json
+/dns_import_plan.md
+
+# Local design mockups / iteration screenshots — kept out of git (binary bloat);
+# they are design reference cited by docs, not loaded by the app
+/screenshot/
+/*.png

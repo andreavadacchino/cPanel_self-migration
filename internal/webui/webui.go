@@ -172,18 +172,19 @@ func New(o Options) (http.Handler, error) {
 			base = context.Background()
 		}
 		s.wbExec = &workbenchExecServer{
-			store:  o.SessionStore,
-			csrf:   s.csrf,
-			runner: s.job.runner,
-			base:   base,
-			job:    s.job,
-			dir:    o.Dir,
+			store:     o.SessionStore,
+			csrf:      s.csrf,
+			runner:    s.job.runner,
+			base:      base,
+			job:       s.job,
+			dir:       o.Dir,
+			globalDir: o.Dir,
 		}
 		// Platform UI V2: the operator-first product shell (/platform/*). It is a
 		// read-only presentation layer over the same store + shared artifact dir;
 		// mutating actions delegate to the workbench POST handlers above. The old
 		// workbench (/workbench/*) remains the expert/fallback surface.
-		ps, err := newPlatformServer(o.SessionStore, o.Dir, s.csrf, s.job.running)
+		ps, err := newPlatformServer(o.SessionStore, o.Dir, s.csrf, s.job.running, &s.cfgMu)
 		if err != nil {
 			return nil, err
 		}
@@ -192,7 +193,9 @@ func New(o Options) (http.Handler, error) {
 	// No ServeMux on purpose: its path canonicalization would answer
 	// traversal-looking requests with a 307 redirect instead of a plain
 	// 404. route() serves fixed paths and nothing else — no redirects
-	// besides the post-action 303, no file serving.
+	// besides the post-action 303 and the operator-landing 303 at "/"
+	// (→ /platform/migrations when the platform shell is mounted), no
+	// file serving.
 	return http.HandlerFunc(s.route), nil
 }
 
@@ -218,6 +221,21 @@ func (s *server) route(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.URL.Path {
 	case "/":
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Operator landing: when the platform shell is mounted (production has a
+		// SessionStore, so s.platform != nil), "/" IS the operator platform. The
+		// raw phase-1 console stays reachable at /advanced. Read-only phase-1
+		// builds (NewHandler, no store) keep serving the console at "/" unchanged.
+		if s.platform != nil {
+			http.Redirect(w, r, "/platform/migrations", http.StatusSeeOther)
+			return
+		}
+		s.index(w, r)
+	case "/advanced":
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -305,19 +323,21 @@ type yamlConfig struct {
 
 func (s *server) hostYAMLPath() string { return filepath.Join(s.dir, "host.yaml") }
 
-// saveConfig writes host.yaml from the form. Validation is delegated to
-// the AUTHORITY: the candidate is written to a temp file and accepted only
-// if config.Load accepts it, then atomically renamed into place. Blank
-// password fields inherit the stored ones, so editing an endpoint never
-// requires re-typing (or re-exposing) a secret.
-func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
-	existing, _ := config.Load(s.hostYAMLPath()) // best-effort: zero value when absent
+type configFormNames struct {
+	SrcIP, SrcPort, SrcUser, SrcPass     string
+	DestIP, DestPort, DestUser, DestPass string
+}
 
-	parseHost := func(prefix string, prev config.HostConfig) (yamlHost, error) {
+func loadConfigAt(dir string) (config.Config, error) {
+	return config.Load(filepath.Join(dir, "host.yaml"))
+}
+
+func parseConfigForm(r *http.Request, existing config.Config, names configFormNames) (yamlConfig, error) {
+	parseHost := func(ipKey, portKey, userKey, passKey, prefix string, prev config.HostConfig) (yamlHost, error) {
 		h := yamlHost{
-			IP:      strings.TrimSpace(r.FormValue(prefix + "_ip")),
-			SSHUser: strings.TrimSpace(r.FormValue(prefix + "_user")),
-			SSHPass: r.FormValue(prefix + "_pass"),
+			IP:      strings.TrimSpace(r.FormValue(ipKey)),
+			SSHUser: strings.TrimSpace(r.FormValue(userKey)),
+			SSHPass: r.FormValue(passKey),
 			Timeout: "15s",
 		}
 		if prev.Timeout > 0 {
@@ -326,7 +346,7 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 		if h.SSHPass == "" {
 			h.SSHPass = prev.SSHPass
 		}
-		portStr := strings.TrimSpace(r.FormValue(prefix + "_port"))
+		portStr := strings.TrimSpace(r.FormValue(portKey))
 		if portStr == "" {
 			portStr = "22"
 		}
@@ -338,19 +358,36 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 		return h, nil
 	}
 
-	src, err := parseHost("src", existing.Src)
+	src, err := parseHost(names.SrcIP, names.SrcPort, names.SrcUser, names.SrcPass, "src", existing.Src)
+	if err != nil {
+		return yamlConfig{}, err
+	}
+	dest, err := parseHost(names.DestIP, names.DestPort, names.DestUser, names.DestPass, "dest", existing.Dest)
+	if err != nil {
+		return yamlConfig{}, err
+	}
+	return yamlConfig{Src: src, Dest: dest}, nil
+}
+
+// saveConfig writes host.yaml from the form. Validation is delegated to
+// the AUTHORITY: the candidate is written to a temp file and accepted only
+// if config.Load accepts it, then atomically renamed into place. Blank
+// password fields inherit the stored ones, so editing an endpoint never
+// requires re-typing (or re-exposing) a secret.
+func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
+	existing, _ := loadConfigAt(s.dir) // best-effort: zero value when absent
+	c, err := parseConfigForm(r, existing, configFormNames{
+		SrcIP: "src_ip", SrcPort: "src_port", SrcUser: "src_user", SrcPass: "src_pass",
+		DestIP: "dest_ip", DestPort: "dest_port", DestUser: "dest_user", DestPass: "dest_pass",
+	})
 	if err == nil {
-		var dest yamlHost
-		dest, err = parseHost("dest", existing.Dest)
-		if err == nil {
-			err = s.writeValidatedConfig(yamlConfig{Src: src, Dest: dest})
-		}
+		err = s.writeValidatedConfig(c)
 	}
 	if err != nil {
 		http.Error(w, "invalid configuration: "+err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/advanced", http.StatusSeeOther)
 }
 
 // writeValidatedConfig writes the candidate to a UNIQUE temp file, lets
@@ -360,11 +397,32 @@ func (s *server) saveConfig(w http.ResponseWriter, r *http.Request) {
 // full read-modify-write; os.CreateTemp already creates each file 0600, so
 // there is no permission-widening window and no shared-name race.
 func (s *server) writeValidatedConfig(c yamlConfig) error {
+	return writeValidatedConfigAt(s.dir, c)
+}
+
+func writeValidatedConfigAt(dir string, c yamlConfig) error {
 	b, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(s.dir, "host.yaml.*.tmp")
+	return writeAndValidateConfigBytes(dir, b)
+}
+
+func validateConfigCandidate(c yamlConfig) error {
+	b, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp("", "csm-config-validate-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+	return writeAndValidateConfigBytes(tmpDir, b)
+}
+
+func writeAndValidateConfigBytes(dir string, b []byte) error {
+	f, err := os.CreateTemp(dir, "host.yaml.*.tmp")
 	if err != nil {
 		return err
 	}
@@ -380,7 +438,7 @@ func (s *server) writeValidatedConfig(c yamlConfig) error {
 	if _, err := config.Load(tmp); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.hostYAMLPath())
+	return os.Rename(tmp, filepath.Join(dir, "host.yaml"))
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +459,7 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, "/advanced", http.StatusSeeOther)
 }
 
 // ---------------------------------------------------------------------------
@@ -627,13 +685,27 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		})
 	case action == "exec":
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.wbExec.handleExec(w, r, sessionID)
+			sess, err := s.workbench.store.Get(sessionID)
+			if err != nil {
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			}
+			exec := *s.wbExec
+			exec.dir = sessionWorkDir(sess, s.wbExec.dir)
+			exec.handleExec(w, r, sessionID)
 		})
 	case action == "start-migration":
 		// Fase 3: one strong confirmation runs the automatic, in-scope, safe
 		// phases in sequence (DNS excluded), stop-on-first-failure.
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.wbExec.handleStartMigration(w, r, sessionID, "/workbench/session/"+sessionID+"/"+screenMigrazione)
+			sess, err := s.workbench.store.Get(sessionID)
+			if err != nil {
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			}
+			exec := *s.wbExec
+			exec.dir = sessionWorkDir(sess, s.wbExec.dir)
+			exec.handleStartMigration(w, r, sessionID, "/workbench/session/"+sessionID+"/"+screenMigrazione)
 		})
 	case action == "scope":
 		// Fase 2: confirm/refine the migration scope after the preflight, then
@@ -645,7 +717,12 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		// Register an operator acceptance from the Conferme screen, then return
 		// to that screen (the dashboard /accept still returns to "/").
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.saveAcceptTo(w, r, "/workbench/session/"+sessionID+"/"+screenConferme)
+			sess, err := s.workbench.store.Get(sessionID)
+			if err != nil {
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			}
+			s.saveAcceptInDir(w, r, "/workbench/session/"+sessionID+"/"+screenConferme, sessionWorkDir(sess, s.dir))
 		})
 	default:
 		http.NotFound(w, r)

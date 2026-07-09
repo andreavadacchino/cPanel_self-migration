@@ -110,7 +110,7 @@ func TestParseRunMonitorFullApplyRun(t *testing.T) {
 	if mail.State != "completed" {
 		t.Errorf("migrate_mail state = %q", mail.State)
 	}
-	if !strings.Contains(mail.Summary, "3 item(s)") || !strings.Contains(mail.Summary, "1 failed") {
+	if !strings.Contains(mail.Summary, "3 caselle") || !strings.Contains(mail.Summary, "1 fallite") {
 		t.Errorf("mail summary = %q, want item and failed counts", mail.Summary)
 	}
 	if !strings.Contains(mail.Summary, "bad@example.com") {
@@ -119,7 +119,7 @@ func TestParseRunMonitorFullApplyRun(t *testing.T) {
 	if strings.Contains(mail.Summary, "info@example.com") {
 		t.Errorf("mail summary = %q, must NOT list happy items", mail.Summary)
 	}
-	if got := monPhase(t, m, "verify_mail").Summary; !strings.Contains(got, "divergent: 0") {
+	if got := monPhase(t, m, "verify_mail").Summary; !strings.Contains(got, "Differenze residue: 0") {
 		t.Errorf("verify_mail summary = %q", got)
 	}
 	if got := monPhase(t, m, "migrate_db").Summary; !strings.Contains(got, "dst_wp") {
@@ -283,7 +283,7 @@ func TestParseRunMonitorHandlesHugeLines(t *testing.T) {
 		t.Fatal("monitor is nil")
 	}
 	sum := monPhase(t, m, "migrate_mail").Summary
-	if !strings.Contains(sum, "3000 item(s)") {
+	if !strings.Contains(sum, "3000 caselle") {
 		t.Errorf("summary = %q, want the full item count", sum)
 	}
 	if len(sum) > 500 {
@@ -371,7 +371,7 @@ func TestHandlerMonitorShowsCompletedApplyRun(t *testing.T) {
 	_, body := getIndex(t, dir)
 	for _, want := range []string{
 		"Monitor esecuzione", "run-20260702-150000", "APPLY",
-		"migrate_mail", "1 failed", "bad@example.com", "dst_wp",
+		"migrate_mail", "1 fallite", "bad@example.com", "dst_wp",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing %q", want)

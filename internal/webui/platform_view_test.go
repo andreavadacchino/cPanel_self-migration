@@ -119,7 +119,7 @@ func TestBuildPlatformSessionNoChecklist(t *testing.T) {
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
 
-	page := buildPlatformSession(dir, "csrf-x", sess, false, "cockpit")
+	page := buildPlatformSession(sess.ArtifactDir, "", "csrf-x", sess, false, "cockpit")
 	if page.Plan.Ready {
 		t.Error("plan must not be ready without a checklist")
 	}
@@ -132,8 +132,8 @@ func TestBuildPlatformSessionNoChecklist(t *testing.T) {
 	if len(page.Steps) != len(platformStepDefs) {
 		t.Errorf("stepper must have %d steps, got %d", len(platformStepDefs), len(page.Steps))
 	}
-	if page.ExpertURL != "/workbench/session/"+sess.ID {
-		t.Errorf("expert URL = %q, want the workbench session route", page.ExpertURL)
+	if page.ExpertURL != "/workbench/session/"+sess.ID+"?mode=expert" {
+		t.Errorf("expert URL = %q, want the workbench expert route", page.ExpertURL)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestBuildPlatformSessionReusesStartGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := buildPlatformSession(env.dir, env.csrf, sess, false, "cockpit")
+	page := buildPlatformSession(sess.ArtifactDir, "", env.csrf, sess, false, "cockpit")
 	if page.Cockpit.CTA.Kind != "start" {
 		t.Fatalf("startable session must yield a start CTA, got kind %q (state %q)", page.Cockpit.CTA.Kind, page.Cockpit.StateLabel)
 	}
@@ -161,11 +161,36 @@ func TestBuildPlatformSessionDraftNotStartable(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
-	page := buildPlatformSession(dir, "csrf-x", sess, false, "cockpit")
+	page := buildPlatformSession(sess.ArtifactDir, "", "csrf-x", sess, false, "cockpit")
 	if page.Cockpit.CTA.Kind == "start" {
 		t.Error("a draft session must never expose a start CTA")
 	}
 	if page.Cockpit.StateLabel == "Pronta per migrare" {
 		t.Error("a draft session must never claim it is ready to migrate")
+	}
+}
+
+func TestBuildPlatformSessionReadyPlanButUnconfirmedScopeHighlightsScopeStep(t *testing.T) {
+	dir := t.TempDir()
+	h, store := wizardHandler(t, dir)
+	_ = h
+	setup := &workbench.SetupMeta{
+		Source:      workbench.Endpoint{Host: "1.1.1.1", Account: "src"},
+		Destination: workbench.Endpoint{Host: "2.2.2.2", Account: "dst"},
+		Content:     workbench.ContentSelection{Files: true, Databases: true},
+	}
+	sess := wizardSession(t, store, "giorgini", setup)
+	var err error
+	sess, err = store.SetStatus(sess.ID, workbench.StatusPreflightRequired, true, "test preflight step", time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
+	page := buildPlatformSession(sess.ArtifactDir, "", "csrf-x", sess, false, "cockpit")
+	if page.CurrentStepIndex != 4 {
+		t.Fatalf("CurrentStepIndex = %d, want 4 when the plan is ready but the scope is not confirmed", page.CurrentStepIndex)
+	}
+	if !page.Steps[3].Current || page.Steps[3].Label != "Scope" {
+		t.Fatalf("current step = %+v, want Scope", page.Steps[3])
 	}
 }

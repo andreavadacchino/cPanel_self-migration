@@ -197,6 +197,7 @@ func (s *Store) SetStatus(id string, to Status, force bool, reason string, now t
 	}
 
 	sess.Status = to
+	sess.CurrentStep = stepForStatus(to, sess.CurrentStep)
 	sess.UpdatedAt = now
 	sess.Timeline = append(sess.Timeline, event)
 
@@ -204,6 +205,39 @@ func (s *Store) SetStatus(id string, to Status, force bool, reason string, now t
 		return nil, err
 	}
 	return sess, nil
+}
+
+func stepForStatus(status Status, prev Step) Step {
+	switch status {
+	case StatusDraft:
+		return StepSetup
+	case StatusPreflightRequired:
+		return StepPreflight
+	case StatusInventoryReady:
+		return StepInventory
+	case StatusChecklistReady:
+		return StepDiffPolicyChecklist
+	case StatusManualActionsRequired:
+		return StepPlanning
+	case StatusReadyForApply, StatusApplyInProgress, StatusApplyDone:
+		return StepApplyCore
+	case StatusVerificationRequired:
+		return StepVerify
+	case StatusReadyForCutover, StatusCutoverDone:
+		return StepCutover
+	case StatusArchived:
+		return StepArchive
+	case StatusBlocked, StatusFailed:
+		if ValidStep(prev) {
+			return prev
+		}
+		return StepPlanning
+	default:
+		if ValidStep(prev) {
+			return prev
+		}
+		return StepSetup
+	}
 }
 
 // ConfirmScope updates the migration content selection and marks the scope as

@@ -119,9 +119,9 @@ func TestPreflightHostYAMLExpertOnly(t *testing.T) {
 
 // Task #10: "Cosa verrà migrato" presents the three simple plan cards.
 func TestMigrazioneThreeSimpleCards(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})
@@ -139,9 +139,9 @@ func TestMigrazioneThreeSimpleCards(t *testing.T) {
 
 // Task #11: the technical coverage table stays collapsed under <details>.
 func TestMigrazioneCoverageCollapsed(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		CoverageManifest: []accountinventory.CoverageArea{
 			{Area: "dns", State: accountinventory.CoverageCovered},

@@ -42,10 +42,10 @@ func TestApplyBlockedByPolicy(t *testing.T) {
 	// Write a checklist with apply_blocked=true
 	checklist := map[string]any{"apply_blocked": true, "overall_status": "BLOCKED"}
 	b, _ := json.Marshal(checklist)
-	if err := os.WriteFile(filepath.Join(dir, "migration_checklist.json"), b, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "migration_checklist.json"), b, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -102,10 +102,10 @@ func TestApplyAllowedWithCutoverOnlyBlockers(t *testing.T) {
 	// Checklist BLOCKED overall but apply_blocked=false (cutover-only blockers)
 	checklist := map[string]any{"apply_blocked": false, "overall_status": "BLOCKED"}
 	b, _ := json.Marshal(checklist)
-	if err := os.WriteFile(filepath.Join(dir, "migration_checklist.json"), b, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "migration_checklist.json"), b, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,10 +163,10 @@ func TestReadOnlyNotGatedByApplyBlocked(t *testing.T) {
 	// apply_blocked=true
 	checklist := map[string]any{"apply_blocked": true, "overall_status": "BLOCKED"}
 	b, _ := json.Marshal(checklist)
-	if err := os.WriteFile(filepath.Join(dir, "migration_checklist.json"), b, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "migration_checklist.json"), b, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 

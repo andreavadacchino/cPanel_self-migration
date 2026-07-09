@@ -67,9 +67,9 @@ func TestDashboardTranslatesManualActionIT(t *testing.T) {
 // TestConfermeTranslatesManualActionIT: workbench Conferme screen (#66) renders
 // the manual action in Italian; the raw English must not leak.
 func TestConfermeTranslatesManualActionIT(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallManualActionRequired,
 		ManualActions: []accountinventory.ManualAction{realPHPAction()},

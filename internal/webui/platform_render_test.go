@@ -11,17 +11,21 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/tis24dev/cPanel_self-migration/internal/events"
 	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
 )
 
 func newPlatformTest(t *testing.T, dir string, busy bool) (*platformServer, *workbench.Store) {
 	t.Helper()
 	store := mustStore(t, dir)
-	ps, err := newPlatformServer(store, dir, "csrf-x", func() bool { return busy })
+	ps, err := newPlatformServer(store, dir, "csrf-x", func() bool { return busy }, &sync.Mutex{})
 	if err != nil {
 		t.Fatalf("newPlatformServer: %v", err)
 	}
@@ -34,6 +38,16 @@ func platformSessionBody(t *testing.T, ps *platformServer, id, screen string) st
 	ps.handleSession(rr, httptest.NewRequest(http.MethodGet, "/platform/migrations/"+id+"/"+screen, nil), id, screen)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET platform %s = %d, want 200", screen, rr.Code)
+	}
+	return rr.Body.String()
+}
+
+func renderPlatformPage(t *testing.T, ps *platformServer, tpl string, page platformPage) string {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	ps.render(rr, tpl, page)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("render %s = %d, want 200", tpl, rr.Code)
 	}
 	return rr.Body.String()
 }
@@ -67,24 +81,28 @@ func TestPlatformDashboardListsSessionsCoherently(t *testing.T) {
 	rr := httptest.NewRecorder()
 	ps.handleDashboard(rr, httptest.NewRequest(http.MethodGet, "/platform/migrations", nil))
 	body := rr.Body.String()
-	for _, want := range []string{"giorgini", "Preflight richiesto", "Esegui preflight"} {
+	for _, want := range []string{"giorgini", "Preflight richiesto", "Apri controllo iniziale"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard row missing %q", want)
 		}
 	}
 }
 
-// Case 2: the wizard shows the clear numbered steps and the real form fields.
-func TestPlatformWizardShowsSteps(t *testing.T) {
+// Case 2: the wizard shows one clear setup form and the real form fields. It
+// must not pretend to be a multi-step wizard when all fields are on one page.
+func TestPlatformWizardShowsSinglePageSetup(t *testing.T) {
 	ps, _ := newPlatformTest(t, t.TempDir(), false)
 	rr := httptest.NewRecorder()
 	ps.handleWizardForm(rr, httptest.NewRequest(http.MethodGet, "/platform/migrations/new", nil))
 	body := rr.Body.String()
-	for _, want := range []string{"Nome migrazione", "Sorgente", "Destinazione", "Contenuti", "Riepilogo",
+	for _, want := range []string{"Dai un nome", "Sorgente", "Destinazione", "Cosa vuoi migrare",
 		`name="csrf"`, `name="src_host"`, `name="dst_account"`, "Cosa vuoi migrare", "Crea migrazione"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("wizard missing %q", want)
 		}
+	}
+	if strings.Contains(body, "Riepilogo") {
+		t.Error("single-page wizard must not render a fake multi-step 'Riepilogo' step")
 	}
 }
 
@@ -102,6 +120,7 @@ func TestPlatformWizardCreatesSessionAndRedirects(t *testing.T) {
 		"csrf": {csrf}, "name": {"Migrazione X"},
 		"src_host": {"1.2.3.4"}, "src_account": {"acc"},
 		"dst_host": {"5.6.7.8"}, "dst_account": {"acc2"},
+		"src_pass": {"src-secret"}, "dst_pass": {"dst-secret"},
 		"content_files": {"1"},
 	}
 	rr := doReq(h, http.MethodPost, "/platform/migrations/new", form)
@@ -114,6 +133,16 @@ func TestPlatformWizardCreatesSessionAndRedirects(t *testing.T) {
 	sessions, _, _ := store.List()
 	if len(sessions) != 1 {
 		t.Fatalf("sessions after wizard = %d, want 1", len(sessions))
+	}
+	sess := sessions[0]
+	if sess.Status != workbench.StatusPreflightRequired || sess.CurrentStep != workbench.StepPreflight {
+		t.Errorf("platform wizard session status/step = %s/%s, want %s/%s", sess.Status, sess.CurrentStep, workbench.StatusPreflightRequired, workbench.StepPreflight)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "host.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("root host.yaml must stay absent for a platform-created session, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sess.ArtifactDir, "host.yaml")); err != nil {
+		t.Fatalf("session host.yaml missing: %v", err)
 	}
 }
 
@@ -153,12 +182,12 @@ func TestPlatformPlanHonestFallbackAndRealData(t *testing.T) {
 
 	// With a ready checklist + confirmed scope → real buckets.
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
-	ps2, err := newPlatformServer(env.store, env.dir, env.csrf, func() bool { return false })
+	ps2, err := newPlatformServer(env.store, env.dir, env.csrf, func() bool { return false }, &sync.Mutex{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body2 := platformSessionBody(t, ps2, env.sessID, "plan")
-	for _, want := range []string{"Piano migrazione", "Automatico", "Conferma scope"} {
+	for _, want := range []string{"Piano migrazione", "Automatico", "Conferma cosa migrare"} {
 		if !strings.Contains(body2, want) {
 			t.Errorf("ready plan missing %q", want)
 		}
@@ -180,7 +209,7 @@ func TestPlatformCockpitMonitorHonest(t *testing.T) {
 	dir2 := t.TempDir()
 	ps2, store2 := newPlatformTest(t, dir2, true)
 	sess2, _ := store2.Create("giorgini", "acc@src", "acc@dst", time.Now())
-	writeJobJournal(dir2, jobJournal{
+	writeJobJournal(sess2.ArtifactDir, jobJournal{
 		SessionID: sess2.ID, Action: orchestratorAction,
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		State: jobStateRunning, Phase: "Contenuti",
@@ -189,6 +218,43 @@ func TestPlatformCockpitMonitorHonest(t *testing.T) {
 	for _, want := range []string{"Monitor esecuzione", "Migrazione in corso"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("running cockpit missing %q", want)
+		}
+	}
+}
+
+func TestPlatformCockpitRealActivityShowsRealEntitiesAndHonestFileMessage(t *testing.T) {
+	dir := t.TempDir()
+	ps, store := newPlatformTest(t, dir, true)
+	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
+	writeJobJournal(sess.ArtifactDir, jobJournal{
+		SessionID: sess.ID, Action: orchestratorAction,
+		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		State: jobStateRunning, Phase: "Contenuti",
+	})
+	writeMonitorEvents(t, sess.ArtifactDir,
+		monEv("run-1", 0, "", events.EventRunStarted, events.LevelInfo, "", nil),
+		monEv("run-1", time.Second, events.PhaseMigrateMail, events.EventPhaseCompleted, events.LevelInfo, "", map[string]any{
+			"items": []map[string]any{
+				{"item": "info@example.com", "status": "migrated"},
+			},
+			"failed": 0, "unverified": 0,
+		}),
+		monEv("run-1", 2*time.Second, events.PhaseMigrateDB, events.EventPhaseCompleted, events.LevelInfo, "", map[string]any{
+			"migrated": []string{"dst_wp"},
+			"failed":   0, "config_not_rewritten": 0, "config_unmigrated": 0,
+		}),
+		monEv("run-1", 3*time.Second, events.PhaseCopyFiles, events.EventPhaseStarted, events.LevelInfo, "", nil),
+	)
+	body := platformSessionBody(t, ps, sess.ID, "cockpit")
+	for _, want := range []string{
+		"Attività reale",
+		"Fase corrente",
+		"info@example.com",
+		"dst_wp",
+		"il motore non espone ancora il file corrente",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("platform real activity box missing %q", want)
 		}
 	}
 }
@@ -203,7 +269,7 @@ func TestPlatformCompareDegradesHonestly(t *testing.T) {
 	if !strings.Contains(body, "Confronto non ancora disponibile") {
 		t.Error("comparison without data must say so honestly")
 	}
-	if !strings.Contains(body, "non è disponibile in questa versione") {
+	if !strings.Contains(body, "non è incluso in questa vista") {
 		t.Error("the file-level detail panel must degrade honestly")
 	}
 }
@@ -213,7 +279,7 @@ func TestPlatformExpertLinkOnEveryScreen(t *testing.T) {
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
-	want := "/workbench/session/" + sess.ID
+	want := "/workbench/session/" + sess.ID + "?mode=expert"
 	for _, screen := range []string{"cockpit", "plan", "tasks", "report", "compare"} {
 		if body := platformSessionBody(t, ps, sess.ID, screen); !strings.Contains(body, want) {
 			t.Errorf("screen %q missing the expert-mode link %q", screen, want)
@@ -230,16 +296,22 @@ func TestWorkbenchNotBrokenByPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/", "/workbench", "/workbench/session/" + sess.ID, "/workbench/new"} {
+	for _, path := range []string{"/advanced", "/workbench", "/workbench/session/" + sess.ID, "/workbench/new"} {
 		if rr := doReq(h, http.MethodGet, path, nil); rr.Code != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200 (workbench must keep working)", path, rr.Code)
 		}
+	}
+	// "/" is now the operator landing: with the platform shell mounted it
+	// 303-redirects to the platform; the raw phase-1 console moved to /advanced.
+	if rr := doReq(h, http.MethodGet, "/", nil); rr.Code != http.StatusSeeOther ||
+		rr.Header().Get("Location") != "/platform/migrations" {
+		t.Errorf("GET / = %d loc=%q, want 303 → /platform/migrations", rr.Code, rr.Header().Get("Location"))
 	}
 	// The workbench wizard still redirects into /workbench (refactor regression).
 	csrf := fetchCSRF(t, h)
 	form := url.Values{
 		"csrf": {csrf}, "name": {"WB"}, "src_host": {"1.1.1.1"}, "src_account": {"a"},
-		"dst_host": {"2.2.2.2"}, "dst_account": {"b"}, "content_files": {"1"},
+		"dst_host": {"2.2.2.2"}, "dst_account": {"b"}, "src_pass": {"a"}, "dst_pass": {"b"}, "content_files": {"1"},
 	}
 	rr := doReq(h, http.MethodPost, "/workbench/new", form)
 	if rr.Code != http.StatusSeeOther || !strings.HasPrefix(rr.Header().Get("Location"), "/workbench/session/") {
@@ -269,20 +341,22 @@ func TestPlatformNoTechnicalLeakage(t *testing.T) {
 	}
 }
 
-// Case 10 + 11: the start gate is single-sourced. A startable session renders
-// the strong-confirmation start form IN the platform (posting to the platform
-// start-migration route), preserving the per-account confirmation; a draft
-// session exposes neither, and the hero never diverges from the CTA.
+// Case 10 + 11: the platform start gate is single-sourced. A startable session
+// renders the smart-start form IN the platform; a draft session exposes neither,
+// and the hero never diverges from the CTA.
 func TestPlatformStartGateSingleSourced(t *testing.T) {
 	// Startable session (ready_for_apply, confirmed scope, ready checklist).
 	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
 	rr := doReq(env.h, http.MethodGet, "/platform/migrations/"+env.sessID, nil)
 	body := rr.Body.String()
-	if !strings.Contains(body, `action="/platform/migrations/`+env.sessID+`/start-migration"`) {
-		t.Error("startable cockpit must render the start form posting to the platform route")
+	if !strings.Contains(body, `action="/platform/migrations/`+env.sessID+`/smart-start"`) {
+		t.Error("startable cockpit must render the smart-start form posting to the platform route")
 	}
-	if !strings.Contains(body, `name="confirm_account"`) {
-		t.Error("the strong per-account confirmation must be preserved in-platform (not removed)")
+	if !strings.Contains(body, `name="confirm_start"`) {
+		t.Error("platform smart-start must post the server-side confirmation marker")
+	}
+	if strings.Contains(body, `name="confirm_account"`) {
+		t.Error("platform primary flow must not ask the operator to retype the account")
 	}
 	if !strings.Contains(body, "Avvia migrazione") {
 		t.Error("startable cockpit must show the Avvia migrazione CTA")
@@ -297,7 +371,7 @@ func TestPlatformStartGateSingleSourced(t *testing.T) {
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
 	draft := platformSessionBody(t, ps, sess.ID, "cockpit")
-	if strings.Contains(draft, "/start-migration") || strings.Contains(draft, "confirm_account") {
+	if strings.Contains(draft, "/smart-start") || strings.Contains(draft, "confirm_start") || strings.Contains(draft, "confirm_account") {
 		t.Error("a draft session must not expose the start form")
 	}
 	if strings.Contains(draft, "Pronta per migrare") {

@@ -9,11 +9,12 @@
 </head>
 <body>
 <div class="sess">
+  {{template "platformSessionHero" .}}
   {{template "platformSessionHead" .}}
   {{template "platformStepper" .}}
   {{template "platformFlash" .}}
 
-  <div class="grid cockpit-cols" style="align-items:start">
+  <div class="grid" style="grid-template-columns:1.15fr .95fr; align-items:start">
 
     {{/* ---- Left: migration status + phases ---- */}}
     <div class="card">
@@ -33,13 +34,10 @@
         {{if eq .Cockpit.CTA.Kind "wait"}}
           <button class="btn btn-lg is-disabled" style="width:100%; justify-content:center" disabled>{{.Cockpit.CTA.Label}}</button>
         {{else if eq .Cockpit.CTA.Kind "start"}}
-          {{/* Strong per-account confirmation, in-platform. The account name is
-               required to proceed — a safety gate that is NOT removed for fidelity. */}}
-          <form method="post" action="/platform/migrations/{{.Session.ID}}/start-migration">
+          <form method="post" action="/platform/migrations/{{.Session.ID}}/smart-start" onsubmit="return confirm('Avviare il controllo iniziale e poi la migrazione automatica delle aree selezionate?') && confirm('Confermi di voler avviare ora la migrazione?');">
             <input type="hidden" name="csrf" value="{{.CSRF}}">
-            <label class="sub" style="display:block; margin-bottom:.35rem">Per confermare, digita il nome dell'account (<code class="mono">{{.Session.Name}}</code>):</label>
-            <input type="text" name="confirm_account" size="24" autocomplete="off" required style="width:100%; padding:.5rem .7rem; border:1px solid var(--border); border-radius:8px; font-size:.9rem; background:#fff">
-            <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center; margin-top:.5rem">Avvia migrazione →</button>
+            <input type="hidden" name="confirm_start" value="1">
+            <button type="submit" class="btn btn-primary btn-lg" style="width:100%; justify-content:center">Avvia migrazione</button>
           </form>
           {{if .Cockpit.CTA.Detail}}<p class="faint" style="font-size:.78rem; margin-top:.45rem">{{.Cockpit.CTA.Detail}}</p>{{end}}
         {{else}}
@@ -94,11 +92,33 @@
       </div>
     </div>
 
-    {{/* ---- Right: execution monitor + log + open tasks ---- */}}
     <div class="stack" style="gap:1rem">
       <div class="card">
         <div class="card-h"><span class="ttl">📡 Monitor esecuzione</span></div>
         {{if .Cockpit.Monitor.Active}}
+          {{with .Cockpit.Monitor.Activity}}
+          {{if .Visible}}
+          <div class="callout info" style="margin-bottom:.75rem">
+            <div style="font-weight:660">Attività reale</div>
+            {{if .CurrentPhase}}<div class="sub" style="margin-top:.2rem"><strong>Fase corrente:</strong> {{.CurrentPhase}}{{if .CurrentStateLabel}} · {{.CurrentStateLabel}}{{end}}</div>{{end}}
+            {{range .Sections}}
+            <div style="margin-top:.55rem">
+              <div style="font-weight:600; font-size:.84rem">{{.Title}}</div>
+              {{if .Items}}<div class="stack" style="gap:.18rem; margin-top:.2rem">{{range .Items}}<div class="sub mono">{{.}}</div>{{end}}</div>{{end}}
+              {{if .Note}}<div class="sub" style="margin-top:.2rem">{{.Note}}</div>{{end}}
+            </div>
+            {{end}}
+            {{if .EmptyNote}}<div class="sub" style="margin-top:.35rem">{{.EmptyNote}}</div>{{end}}
+          </div>
+          {{end}}
+          {{end}}
+          {{/* Live migration bar — width/percent/phase are driven by the SSE
+               stream (mig-bar/mig-pct/mig-phase); they start neutral and the
+               stream paints them on connect. Without EventSource the phase rows
+               below and the meta-refresh remain the (honest) fallback. */}}
+          <div class="muted" style="font-size:.82rem">Avanzamento migrazione<span id="mig-pct" style="float:right; font-weight:660">—</span></div>
+          <div class="prog" style="margin:.35rem 0 .55rem"><span id="mig-bar" style="width:0%"></span></div>
+          <div class="sub" id="mig-phase" style="margin-bottom:.55rem"></div>
           <div class="stack" style="gap:.55rem">
           {{range .Cockpit.Monitor.Phases}}
             <div style="display:flex; align-items:center; gap:.5rem">
@@ -124,8 +144,10 @@
 
       {{if .Cockpit.Monitor.Log}}
       <div class="card">
-        <div class="card-h"><span class="ttl">🧾 Log</span></div>
-        <div class="log">{{range .Cockpit.Monitor.Log}}<div>{{.}}</div>{{end}}</div>
+        <details>
+          <summary class="as-btn"><div class="card-h"><span class="ttl">🧾 Dettagli esecuzione</span></div></summary>
+          <div class="log" id="mig-log">{{range .Cockpit.Monitor.Log}}<div>{{.}}</div>{{end}}</div>
+        </details>
       </div>
       {{end}}
 
@@ -145,11 +167,95 @@
         <p class="muted">Nessun task manuale aperto.</p>
         {{end}}
       </div>
+
+      {{if .Governance.Show}}
+      <div class="card">
+        <div class="card-h"><span class="ttl">🛟 Gestione stato</span></div>
+        <div class="sub" style="margin-bottom:.7rem">Stato attuale: <strong>{{.Governance.CurrentLabel}}</strong></div>
+
+        {{if .Governance.CanBlock}}
+        <form method="post" action="/platform/migrations/{{.Session.ID}}/status" class="stack" style="gap:.55rem">
+          <input type="hidden" name="csrf" value="{{.CSRF}}">
+          <input type="hidden" name="gov_action" value="block">
+          <label>
+            <div class="muted" style="font-size:.82rem; margin-bottom:.2rem">Perch&eacute; la migrazione va bloccata?</div>
+            <textarea name="reason" rows="3" style="width:100%" placeholder="Descrivi il blocco operativo o tecnico"></textarea>
+          </label>
+          <button type="submit" class="btn btn-danger" style="width:100%; justify-content:center">Segna come bloccata</button>
+        </form>
+        {{end}}
+
+        {{if .Governance.CanRecover}}
+        <form method="post" action="/platform/migrations/{{.Session.ID}}/status" class="stack" style="gap:.55rem">
+          <input type="hidden" name="csrf" value="{{.CSRF}}">
+          <input type="hidden" name="gov_action" value="recover">
+          <label>
+            <div class="muted" style="font-size:.82rem; margin-bottom:.2rem">Nuovo stato</div>
+            <select name="status" style="width:100%">
+              {{range .Governance.RecoveryTo}}<option value="{{.}}">{{statusLabel .}}</option>{{end}}
+            </select>
+          </label>
+          <label>
+            <div class="muted" style="font-size:.82rem; margin-bottom:.2rem">Motivo dell'aggiornamento</div>
+            <textarea name="reason" rows="3" style="width:100%" placeholder="Spiega perch&eacute; puoi riaprire o riposizionare la migrazione"></textarea>
+          </label>
+          <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center">Aggiorna stato</button>
+        </form>
+        {{end}}
+      </div>
+      {{end}}
     </div>
 
   </div>
 
-  {{if .Cockpit.Monitor.JobLive}}<div class="lastupd">🔄 Aggiornamento automatico attivo (10s)</div>{{end}}
+  {{if .Cockpit.Monitor.JobLive}}<div class="lastupd" id="mig-badge">🔄 Aggiornamento automatico attivo (10s)</div>{{end}}
 </div>
+<script>
+(function () {
+  if (!window.EventSource) return; // no SSE support → keep the meta-refresh fallback
+  var bar = document.getElementById('mig-bar'),
+      pct = document.getElementById('mig-pct'),
+      phase = document.getElementById('mig-phase'),
+      log = document.getElementById('mig-log'),
+      badge = document.getElementById('mig-badge');
+  // Take over from the meta-refresh so the page doesn't full-reload under the
+  // live stream; if the stream fails we restore a periodic reload below.
+  var mr = document.querySelector('meta[http-equiv="refresh"]');
+  if (mr && mr.parentNode) mr.parentNode.removeChild(mr);
+  if (badge) badge.textContent = '🟢 Avanzamento in tempo reale';
+  var sawLive = false, closed = false;
+  var es = new EventSource('/platform/migrations/{{.Session.ID}}/events');
+  function stop(reload, delay) {
+    if (closed) return;
+    closed = true;
+    es.close();
+    if (reload) setTimeout(function () { location.reload(); }, delay);
+  }
+  es.onmessage = function (ev) {
+    var s;
+    try { s = JSON.parse(ev.data); } catch (e) { return; }
+    if (s.live || s.state === 'running') sawLive = true;
+    if (bar && typeof s.pct === 'number') bar.style.width = s.pct + '%';
+    if (pct && typeof s.pct === 'number') pct.textContent = s.pct + '%';
+    if (phase) phase.textContent = s.currentPhase || '';
+    if (log && s.log && s.log.length) {
+      log.innerHTML = '';
+      s.log.forEach(function (line) {
+        var d = document.createElement('div');
+        d.textContent = line;
+        log.appendChild(d);
+      });
+    }
+    // When the run settles, reload ONCE to render the full server-side cockpit
+    // (outcome flash, task list, final phase states) — but only if we actually
+    // watched it run, so an already-finished job at page load does not loop.
+    if (s.done) stop(sawLive, 500);
+  };
+  es.onerror = function () {
+    // Stream dropped: fall back to a periodic reload so progress still advances.
+    stop(true, 5000);
+  };
+})();
+</script>
 </body>
 </html>

@@ -44,6 +44,12 @@ func readyChecklist() accountinventory.MigrationChecklist {
 // caller writes any area plans (email_apply_plan.json / cron_apply_plan.json)
 // it needs BEFORE posting — facts are re-read per request.
 func newOrchEnv(t *testing.T, content workbench.ContentSelection) *orchEnv {
+	return newOrchEnvRunner(t, content, &fakeRunner{})
+}
+
+// newOrchEnvRunner is newOrchEnv with a caller-supplied runner (e.g. one scripted
+// to panic), so tests can exercise the sync start-migration failure paths.
+func newOrchEnvRunner(t *testing.T, content workbench.ContentSelection, fr *fakeRunner) *orchEnv {
 	t.Helper()
 	dir := t.TempDir()
 	storeDir := filepath.Join(dir, "migrations")
@@ -71,17 +77,17 @@ func newOrchEnv(t *testing.T, content workbench.ContentSelection) *orchEnv {
 	if _, err := store.ConfirmScope(sess.ID, content, time.Now().UTC()); err != nil {
 		t.Fatalf("ConfirmScope: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0o600); err != nil {
+	host := []byte("src:\n  ip: 1.2.3.4\n")
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "host.yaml"), host, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 
-	fr := &fakeRunner{}
 	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &orchEnv{h: h, store: store, dir: dir, sessID: sess.ID, csrf: fetchCSRF(t, h), fr: fr}
+	return &orchEnv{h: h, store: store, dir: sess.ArtifactDir, sessID: sess.ID, csrf: fetchCSRF(t, h), fr: fr}
 }
 
 func (e *orchEnv) writePlan(t *testing.T, name string) {
@@ -115,6 +121,45 @@ func hasCall(names []string, want string) bool {
 	return false
 }
 
+// waitJobSettled polls the job journal until the async smart-start reaches a
+// terminal state, so a test can observe its outcome after the immediate 303 and
+// not race the background goroutine's tempdir writes on cleanup. Fails the test
+// if the run never settles.
+func waitJobSettled(t *testing.T, dir string) *jobJournal {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if jj, ok := readJobJournal(dir); ok && jj.State != jobStateRunning {
+			return jj
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("async smart-start never settled in %s", dir)
+	return nil
+}
+
+// A panic in the SYNCHRONOUS workbench start-migration must close the journal as
+// failed (not a dishonest "completed") and return 500 — mirroring the async path.
+func TestWorkbenchStartMigrationPanicMarksJournalFailed(t *testing.T) {
+	fr := &fakeRunner{onCall: func(name string) {
+		if name == "migrate content" {
+			panic("boom in migrate content")
+		}
+	}}
+	env := newOrchEnvRunner(t, workbench.ContentSelection{Files: true, Databases: true}, fr)
+	rr := env.start("giorginisposi") // strong confirmation = account name
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("panic in sync start = %d, want 500", rr.Code)
+	}
+	jj, ok := readJobJournal(env.dir)
+	if !ok {
+		t.Fatal("no job journal after a panicking start")
+	}
+	if jj.State != jobStateFailed {
+		t.Errorf("journal state after panic = %q, want failed", jj.State)
+	}
+}
+
 func argvFor(fr *fakeRunner, name string) []string {
 	for _, c := range fr.recorded() {
 		if c.name == name {
@@ -139,7 +184,7 @@ func TestOrchestratorRefusesUnconfirmedScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 	fr := &fakeRunner{}
 	h, _ := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
 	csrf := fetchCSRF(t, h)
@@ -508,7 +553,7 @@ func TestOrchestratorUIHidesStartButtonWhenUnconfirmed(t *testing.T) {
 	store, _ := workbench.NewStore(storeDir)
 	sess, _ := store.CreateWithSetup("giorginisposi", "src", "dst",
 		&workbench.SetupMeta{Content: workbench.ContentSelection{Files: true}}, time.Now())
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 	h, _ := New(Options{Dir: dir, SessionStore: store})
 	code, body := getBody(t, h, "/workbench/session/"+sess.ID+"/migrazione")
 	if code != 200 {
@@ -550,7 +595,7 @@ func TestOrchestratorLegacySessionNotStartable(t *testing.T) {
 	os.MkdirAll(storeDir, 0o700)
 	store, _ := workbench.NewStore(storeDir)
 	sess, _ := store.Create("giorginisposi", "src", "dst", time.Now()) // Setup == nil
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 	fr := &fakeRunner{}
 	h, _ := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
 	csrf := fetchCSRF(t, h)
@@ -637,4 +682,77 @@ func TestOrchestratorRequiresCSRF(t *testing.T) {
 	if len(e.fr.recorded()) != 0 {
 		t.Errorf("nothing must run without CSRF, got %v", e.callNames())
 	}
+}
+
+// ---------------------------------------------------------------------------
+// HIGH-1 — host.yaml global fallback. The guided wizard / expert workbench write
+// credentials to the GLOBAL /config dir, never copying host.yaml into the
+// per-session artifact dir. A session must still be executable: both the
+// HostYAMLPresent read-model and the smart-start config gate fall back to the
+// global file. Before the fallback the session was wrongly reported
+// config_missing and could not run.
+// ---------------------------------------------------------------------------
+
+func TestGuidedSessionFallsBackToGlobalHostYAML(t *testing.T) {
+	dir := t.TempDir() // GLOBAL /config working dir passed to New(Options{Dir:...})
+	storeDir := filepath.Join(dir, "migrations")
+	if err := os.MkdirAll(storeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := workbench.NewStore(storeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Guided session: Setup present, an auto-runnable scope, advanced to
+	// ready_for_apply with a confirmed scope — a session the operator expects to run.
+	content := workbench.ContentSelection{Files: true, Databases: true}
+	sess, err := store.CreateWithSetup("giorginisposi", "src", "dst",
+		&workbench.SetupMeta{Content: content}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []workbench.Status{
+		workbench.StatusPreflightRequired, workbench.StatusInventoryReady,
+		workbench.StatusChecklistReady, workbench.StatusReadyForApply,
+	} {
+		if _, err := store.SetStatus(sess.ID, s, false, "", time.Now()); err != nil {
+			t.Fatalf("SetStatus %s: %v", s, err)
+		}
+	}
+	if _, err := store.ConfirmScope(sess.ID, content, time.Now().UTC()); err != nil {
+		t.Fatalf("ConfirmScope: %v", err)
+	}
+	// The analysis artifacts live per-session (this is the dir the view reads)…
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
+	// …but host.yaml exists ONLY in the global dir — the wizard/expert bug.
+	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fileExists(filepath.Join(sess.ArtifactDir, "host.yaml")) {
+		t.Fatal("precondition: the per-session dir must NOT contain host.yaml")
+	}
+
+	// (a) The read-model resolves credentials as present via the global fallback.
+	v := buildWorkbenchView(sess.ArtifactDir, dir, "csrf", "", sess, false)
+	if !v.Facts.HostYAMLPresent {
+		t.Error("HostYAMLPresent = false: a guided session must see the global host.yaml")
+	}
+
+	// (b) The smart-start config gate must NOT refuse the run as config_missing.
+	fr := &fakeRunner{}
+	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doWorkbenchReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/smart-start",
+		url.Values{"csrf": {csrf}, "confirm_start": {"1"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("smart-start = %d, want 303 (%s)", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); strings.Contains(loc, "migrate=config_missing") {
+		t.Fatalf("guided session refused as config_missing despite a global host.yaml: %q", loc)
+	}
+	// Let the async run settle so its background writes don't race tempdir cleanup.
+	waitJobSettled(t, sess.ArtifactDir)
 }

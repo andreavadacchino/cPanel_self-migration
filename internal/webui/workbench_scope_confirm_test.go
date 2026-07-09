@@ -140,12 +140,12 @@ func TestMigrationCTALabel(t *testing.T) {
 
 // Case 9 + handler — a confirm POST updates the session scope and redirects.
 func TestConfirmScopeHandlerUpdates(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	h, store, _ := newTestWorkbenchHandler(t)
+	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})
-	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	csrf := extractCSRF(t, h, sess.ID)
 
 	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sess.ID+"/scope",
@@ -167,12 +167,12 @@ func TestConfirmScopeHandlerUpdates(t *testing.T) {
 
 // DNS-only cannot be confirmed as a migration (redirect back with need_area).
 func TestConfirmScopeHandlerRejectsDNSOnly(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	h, store, _ := newTestWorkbenchHandler(t)
+	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})
-	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	csrf := extractCSRF(t, h, sess.ID)
 
 	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sess.ID+"/scope",
@@ -191,16 +191,16 @@ func TestConfirmScopeHandlerRejectsDNSOnly(t *testing.T) {
 
 // Case 7 — scope cannot be edited once an apply report exists.
 func TestConfirmScopeHandlerLockedAfterApply(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	h, store, _ := newTestWorkbenchHandler(t)
+	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})
 	// A content apply report freezes the scope.
-	if err := os.WriteFile(filepath.Join(dir, "report.json"), []byte(`{"run_id":"x"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "report.json"), []byte(`{"run_id":"x"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	csrf := extractCSRF(t, h, sess.ID)
 
 	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sess.ID+"/scope",
@@ -212,12 +212,12 @@ func TestConfirmScopeHandlerLockedAfterApply(t *testing.T) {
 
 // A confirm POST without a valid CSRF token is rejected and does not mutate.
 func TestConfirmScopeHandlerRejectsBadCSRF(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	h, store, _ := newTestWorkbenchHandler(t)
+	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})
-	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 
 	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sess.ID+"/scope",
 		form(map[string]string{"csrf": "wrong-token", "preset": "site"}))
@@ -232,12 +232,12 @@ func TestConfirmScopeHandlerRejectsBadCSRF(t *testing.T) {
 
 // Render — the plan screen shows the scope-confirm block and the state-aware CTA.
 func TestConfirmScopeScreenRenders(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	h, store, _ := newTestWorkbenchHandler(t)
+	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})
-	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	code, body := getBody(t, h, "/workbench/session/"+sess.ID+"/migrazione")
 	if code != 200 {
 		t.Fatalf("migrazione = %d, want 200", code)
@@ -252,5 +252,23 @@ func TestConfirmScopeScreenRenders(t *testing.T) {
 	// The one-click start action must still NOT be wired.
 	if strings.Contains(body, `value="start_migration"`) {
 		t.Error("Fase 2 must not wire a one-click start action")
+	}
+}
+
+func TestConfirmScopeHandlerIgnoresGlobalArtifacts(t *testing.T) {
+	h, store, dir := newTestWorkbenchHandler(t)
+	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
+		Mode: "migration-checklist", FormatVersion: 1,
+		OverallStatus: accountinventory.OverallReadyToCutover,
+	})
+	if err := os.WriteFile(filepath.Join(dir, "report.json"), []byte(`{"run_id":"stale-root"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	csrf := extractCSRF(t, h, sess.ID)
+	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sess.ID+"/scope",
+		form(map[string]string{"csrf": csrf, "preset": "site"}))
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("confirm scope with stale root artifact = %d (%s), want 303", rr.Code, rr.Body.String())
 	}
 }
