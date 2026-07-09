@@ -177,6 +177,9 @@ func TestUpdateStatus(t *testing.T) {
 	if updated.Status != StatusPreflightRequired {
 		t.Errorf("status = %q, want preflight_required", updated.Status)
 	}
+	if updated.CurrentStep != StepPreflight {
+		t.Errorf("current_step = %q, want %q", updated.CurrentStep, StepPreflight)
+	}
 	if !updated.UpdatedAt.Equal(now.Add(time.Minute)) {
 		t.Error("updated_at not bumped")
 	}
@@ -188,6 +191,31 @@ func TestUpdateStatus(t *testing.T) {
 	}
 	if updated.Timeline[0].ToStatus != StatusPreflightRequired {
 		t.Errorf("timeline to = %q", updated.Timeline[0].ToStatus)
+	}
+}
+
+func TestUpdateStatusPreservesOperationalStepOnBlockedAndFailed(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
+	sess, _ := s.Create("test", "src", "dst", now)
+
+	updated, err := s.SetStatus(sess.ID, StatusPreflightRequired, false, "", now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := s.SetStatus(sess.ID, StatusBlocked, true, "blocco esterno per test", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.CurrentStep != updated.CurrentStep {
+		t.Errorf("blocked current_step = %q, want preserved %q", blocked.CurrentStep, updated.CurrentStep)
+	}
+	failed, err := s.SetStatus(sess.ID, StatusFailed, true, "errore esterno per test", now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed.CurrentStep != blocked.CurrentStep {
+		t.Errorf("failed current_step = %q, want preserved %q", failed.CurrentStep, blocked.CurrentStep)
 	}
 }
 

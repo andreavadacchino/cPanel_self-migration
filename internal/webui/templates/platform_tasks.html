@@ -24,6 +24,19 @@
       <div class="sub">{{sub .TasksTotal .TasksPending}} / {{.TasksTotal}} completati</div>
       <hr class="sep">
       <div class="callout" style="text-align:left">Conferma ogni task verificabile qui a fianco. I task non confermabili richiedono un intervento tecnico: non vengono chiusi con un semplice clic.</div>
+      {{if .VerifyActions}}
+      <div class="stack" style="gap:.45rem; margin-top:.8rem; text-align:left">
+        <div style="font-weight:640; font-size:.88rem">Verifiche disponibili</div>
+        {{range .VerifyActions}}
+        <form method="POST" action="/platform/migrations/{{$.Session.ID}}/exec">
+          <input type="hidden" name="csrf" value="{{$.CSRF}}">
+          <input type="hidden" name="action" value="{{.Name}}">
+          <input type="hidden" name="return_to" value="{{.Return}}">
+          <button type="submit" class="btn btn-ghost btn-sm" style="width:100%; justify-content:center">{{.Label}}</button>
+        </form>
+        {{end}}
+      </div>
+      {{end}}
     </div>
 
     {{/* Task table */}}

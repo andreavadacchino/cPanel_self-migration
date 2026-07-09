@@ -242,6 +242,20 @@ type cockpitRunPhase struct {
 	Summary    string
 }
 
+type cockpitActivitySection struct {
+	Title string
+	Items []string
+	Note  string
+}
+
+type cockpitMonitorActivity struct {
+	Visible           bool
+	CurrentPhase      string
+	CurrentStateLabel string
+	Sections          []cockpitActivitySection
+	EmptyNote         string
+}
+
 // cockpitMonitor is the execution monitor block. Active decides whether it is
 // shown at all. Log carries only safe lines (run-monitor errors, already
 // redacted by construction, plus the job journal error string) — NEVER a raw
@@ -252,6 +266,7 @@ type cockpitMonitor struct {
 	Job       *jobJournal
 	Phases    []cockpitMonitorPhase
 	RunPhases []cockpitRunPhase
+	Activity  cockpitMonitorActivity
 	Log       []string
 }
 
@@ -337,10 +352,79 @@ func buildCockpitMonitor(f artifactFacts, scope contentScope, job *jobJournal, j
 		}
 		m.Log = append(m.Log, run.Errors...)
 	}
+	m.Activity = buildCockpitActivity(run, job, jobLive)
 	if job != nil && job.State == jobStateFailed && strings.TrimSpace(job.Error) != "" {
 		m.Log = append(m.Log, "Ultimo errore del job: "+job.Error)
 	}
 	return m
+}
+
+func buildCockpitActivity(run *runMonitor, job *jobJournal, jobLive bool) cockpitMonitorActivity {
+	var a cockpitMonitorActivity
+	if run != nil {
+		if cur := currentRunPhase(run.Phases); cur != nil {
+			a.CurrentPhase = runPhaseLabelIT(cur.Phase)
+			a.CurrentStateLabel = runStateLabelIT(cur.State)
+		}
+		for _, p := range run.Phases {
+			section := cockpitActivitySection{
+				Title: activitySectionTitle(p.Phase),
+				Items: append([]string(nil), p.Items...),
+				Note:  activitySectionNote(p),
+			}
+			if section.Title == "" {
+				continue
+			}
+			if len(section.Items) == 0 && strings.TrimSpace(section.Note) == "" {
+				continue
+			}
+			a.Sections = append(a.Sections, section)
+		}
+	}
+	if a.CurrentPhase == "" && jobLive && job != nil && strings.TrimSpace(job.Phase) != "" {
+		a.CurrentPhase = job.Phase
+		a.CurrentStateLabel = "In corso"
+		a.EmptyNote = "Il job è partito, ma non ci sono ancora dettagli leggibili da events.jsonl."
+	}
+	a.Visible = a.CurrentPhase != "" || len(a.Sections) > 0 || a.EmptyNote != ""
+	return a
+}
+
+func currentRunPhase(phases []monitorPhase) *monitorPhase {
+	for i := range phases {
+		if phases[i].State == "running" {
+			return &phases[i]
+		}
+	}
+	if len(phases) == 0 {
+		return nil
+	}
+	return &phases[len(phases)-1]
+}
+
+func activitySectionTitle(phase string) string {
+	switch phase {
+	case "create_domains":
+		return "Domini coinvolti"
+	case "migrate_mail":
+		return "Caselle email coinvolte"
+	case "migrate_db":
+		return "Database coinvolti"
+	case "copy_files":
+		return "File del sito"
+	default:
+		return ""
+	}
+}
+
+func activitySectionNote(p monitorPhase) string {
+	if strings.TrimSpace(p.Note) != "" {
+		return p.Note
+	}
+	if p.Phase == "copy_files" && p.State == "running" {
+		return "La migrazione file è in corso, ma il motore non espone ancora il file corrente."
+	}
+	return ""
 }
 
 // contentPhaseState reports the state of the single content migration phase.
@@ -473,12 +557,14 @@ func startAllowed(status workbench.Status, f artifactFacts, plan migrationPlan, 
 }
 
 // failedJobNextScreen routes "check the last failure" to the screen that owns
-// the failed action: the orchestrator's start form lives on "Piano & scope",
-// while every single /exec action (dns_apply, email_verify, rollbacks, …) lives
-// on "Azioni avanzate".
+// the failed action. An orchestrator failure must return to the cockpit: that
+// is where the operator sees the real monitor, the persisted job error and the
+// current state without being bounced into the scope-confirm form. Single /exec
+// actions (dns_apply, email_verify, rollbacks, …) still live on "Azioni
+// avanzate".
 func failedJobNextScreen(job *jobJournal) string {
 	if job != nil && job.Action == orchestratorAction {
-		return screenMigrazione
+		return screenPanoramica
 	}
 	return screenApplica
 }

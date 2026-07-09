@@ -92,7 +92,7 @@ func TestFDJobRunningVisible(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeJobJournal(dir, jobJournal{
+	writeJobJournal(sess.ArtifactDir, jobJournal{
 		SessionID: sess.ID, Action: "migrate_content",
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		State: jobStateRunning, Phase: "migrate_content",
@@ -128,7 +128,7 @@ func TestFDJobInterruptedAttention(t *testing.T) {
 		Content:     workbench.ContentSelection{Files: true},
 	}
 	sess := wizardSession(t, store, "acct", setup)
-	writeJobJournal(dir, jobJournal{
+	writeJobJournal(sess.ArtifactDir, jobJournal{
 		SessionID: sess.ID, Action: "migrate_content",
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		State: jobStateInterrupted, Phase: "migrate_content",

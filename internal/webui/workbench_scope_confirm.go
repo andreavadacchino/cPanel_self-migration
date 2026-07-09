@@ -97,12 +97,12 @@ func scopeFlash(v string) string {
 
 // jobLiveNow reports whether an exec is genuinely in flight (journal running
 // after reconciliation against the live slot) — same signal the view uses.
-func (ws *workbenchServer) jobLiveNow() bool {
+func (ws *workbenchServer) jobLiveNow(dir string) bool {
 	busy := false
 	if ws.jobBusy != nil {
 		busy = ws.jobBusy()
 	}
-	job := reconcileJobJournal(ws.dir, busy)
+	job := reconcileJobJournal(dir, busy)
 	return job != nil && job.State == jobStateRunning
 }
 
@@ -148,7 +148,13 @@ func applyScopeConfirm(store *workbench.Store, dir string, jobLive bool, r *http
 // handleConfirmScope updates the migration content selection after the preflight
 // and marks the scope confirmed. CSRF is enforced by the caller (server.post).
 func (ws *workbenchServer) handleConfirmScope(w http.ResponseWriter, r *http.Request, sessionID string) {
-	query, code, msg := applyScopeConfirm(ws.store, ws.dir, ws.jobLiveNow(), r, sessionID)
+	sess, err := ws.store.Get(sessionID)
+	if err != nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	dir := sessionWorkDir(sess, ws.dir)
+	query, code, msg := applyScopeConfirm(ws.store, dir, ws.jobLiveNow(dir), r, sessionID)
 	if code != 0 {
 		http.Error(w, msg, code)
 		return

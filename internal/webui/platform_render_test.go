@@ -11,11 +11,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/tis24dev/cPanel_self-migration/internal/events"
 	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
 )
 
@@ -35,6 +38,16 @@ func platformSessionBody(t *testing.T, ps *platformServer, id, screen string) st
 	ps.handleSession(rr, httptest.NewRequest(http.MethodGet, "/platform/migrations/"+id+"/"+screen, nil), id, screen)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET platform %s = %d, want 200", screen, rr.Code)
+	}
+	return rr.Body.String()
+}
+
+func renderPlatformPage(t *testing.T, ps *platformServer, tpl string, page platformPage) string {
+	t.Helper()
+	rr := httptest.NewRecorder()
+	ps.render(rr, tpl, page)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("render %s = %d, want 200", tpl, rr.Code)
 	}
 	return rr.Body.String()
 }
@@ -121,6 +134,16 @@ func TestPlatformWizardCreatesSessionAndRedirects(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("sessions after wizard = %d, want 1", len(sessions))
 	}
+	sess := sessions[0]
+	if sess.Status != workbench.StatusPreflightRequired || sess.CurrentStep != workbench.StepPreflight {
+		t.Errorf("platform wizard session status/step = %s/%s, want %s/%s", sess.Status, sess.CurrentStep, workbench.StatusPreflightRequired, workbench.StepPreflight)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "host.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("root host.yaml must stay absent for a platform-created session, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sess.ArtifactDir, "host.yaml")); err != nil {
+		t.Fatalf("session host.yaml missing: %v", err)
+	}
 }
 
 // An invalid wizard submit re-renders with Italian errors and creates NO
@@ -186,7 +209,7 @@ func TestPlatformCockpitMonitorHonest(t *testing.T) {
 	dir2 := t.TempDir()
 	ps2, store2 := newPlatformTest(t, dir2, true)
 	sess2, _ := store2.Create("giorgini", "acc@src", "acc@dst", time.Now())
-	writeJobJournal(dir2, jobJournal{
+	writeJobJournal(sess2.ArtifactDir, jobJournal{
 		SessionID: sess2.ID, Action: orchestratorAction,
 		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		State: jobStateRunning, Phase: "Contenuti",
@@ -195,6 +218,43 @@ func TestPlatformCockpitMonitorHonest(t *testing.T) {
 	for _, want := range []string{"Monitor esecuzione", "Migrazione in corso"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("running cockpit missing %q", want)
+		}
+	}
+}
+
+func TestPlatformCockpitRealActivityShowsRealEntitiesAndHonestFileMessage(t *testing.T) {
+	dir := t.TempDir()
+	ps, store := newPlatformTest(t, dir, true)
+	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
+	writeJobJournal(sess.ArtifactDir, jobJournal{
+		SessionID: sess.ID, Action: orchestratorAction,
+		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		State: jobStateRunning, Phase: "Contenuti",
+	})
+	writeMonitorEvents(t, sess.ArtifactDir,
+		monEv("run-1", 0, "", events.EventRunStarted, events.LevelInfo, "", nil),
+		monEv("run-1", time.Second, events.PhaseMigrateMail, events.EventPhaseCompleted, events.LevelInfo, "", map[string]any{
+			"items": []map[string]any{
+				{"item": "info@example.com", "status": "migrated"},
+			},
+			"failed": 0, "unverified": 0,
+		}),
+		monEv("run-1", 2*time.Second, events.PhaseMigrateDB, events.EventPhaseCompleted, events.LevelInfo, "", map[string]any{
+			"migrated": []string{"dst_wp"},
+			"failed":   0, "config_not_rewritten": 0, "config_unmigrated": 0,
+		}),
+		monEv("run-1", 3*time.Second, events.PhaseCopyFiles, events.EventPhaseStarted, events.LevelInfo, "", nil),
+	)
+	body := platformSessionBody(t, ps, sess.ID, "cockpit")
+	for _, want := range []string{
+		"Attività reale",
+		"Fase corrente",
+		"info@example.com",
+		"dst_wp",
+		"il motore non espone ancora il file corrente",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("platform real activity box missing %q", want)
 		}
 	}
 }

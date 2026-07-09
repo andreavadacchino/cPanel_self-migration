@@ -60,6 +60,8 @@ type monitorPhase struct {
 	Phase   string
 	State   string // running | completed | failed | skipped
 	Summary string
+	Items   []string
+	Note    string
 }
 
 type runMonitor struct {
@@ -269,9 +271,11 @@ func parseRunMonitor(data []byte, now time.Time) *runMonitor {
 			case string(events.EventPhaseCompleted):
 				m.Phases[i].State = "completed"
 				m.Phases[i].Summary = phaseSummary(ev)
+				m.Phases[i].Items, m.Phases[i].Note = phaseActivity(ev, m.Phases[i].State)
 			case string(events.EventPhaseFailed):
 				m.Phases[i].State = "failed"
 				m.Phases[i].Summary = ev.Message
+				m.Phases[i].Items, m.Phases[i].Note = phaseActivity(ev, m.Phases[i].State)
 			case string(events.EventPhaseSkipped):
 				m.Phases[i].State = "skipped"
 			}
@@ -314,14 +318,14 @@ func phaseSummary(ev monitorEvent) string {
 			return ""
 		}
 		if len(d.FailedDomains) == 0 && len(d.BlockedDomains) == 0 {
-			return "no failures"
+			return "Nessun dominio bloccato o fallito."
 		}
 		var parts []string
 		if len(d.FailedDomains) > 0 {
-			parts = append(parts, "failed: "+boundedList(d.FailedDomains))
+			parts = append(parts, "falliti: "+boundedList(d.FailedDomains))
 		}
 		if len(d.BlockedDomains) > 0 {
-			parts = append(parts, "blocked: "+boundedList(d.BlockedDomains))
+			parts = append(parts, "bloccati: "+boundedList(d.BlockedDomains))
 		}
 		return strings.Join(parts, " — ")
 
@@ -330,7 +334,7 @@ func phaseSummary(ev monitorEvent) string {
 		if json.Unmarshal(ev.Data, &d) != nil {
 			return ""
 		}
-		s := fmt.Sprintf("%d item(s) — %d failed, %d unverified", len(d.Items), d.Failed, d.Unverified)
+		s := fmt.Sprintf("%d caselle — %d fallite, %d da verificare", len(d.Items), d.Failed, d.Unverified)
 		var bad []string
 		for _, it := range d.Items {
 			if it.Status == "failed" || it.Status == "unverified" {
@@ -347,18 +351,18 @@ func phaseSummary(ev monitorEvent) string {
 		if json.Unmarshal(ev.Data, &d) != nil {
 			return ""
 		}
-		s := "migrated: " + boundedList(d.Migrated)
+		s := "Database migrati: " + boundedList(d.Migrated)
 		if len(d.Migrated) == 0 {
-			s = "nothing migrated"
+			s = "Nessun database migrato."
 		}
 		if d.Failed > 0 {
-			s += fmt.Sprintf(" — %d failed", d.Failed)
+			s += fmt.Sprintf(" — %d falliti", d.Failed)
 		}
 		if d.ConfigNotRewritten > 0 {
-			s += fmt.Sprintf(" — %d config not rewritten", d.ConfigNotRewritten)
+			s += fmt.Sprintf(" — %d configurazioni non riscritte", d.ConfigNotRewritten)
 		}
 		if d.ConfigUnmigrated > 0 {
-			s += fmt.Sprintf(" — %d config unmigrated", d.ConfigUnmigrated)
+			s += fmt.Sprintf(" — %d configurazioni fuori scope", d.ConfigUnmigrated)
 		}
 		return s
 
@@ -367,16 +371,94 @@ func phaseSummary(ev monitorEvent) string {
 		if json.Unmarshal(ev.Data, &d) != nil {
 			return ""
 		}
-		return fmt.Sprintf("failed: %d", d.Failed)
+		return fmt.Sprintf("File con errore: %d", d.Failed)
 
 	case events.PhaseVerifyMail, events.PhaseVerifyFiles, events.PhaseVerifyDB:
 		var d monitorCountData
 		if json.Unmarshal(ev.Data, &d) != nil {
 			return ""
 		}
-		return fmt.Sprintf("divergent: %d", d.Divergent)
+		return fmt.Sprintf("Differenze residue: %d", d.Divergent)
 	}
 	return ""
+}
+
+func phaseActivity(ev monitorEvent, state string) ([]string, string) {
+	switch events.Phase(ev.Phase) {
+	case events.PhaseCreateDomains:
+		var d monitorDomainData
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil, ""
+		}
+		var lines []string
+		for _, domain := range d.FailedDomains {
+			lines = append(lines, domain+" — creazione fallita")
+		}
+		for _, domain := range d.BlockedDomains {
+			lines = append(lines, domain+" — bloccato prima della creazione")
+		}
+		return lines, ""
+
+	case events.PhaseMigrateMail:
+		var d monitorMailData
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil, ""
+		}
+		lines := make([]string, 0, len(d.Items))
+		for _, it := range d.Items {
+			line := it.Item + " — " + mailItemStatusIT(it.Status)
+			if strings.TrimSpace(it.Note) != "" {
+				line += " (" + it.Note + ")"
+			}
+			lines = append(lines, line)
+		}
+		return boundedLines(lines), ""
+
+	case events.PhaseMigrateDB:
+		var d monitorDBData
+		if json.Unmarshal(ev.Data, &d) != nil {
+			return nil, ""
+		}
+		note := ""
+		if d.ConfigNotRewritten > 0 || d.ConfigUnmigrated > 0 {
+			note = "Alcune configurazioni applicative richiedono ancora controllo manuale."
+		}
+		return boundedLines(d.Migrated), note
+
+	case events.PhaseCopyFiles:
+		note := "La migrazione file è in corso, ma il motore non espone ancora il file corrente."
+		if state != "running" {
+			note = "Il motore non espone il file corrente o un elenco completo dei file trasferiti."
+		}
+		return nil, note
+	}
+	return nil, ""
+}
+
+func boundedLines(lines []string) []string {
+	if len(lines) <= monitorMaxItemNames {
+		return lines
+	}
+	out := append([]string{}, lines[:monitorMaxItemNames]...)
+	out = append(out, fmt.Sprintf("+%d altri elementi", len(lines)-monitorMaxItemNames))
+	return out
+}
+
+func mailItemStatusIT(status string) string {
+	switch status {
+	case "migrated":
+		return "migrata"
+	case "unchanged":
+		return "già presente"
+	case "failed":
+		return "fallita"
+	case "unverified":
+		return "da verificare"
+	case "skipped":
+		return "saltata"
+	default:
+		return status
+	}
 }
 
 // boundedList joins at most monitorMaxItemNames entries, with an

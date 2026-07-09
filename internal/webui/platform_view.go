@@ -117,6 +117,22 @@ type platformTimelineRow struct {
 	Class string
 }
 
+type platformExecAction struct {
+	Name    string
+	Label   string
+	Detail  string
+	Return  string
+	Primary bool
+}
+
+type platformGovernance struct {
+	Show         bool
+	CanBlock     bool
+	CanRecover   bool
+	RecoveryTo   []workbench.Status
+	CurrentLabel string
+}
+
 // platformReport is the final-report read-model (schermata 6). Completed gates
 // the success banner; HasTechReport reflects report.json presence (no PDF is
 // generated — the technical report lives in the artifacts / expert mode).
@@ -161,6 +177,9 @@ type platformPage struct {
 	ExpertURL          string
 	ExpertPreflightURL string
 	ExpertApplyURL     string
+	RunAnalysis        *platformExecAction
+	VerifyActions      []platformExecAction
+	Governance         platformGovernance
 	Flash              string
 	// HeroCTAURL is the target of the cockpit's single dominant CTA. It is
 	// empty for a passive "wait" CTA (a job is in flight) or for "start" (the
@@ -195,6 +214,9 @@ func platformCTAURL(id, expertURL string, cta cockpitCTA) string {
 		// to /platform/migrations/:id/start-migration), so no link is needed.
 		return ""
 	default:
+		if cta.Screen == screenPanoramica {
+			return platformSessionURL(id, "")
+		}
 		seg := platformScreenForWorkbench(cta.Screen)
 		if seg == "" {
 			// The prescribed action (governance/unblock, run analysis, single
@@ -207,6 +229,64 @@ func platformCTAURL(id, expertURL string, cta cockpitCTA) string {
 		}
 		return platformSessionURL(id, seg)
 	}
+}
+
+func platformFailedAttemptURL(id string, v workbenchView) string {
+	if v.Cockpit.CTA.Kind == "link" && v.Cockpit.CTA.Screen == screenPanoramica &&
+		((v.Job != nil && (v.Job.State == jobStateFailed || v.Job.State == jobStateInterrupted)) ||
+			v.Session.Status == workbench.StatusFailed) {
+		return platformSessionURL(id, "")
+	}
+	return ""
+}
+
+func decoratePlatformCTA(status workbench.Status, url, expertURL string, cta cockpitCTA, plan migrationPlan) cockpitCTA {
+	if cta.Kind != "link" {
+		return cta
+	}
+	switch cta.Screen {
+	case screenPanoramica:
+		switch status {
+		case workbench.StatusInventoryReady:
+			cta.Label = "Apri modalità avanzata per eseguire l'analisi"
+			cta.Detail = "L'analisi completa che genera la verifica migrazione è disponibile nella modalità avanzata."
+		case workbench.StatusBlocked:
+			cta.Label = "Gestisci il blocco della migrazione"
+			cta.Detail = "Dal cockpit puoi segnare il recupero verso lo stato corretto senza uscire dalla nuova UI."
+		case workbench.StatusFailed:
+			cta.Label = "Gestisci il recupero della migrazione"
+			cta.Detail = "Dal cockpit puoi aggiornare lo stato dopo avere verificato l'ultimo tentativo."
+		case workbench.StatusArchived:
+			cta.Label = "Apri modalità avanzata"
+			if url != expertURL {
+				return cta
+			}
+		default:
+			if url != expertURL {
+				return cta
+			}
+			cta.Label = "Apri modalità avanzata per continuare"
+		}
+	case screenApplica:
+		if url != expertURL {
+			return cta
+		}
+		switch status {
+		case workbench.StatusReadyForApply:
+			if plan.Blocked {
+				cta.Label = "Apri modalità avanzata per risolvere i blocchi"
+				cta.Detail = "Le azioni tecniche per sbloccare l'applicazione sono disponibili nella modalità avanzata."
+			} else {
+				cta.Label = "Apri modalità avanzata per applicare le modifiche"
+			}
+		case workbench.StatusApplyDone, workbench.StatusVerificationRequired:
+			cta.Label = "Apri modalità avanzata per eseguire le verifiche"
+			cta.Detail = "Le verifiche tecniche restano nella modalità avanzata."
+		default:
+			cta.Label = "Apri modalità avanzata per continuare"
+		}
+	}
+	return cta
 }
 
 // sessionDomain is the operator-facing name of a session: its wizard primary
@@ -459,7 +539,10 @@ var platformStepDefs = []struct {
 // Steps before the current index are done, the current is doing (warn when the
 // session is blocked/failed), the rest are todo.
 func buildPlatformSteps(status workbench.Status, id string) []platformStep {
-	cur := statusStepIndex(status)
+	return buildPlatformStepsAt(status, id, statusStepIndex(status))
+}
+
+func buildPlatformStepsAt(status workbench.Status, id string, cur int) []platformStep {
 	warn := status == workbench.StatusBlocked || status == workbench.StatusFailed
 	steps := make([]platformStep, 0, len(platformStepDefs))
 	for i, d := range platformStepDefs {
@@ -487,6 +570,13 @@ func buildPlatformSteps(status workbench.Status, id string) []platformStep {
 		})
 	}
 	return steps
+}
+
+func platformCurrentStepIndex(sess *workbench.Session, v workbenchView) int {
+	if v.Plan.Ready && !v.Plan.ScopeConfirmed {
+		return 4
+	}
+	return statusStepIndex(sess.Status)
 }
 
 // mapCompareRows adapts the cockpit comparison into the platform row shape.
@@ -548,6 +638,71 @@ func buildPlatformReport(sess *workbench.Session, v workbenchView) platformRepor
 	return r
 }
 
+func buildPlatformRunAnalysis(status workbench.Status, plan migrationPlan) *platformExecAction {
+	if status == workbench.StatusApplyInProgress || status == workbench.StatusCutoverDone || status == workbench.StatusArchived {
+		return nil
+	}
+	label := "Aggiorna controllo iniziale"
+	if !plan.Ready {
+		label = "Esegui controllo iniziale"
+	}
+	return &platformExecAction{
+		Name:    "run_pipeline",
+		Label:   label,
+		Detail:  "Raccoglie fotografia, diff, policy, piano DNS e checklist usando gli artifact reali della sessione.",
+		Return:  "plan",
+		Primary: !plan.Ready,
+	}
+}
+
+func buildPlatformVerifyActions(scope contentScope, f artifactFacts) []platformExecAction {
+	var actions []platformExecAction
+	if scope.IncludeDNS && f.DNS.PlanPresent {
+		actions = append(actions, platformExecAction{
+			Name: "dns_verify", Label: "Verifica DNS",
+			Detail: "Controlla il piano DNS rispetto alla destinazione.",
+			Return: "tasks",
+		})
+	}
+	if scope.IncludeEmailConfig && f.Email.PlanPresent {
+		actions = append(actions, platformExecAction{
+			Name: "email_verify", Label: "Verifica configurazioni email",
+			Detail: "Controlla inoltri, autoresponder, filtri e routing.",
+			Return: "tasks",
+		})
+	}
+	if scope.IncludeCron && f.Cron.PlanPresent {
+		actions = append(actions, platformExecAction{
+			Name: "cron_verify", Label: "Verifica cron",
+			Detail: "Controlla i cron job applicati rispetto al piano.",
+			Return: "tasks",
+		})
+	}
+	return actions
+}
+
+func buildPlatformGovernance(sess *workbench.Session) platformGovernance {
+	g := platformGovernance{CurrentLabel: statusLabelIT(sess.Status)}
+	switch sess.Status {
+	case workbench.StatusArchived, workbench.StatusCutoverDone:
+		return g
+	case workbench.StatusBlocked, workbench.StatusFailed:
+		g.Show = true
+		g.CanRecover = true
+		for _, st := range workbench.AllStatuses {
+			if st == sess.Status || st == workbench.StatusArchived {
+				continue
+			}
+			g.RecoveryTo = append(g.RecoveryTo, st)
+		}
+		return g
+	default:
+		g.Show = true
+		g.CanBlock = true
+		return g
+	}
+}
+
 // navForScreen maps a session screen to the active sidebar tab.
 func navForScreen(screen string) string {
 	switch screen {
@@ -567,14 +722,15 @@ func buildPlatformSession(dir, csrf string, sess *workbench.Session, jobBusy boo
 	v := buildWorkbenchView(dir, csrf, screenPanoramica, sess, jobBusy)
 	v.Cockpit = platformSmartCockpit(v, sess)
 	expertURL := workbenchExpertURL(sess.ID, "")
+	currentStep := platformCurrentStepIndex(sess, v)
 	p := platformPage{
 		Screen:             screen,
 		CSRF:               csrf,
 		Nav:                platformNav{Active: navForScreen(screen), ExpertURL: expertURL},
 		Header:             platformHeader{Brand: sessionDomain(*sess), Subtitle: statusLabelIT(sess.Status)},
 		Session:            sess,
-		Steps:              buildPlatformSteps(sess.Status, sess.ID),
-		CurrentStepIndex:   statusStepIndex(sess.Status),
+		Steps:              buildPlatformStepsAt(sess.Status, sess.ID, currentStep),
+		CurrentStepIndex:   currentStep,
 		SrcDst:             platformSrcDst{Source: fallbackDash(sess.SourceProfile), Dest: fallbackDash(sess.DestinationProfile)},
 		Plan:               v.Plan,
 		Cockpit:            v.Cockpit,
@@ -586,8 +742,15 @@ func buildPlatformSession(dir, csrf string, sess *workbench.Session, jobBusy boo
 		ExpertURL:          expertURL,
 		ExpertPreflightURL: workbenchExpertURL(sess.ID, screenPreflight),
 		ExpertApplyURL:     workbenchExpertURL(sess.ID, screenApplica),
+		RunAnalysis:        buildPlatformRunAnalysis(sess.Status, v.Plan),
+		VerifyActions:      buildPlatformVerifyActions(v.Scope, v.Facts),
+		Governance:         buildPlatformGovernance(sess),
 	}
 	p.HeroCTAURL = platformCTAURL(sess.ID, expertURL, v.Cockpit.CTA)
+	if u := platformFailedAttemptURL(sess.ID, v); u != "" {
+		p.HeroCTAURL = u
+	}
+	p.Cockpit.CTA = decoratePlatformCTA(sess.Status, p.HeroCTAURL, expertURL, p.Cockpit.CTA, p.Plan)
 	// A task is "done" only when it has been Accepted. Non-acceptable actions
 	// (blocking cron recreations, CONFIRM_MX_EXTERNAL — the engine forbids
 	// waving them through) can never be Accepted, so they must stay counted as

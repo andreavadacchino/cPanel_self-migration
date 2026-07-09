@@ -89,7 +89,7 @@ func TestHandleSessionEventsTerminalStreams(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "s", "d", time.Now())
-	finishJobJournal(dir, sess.ID, orchestratorAction, orchestratorAction,
+	finishJobJournal(sess.ArtifactDir, sess.ID, orchestratorAction, orchestratorAction,
 		monT0, monT0.Add(time.Minute), nil, "Migrazione automatica completata.")
 	h, err := New(Options{Dir: dir, SessionStore: store})
 	if err != nil {
@@ -132,9 +132,9 @@ func TestHandleSessionEventsStaysOpenAndClosesOnDisconnect(t *testing.T) {
 	// startup, which flips a pre-existing running journal to interrupted (its
 	// in-memory slot is free). Written now, readJobJournal sees running. Plus
 	// FRESH events (ts near now) so run.Live is true → the snapshot is not Done.
-	startJobJournal(dir, sess.ID, orchestratorAction, time.Now().UTC())
+	startJobJournal(sess.ArtifactDir, sess.ID, orchestratorAction, time.Now().UTC())
 	now := time.Now().UTC()
-	writeMonitorEvents(t, dir,
+	writeMonitorEvents(t, sess.ArtifactDir,
 		events.Event{RunID: "r", TS: now.Add(-2 * time.Second), Level: events.LevelInfo, Type: events.EventRunStarted, Message: "started"},
 		events.Event{RunID: "r", TS: now.Add(-1 * time.Second), Level: events.LevelInfo, Phase: events.PhaseCopyFiles, Type: events.EventPhaseStarted},
 	)

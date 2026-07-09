@@ -109,6 +109,9 @@ func TestWizardCreatesSessionWithSetup(t *testing.T) {
 	if s.Name != "giorginisposi" {
 		t.Errorf("name = %q", s.Name)
 	}
+	if s.Status != workbench.StatusPreflightRequired || s.CurrentStep != workbench.StepPreflight {
+		t.Errorf("wizard session status/step = %s/%s, want %s/%s", s.Status, s.CurrentStep, workbench.StatusPreflightRequired, workbench.StepPreflight)
+	}
 	if s.Setup == nil {
 		t.Fatal("Setup is nil")
 	}

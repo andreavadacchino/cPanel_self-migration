@@ -21,10 +21,13 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/tis24dev/cPanel_self-migration/internal/config"
 	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
 )
 
@@ -40,6 +43,13 @@ type platformServer struct {
 	dir     string
 	jobBusy func() bool
 	cfgMu   *sync.Mutex
+}
+
+func sessionWorkDir(sess *workbench.Session, fallback string) string {
+	if sess != nil && strings.TrimSpace(sess.ArtifactDir) != "" {
+		return sess.ArtifactDir
+	}
+	return fallback
 }
 
 func newPlatformServer(store *workbench.Store, dir, csrf string, jobBusy func() bool, cfgMu *sync.Mutex) (*platformServer, error) {
@@ -130,9 +140,12 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 	//   - scope: metadata mutation (shared applyScopeConfirm core);
 	//   - smart-start: platform-only guided start with popup confirmation and
 	//     preflight-then-migrate sequencing;
-	//   - accept: operator acceptance of a manual action (s.saveAcceptTo).
-	// The technical break-glass actions (single apply/verify, DNS Danger Zone,
-	// rollback, force-transition) deliberately stay in Modalità esperto.
+	//   - accept: operator acceptance of a manual action (s.saveAcceptTo);
+	//   - exec: read-only operator actions kept in-platform (run analysis,
+	//     verify DNS/email/cron).
+	//   - status: governance block/unblock from the operator cockpit.
+	// The technical break-glass writes (single apply, DNS Danger Zone, rollback,
+	// force-transition) deliberately stay in Modalità esperto.
 	switch screen {
 	case "scope":
 		if r.Method != http.MethodPost {
@@ -153,7 +166,14 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.wbExec.handleSmartStartMigration(w, r, id, "/platform/migrations/"+id)
+			sess, err := s.platform.store.Get(id)
+			if err != nil {
+				http.Error(w, "migrazione non trovata", http.StatusNotFound)
+				return
+			}
+			exec := *s.wbExec
+			exec.dir = sessionWorkDir(sess, s.wbExec.dir)
+			exec.handleSmartStartMigration(w, r, id, "/platform/migrations/"+id)
 		})
 		return true
 	case "start-migration":
@@ -165,7 +185,57 @@ func (s *server) routePlatform(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.saveAcceptTo(w, r, "/platform/migrations/"+id+"/tasks")
+			sess, err := s.platform.store.Get(id)
+			if err != nil {
+				http.Error(w, "migrazione non trovata", http.StatusNotFound)
+				return
+			}
+			s.saveAcceptInDir(w, r, "/platform/migrations/"+id+"/tasks", sessionWorkDir(sess, s.dir))
+		})
+		return true
+	case "exec":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return true
+		}
+		if s.wbExec == nil {
+			http.NotFound(w, r)
+			return true
+		}
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			sess, err := s.platform.store.Get(id)
+			if err != nil {
+				http.Error(w, "migrazione non trovata", http.StatusNotFound)
+				return
+			}
+			action := strings.TrimSpace(r.FormValue("action"))
+			switch action {
+			case "run_pipeline", "dns_verify", "email_verify", "cron_verify":
+			default:
+				http.Error(w, "azione non disponibile nel percorso operatore", http.StatusBadRequest)
+				return
+			}
+			ret := strings.TrimSpace(r.FormValue("return_to"))
+			switch ret {
+			case "", "cockpit":
+				ret = ""
+			case "plan", "tasks", "report", "compare":
+			default:
+				http.Error(w, "return_to non valido", http.StatusBadRequest)
+				return
+			}
+			exec := *s.wbExec
+			exec.dir = sessionWorkDir(sess, s.wbExec.dir)
+			exec.handleExecRedirect(w, r, id, platformSessionURL(id, ret))
+		})
+		return true
+	case "status":
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, "POST")
+			return true
+		}
+		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
+			s.platform.handleSetStatus(w, r, id)
 		})
 		return true
 	case "events":
@@ -230,7 +300,8 @@ func (ps *platformServer) handleWizardCreate(w http.ResponseWriter, r *http.Requ
 		ps.renderCode(w, "platform_wizard.html", v, http.StatusBadRequest)
 		return
 	}
-	if err := ps.saveWizardConfig(r); err != nil {
+	cfg, err := ps.parseWizardConfig(r)
+	if err != nil {
 		v.Errors = append(v.Errors, "Credenziali non valide: "+err.Error())
 		ps.renderCode(w, "platform_wizard.html", v, http.StatusBadRequest)
 		return
@@ -238,6 +309,15 @@ func (ps *platformServer) handleWizardCreate(w http.ResponseWriter, r *http.Requ
 	sess, err := ps.store.CreateWithSetup(sub.Name, sub.SrcProfile, sub.DstProfile, sub.Setup, time.Now().UTC())
 	if err != nil {
 		http.Error(w, "create session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if _, err := ps.store.SetStatus(sess.ID, workbench.StatusPreflightRequired, false, "", time.Now().UTC()); err != nil {
+		http.Error(w, "initialize session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := writeValidatedConfigAt(sessionWorkDir(sess, ps.dir), cfg); err != nil {
+		_ = os.RemoveAll(filepath.Dir(sessionWorkDir(sess, ps.dir)))
+		http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if hasAutomaticArea(sub.Setup.Content) {
@@ -249,30 +329,28 @@ func (ps *platformServer) handleWizardCreate(w http.ResponseWriter, r *http.Requ
 	http.Redirect(w, r, "/platform/migrations/"+sess.ID, http.StatusSeeOther)
 }
 
-func (ps *platformServer) saveWizardConfig(r *http.Request) error {
-	if ps.cfgMu != nil {
-		ps.cfgMu.Lock()
-		defer ps.cfgMu.Unlock()
-	}
-	existing, _ := loadConfigAt(ps.dir)
-	c, err := parseConfigForm(r, existing, configFormNames{
+func (ps *platformServer) parseWizardConfig(r *http.Request) (yamlConfig, error) {
+	c, err := parseConfigForm(r, config.Config{}, configFormNames{
 		SrcIP: "src_host", SrcPort: "src_port", SrcUser: "src_account", SrcPass: "src_pass",
 		DestIP: "dst_host", DestPort: "dst_port", DestUser: "dst_account", DestPass: "dst_pass",
 	})
 	if err != nil {
-		return err
+		return yamlConfig{}, err
 	}
-	return writeValidatedConfigAt(ps.dir, c)
+	if err := validateConfigCandidate(c); err != nil {
+		return yamlConfig{}, err
+	}
+	return c, nil
 }
 
 // jobLiveNow mirrors workbenchServer.jobLiveNow: an exec is genuinely in flight
 // (journal running after reconciliation against the live slot).
-func (ps *platformServer) jobLiveNow() bool {
+func (ps *platformServer) jobLiveNow(dir string) bool {
 	busy := false
 	if ps.jobBusy != nil {
 		busy = ps.jobBusy()
 	}
-	job := reconcileJobJournal(ps.dir, busy)
+	job := reconcileJobJournal(dir, busy)
 	return job != nil && job.State == jobStateRunning
 }
 
@@ -282,12 +360,62 @@ func (ps *platformServer) jobLiveNow() bool {
 // mutation, only the redirect stays in /platform so the operator is never
 // bounced into the expert workbench.
 func (ps *platformServer) handleConfirmScope(w http.ResponseWriter, r *http.Request, sessionID string) {
-	query, code, msg := applyScopeConfirm(ps.store, ps.dir, ps.jobLiveNow(), r, sessionID)
+	sess, err := ps.store.Get(sessionID)
+	if err != nil {
+		http.Error(w, "migrazione non trovata", http.StatusNotFound)
+		return
+	}
+	dir := sessionWorkDir(sess, ps.dir)
+	query, code, msg := applyScopeConfirm(ps.store, dir, ps.jobLiveNow(dir), r, sessionID)
 	if code != 0 {
 		http.Error(w, msg, code)
 		return
 	}
 	http.Redirect(w, r, "/platform/migrations/"+sessionID+query, http.StatusSeeOther)
+}
+
+func platformStatusFlash(code string) string {
+	switch code {
+	case "blocked":
+		return "Migrazione segnata come bloccata dalla nuova UI."
+	case "updated":
+		return "Stato della migrazione aggiornato dalla nuova UI."
+	default:
+		return ""
+	}
+}
+
+func (ps *platformServer) handleSetStatus(w http.ResponseWriter, r *http.Request, sessionID string) {
+	sess, err := ps.store.Get(sessionID)
+	if err != nil {
+		http.Error(w, "migrazione non trovata", http.StatusNotFound)
+		return
+	}
+	action := strings.TrimSpace(r.FormValue("gov_action"))
+	switch action {
+	case "block":
+		if _, err := ps.store.SetStatus(sessionID, workbench.StatusBlocked, false, r.FormValue("reason"), time.Now().UTC()); err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		http.Redirect(w, r, "/platform/migrations/"+sessionID+"?gov=blocked", http.StatusSeeOther)
+		return
+	case "recover":
+		to := workbench.Status(strings.TrimSpace(r.FormValue("status")))
+		if !workbench.ValidStatus(to) || to == workbench.StatusBlocked || to == workbench.StatusFailed || to == sess.Status {
+			http.Error(w, "stato di recupero non valido", http.StatusBadRequest)
+			return
+		}
+		if _, err := ps.store.SetStatus(sessionID, to, true, r.FormValue("reason"), time.Now().UTC()); err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		http.Redirect(w, r, "/platform/migrations/"+sessionID+"?gov=updated", http.StatusSeeOther)
+		return
+	default:
+		http.Error(w, "azione governance non valida", http.StatusBadRequest)
+		return
+	}
 }
 
 func (ps *platformServer) handleSession(w http.ResponseWriter, r *http.Request, id, screen string) {
@@ -305,11 +433,15 @@ func (ps *platformServer) handleSession(w http.ResponseWriter, r *http.Request, 
 	if ps.jobBusy != nil {
 		busy = ps.jobBusy()
 	}
-	page := buildPlatformSession(ps.dir, ps.csrf, sess, busy, screen)
+	dir := sessionWorkDir(sess, ps.dir)
+	page := buildPlatformSession(dir, ps.csrf, sess, busy, screen)
 	// One-shot flashes from a redirect round-trip through the workbench POST
 	// handlers (scope confirm / orchestrator outcome), same query contract.
 	page.Flash = scopeFlash(r.URL.Query().Get("scope"))
 	if m := migrateFlash(r.URL.Query().Get("migrate")); m != "" {
+		page.Flash = m
+	}
+	if m := platformStatusFlash(r.URL.Query().Get("gov")); m != "" {
 		page.Flash = m
 	}
 	// After an async smart-start the 303 fired when the job STARTED (carrying
@@ -318,7 +450,7 @@ func (ps *platformServer) handleSession(w http.ResponseWriter, r *http.Request, 
 	// so a meta-refresh / SSE reload of the same URL shows the actual result
 	// instead of the stale "started" flash. Scoped to THIS session's journal
 	// (single-account dir) and only for a terminal run.
-	if jj, ok := readJobJournal(ps.dir); ok && jj.SessionID == id &&
+	if jj, ok := readJobJournal(dir); ok && jj.SessionID == id &&
 		jj.State != jobStateRunning && jj.Outcome != "" {
 		page.Flash = jj.Outcome
 	}

@@ -16,8 +16,8 @@ import (
 // anti-leak test asserts it never appears in job.json.
 const journalSecretPass = "SuperSecretPw999"
 
-// newJournalEnv is newExecTestEnv plus the returned working dir (needed to read
-// job.json directly) and a host.yaml carrying a sentinel credential.
+// newJournalEnv is newExecTestEnv plus the returned session artifact dir
+// (needed to read job.json directly) and a host.yaml carrying a sentinel credential.
 func newJournalEnv(t *testing.T) (h http.Handler, dir, sessID, csrf string, fr *fakeRunner) {
 	t.Helper()
 	dir = t.TempDir()
@@ -44,6 +44,7 @@ func newJournalEnv(t *testing.T) (h http.Handler, dir, sessID, csrf string, fr *
 		}
 	}
 	hy := "src:\n  ip: 1.2.3.4\n  ssh_user: u\n  ssh_pass: " + journalSecretPass + "\n  port: 22\n"
+	dir = sess.ArtifactDir
 	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte(hy), 0600); err != nil {
 		t.Fatal(err)
 	}

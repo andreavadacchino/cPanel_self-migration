@@ -14,6 +14,103 @@ Stai lavorando sul tool Go **cpanel-self-migration**, directory locale abituale:
 7. `docs/dev/DOGFOODING_4_SMART_ORCHESTRATOR_WALKTHROUGH.md` (dogfooding Fase 3 — verdetto 🔵 «serve Fase 4»)
 8. `docs/dev/CUTOVER_RUNBOOK.md`
 
+## Novità (2026-07-07): fix runtime/sessione + prompt dedicato
+
+Leggi **subito** `docs/dev/SESSION_20260707_PLATFORM_RUNTIME_FIXES.md`.
+
+Stato reale verificato:
+
+- corretto il bug di **contaminazione tra migrazioni**: workbench/platform ora
+  devono usare la `ArtifactDir` della sessione corrente per job/checklist/report/
+  acceptances/host.yaml/events;
+- corretto il bug per cui la barra restava a **`setup`**: il wizard porta la
+  sessione a `preflight_required` e `CurrentStep` viene aggiornato in
+  `Store.SetStatus(...)`;
+- test verdi: `go test ./internal/workbench ./internal/webui`.
+
+Problema aperto ad alto valore:
+
+- il **monitor esecuzione è ancora troppo opaco**: l'utente non capisce bene cosa
+  sta migrando in quel momento. Esiste un prompt dedicato per la prossima
+  sessione: `docs/dev/NEXT_SESSION_PROMPT_PLATFORM_RUNTIME_AND_MONITOR.md`.
+
+## Aggiornamento (2026-07-07, sessione successiva): monitor operatore più leggibile
+
+Il problema del monitor opaco è stato **ridotto in modo sostanziale** senza
+toccare il motore né inventare dati.
+
+Consegnato:
+
+- **Box “Attività reale”** sia nel cockpit workbench sia nel cockpit platform:
+  mostra la **fase corrente** e valorizza i dati già presenti in
+  `events.jsonl`.
+- Per `migrate_mail` ora la UI espone le **caselle email coinvolte** con stato
+  umano (`migrata`, `già presente`, `fallita`, `da verificare`).
+- Per `migrate_db` la UI espone i **database migrati**.
+- Per `create_domains` la UI espone i **domini falliti/bloccati**.
+- Per `copy_files` la UI dichiara esplicitamente il limite reale:
+  **“la migrazione file è in corso, ma il motore non espone ancora il file
+  corrente”**. Nessun nome-file simulato.
+- Le summary del monitor sono state rese più leggibili in italiano
+  (`caselle`, `Database migrati`, `Differenze residue`, ecc.), ma restano
+  basate solo sui payload reali.
+
+Riesame stepper platform:
+
+- raffinato il passo corrente del **cockpit platform** quando il piano è già
+  realmente pronto ma lo `status` è ancora arretrato: se il read-model dice
+  **piano pronto + scope non confermato**, lo stepper evidenzia **Scope**
+  invece di fermarsi su `Setup`/`Preflight`.
+- Non è stata cambiata la mappatura coarse di `manual_actions_required`:
+  manca evidenza forte che spostarla avanti sarebbe onesto; oggi serve ancora
+  a non marcare “Migrazione” come fatta prima dell’apply reale.
+
+Test eseguiti e verdi:
+
+- `go test ./internal/webui -run 'TestCockpitRealActivityShowsRealEntitiesAndHonestFileMessage|TestPlatformCockpitRealActivityShowsRealEntitiesAndHonestFileMessage|TestBuildPlatformSessionReadyPlanButUnconfirmedScopeHighlightsScopeStep|TestCockpitEventsProduceRealProgress|TestParseRunMonitorFullApplyRun'`
+- `go test ./internal/workbench ./internal/webui`
+
+Punto ancora aperto, se si vuole arrivare a un monitor “WHM Transfer Tool” più
+ricco:
+
+- **`copy_files` non espone ancora il file corrente né un elenco file**. Per
+  mostrarlo davvero serve un’estensione del motore/eventi in
+  `internal/migrate/apply.go` / emissione `events.jsonl`, non un hack frontend.
+
+## Aggiornamento (2026-07-07, sessione successiva): governance e sblocco dentro la nuova UI
+
+Chiuso il dead-end per le migrazioni `blocked` / `failed`: prima il cockpit
+platform diceva di controllare l’ultimo tentativo, ma poi non offriva alcuna
+azione reale nella nuova UI.
+
+Consegnato:
+
+- nuovo POST **`/platform/migrations/:id/status`** con due sole azioni:
+  - `gov_action=block` per segnare una migrazione come bloccata;
+  - `gov_action=recover` per riposizionare una migrazione `blocked`/`failed`
+    verso uno stato reale scelto dall’operatore.
+- nuovo box **“Gestione stato”** nel `platform_cockpit`:
+  - per gli stati normali mostra “Segna come bloccata”;
+  - per `blocked`/`failed` mostra il recupero con select del nuovo stato +
+    motivo.
+- la CTA principale del cockpit per `blocked` e `failed` ora **resta nel
+  cockpit platform** e invita a gestire blocco/recupero lì, invece di
+  rimbalzare in expert mode.
+- flash dedicati `?gov=blocked` / `?gov=updated` per dare conferma esplicita del
+  cambio stato nella nuova UI.
+
+Test aggiunti e verdi:
+
+- render del box governance nel cockpit platform;
+- POST block in-platform con redirect di ritorno al cockpit;
+- POST recover in-platform con redirect di ritorno al cockpit;
+- regressione CTA `blocked`/`failed` che non deve più creare loop confusi o
+  bounce forzati verso Modalità esperto.
+
+Suite verde confermata:
+
+- `go test ./internal/workbench ./internal/webui`
+
 ## Novità (2026-07-07): Platform UI V2 operator-first — `feat/platform-ui-v2`
 
 Introdotta **in parallelo** alla workbench una nuova esperienza prodotto SaaS,

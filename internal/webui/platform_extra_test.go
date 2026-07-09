@@ -40,7 +40,7 @@ func TestPlatformTasksScreenWithRows(t *testing.T) {
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyWithManualNotes,
 		ManualActions: []accountinventory.ManualAction{
@@ -135,14 +135,14 @@ func TestPlatformTasksPendingCountsNonAcceptable(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "s", "d", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallBlocked,
 		ManualActions: []accountinventory.ManualAction{
 			{Title: "Ricrea cron bloccante", Section: "cron", BlockingCutover: true, Acceptable: false, Accepted: false},
 		},
 	})
-	page := buildPlatformSession(dir, "csrf", sess, false, "tasks")
+	page := buildPlatformSession(sess.ArtifactDir, "csrf", sess, false, "tasks")
 	if page.TasksTotal != 1 {
 		t.Fatalf("TasksTotal = %d, want 1", page.TasksTotal)
 	}
@@ -158,7 +158,7 @@ func TestPlatformCompareWithCounts(t *testing.T) {
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "s", "d", time.Now())
-	writeChecklist(t, dir, countingChecklist()) // databases 32/0, mailboxes 12/12, dns 5/5
+	writeChecklist(t, sess.ArtifactDir, countingChecklist()) // databases 32/0, mailboxes 12/12, dns 5/5
 	body := platformSessionBody(t, ps, sess.ID, "compare")
 	for _, want := range []string{"Database", "32", "Confronto per area"} {
 		if !strings.Contains(body, want) {
@@ -175,7 +175,7 @@ func TestPlatformCockpitTaskListWithRows(t *testing.T) {
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "s", "d", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyWithManualNotes,
 		ManualActions: []accountinventory.ManualAction{
@@ -195,7 +195,7 @@ func TestPlatformHeaderRendersRiskBadge(t *testing.T) {
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "s", "d", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallBlocked,
 		ApplyBlocked:  false,
@@ -223,9 +223,8 @@ func TestPlatformStepperNoPrematureMigrationDone(t *testing.T) {
 	}
 }
 
-// No dead-end: a blocked session's cockpit CTA prescribes a governance action
-// that does not exist on the platform primary path, so the CTA must route to
-// Modalità esperto — never self-loop back to the same cockpit page.
+// No dead-end: a blocked session's cockpit CTA must stay on the cockpit, where
+// the new UI now exposes the governance controls directly.
 func TestPlatformCockpitCTANoSelfLoop(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
@@ -234,13 +233,246 @@ func TestPlatformCockpitCTANoSelfLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := buildPlatformSession(dir, "csrf", blocked, false, "cockpit")
+	page := buildPlatformSession(blocked.ArtifactDir, "csrf", blocked, false, "cockpit")
 	self := "/platform/migrations/" + sess.ID
-	if page.HeroCTAURL == self || page.HeroCTAURL == "" {
-		t.Errorf("blocked cockpit CTA = %q, must not self-loop / dead-end", page.HeroCTAURL)
+	if page.HeroCTAURL != self {
+		t.Errorf("blocked cockpit CTA = %q, want cockpit route %q", page.HeroCTAURL, self)
 	}
+	if !page.Governance.CanRecover {
+		t.Error("blocked cockpit must expose recovery governance in the new UI")
+	}
+}
+
+func TestPlatformFailedOrchestratorCTAStaysOnCockpit(t *testing.T) {
+	env := newOrchEnv(t, workbench.ContentSelection{Files: true, Databases: true})
+	sess, err := env.store.Get(env.sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeJobJournal(sess.ArtifactDir, jobJournal{
+		SessionID: env.sessID, Action: orchestratorAction,
+		StartedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		State: jobStateFailed, Phase: "Contenuti", Error: "migrate content: exit status 1",
+	})
+	page := buildPlatformSession(sess.ArtifactDir, env.csrf, sess, false, "cockpit")
+	if page.Cockpit.CTA.Kind != "link" {
+		t.Fatalf("failed orchestrator CTA kind = %q, want link", page.Cockpit.CTA.Kind)
+	}
+	if page.HeroCTAURL != "/platform/migrations/"+env.sessID {
+		t.Errorf("failed orchestrator HeroCTAURL = %q, want cockpit route", page.HeroCTAURL)
+	}
+	if strings.Contains(page.HeroCTAURL, "/plan") {
+		t.Errorf("failed orchestrator CTA must not bounce to /plan, got %q", page.HeroCTAURL)
+	}
+}
+
+func TestPlatformFailedStatusCTAStaysOnCockpit(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	failed, err := store.SetStatus(sess.ID, workbench.StatusFailed, true, "errore persistente di test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := buildPlatformSession(failed.ArtifactDir, "csrf", failed, false, "cockpit")
+	if page.Cockpit.CTA.Kind != "link" {
+		t.Fatalf("failed status CTA kind = %q, want link", page.Cockpit.CTA.Kind)
+	}
+	if page.HeroCTAURL != "/platform/migrations/"+sess.ID {
+		t.Errorf("failed status HeroCTAURL = %q, want cockpit route", page.HeroCTAURL)
+	}
+	if page.HeroCTAURL == page.ExpertURL {
+		t.Errorf("failed status CTA must not bounce to expert by default, got %q", page.HeroCTAURL)
+	}
+}
+
+func TestPlatformBlockedCTAExplainsPlatformRecovery(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	blocked, err := store.SetStatus(sess.ID, workbench.StatusBlocked, true, "blocco amministrativo di test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := buildPlatformSession(blocked.ArtifactDir, "csrf", blocked, false, "cockpit")
+	if page.HeroCTAURL != "/platform/migrations/"+sess.ID {
+		t.Fatalf("blocked HeroCTAURL = %q, want cockpit route", page.HeroCTAURL)
+	}
+	if !strings.Contains(strings.ToLower(page.Cockpit.CTA.Label), "blocco") {
+		t.Errorf("blocked CTA label = %q, want explicit blocked-state wording", page.Cockpit.CTA.Label)
+	}
+}
+
+func TestPlatformCockpitRendersGovernanceControls(t *testing.T) {
+	dir := t.TempDir()
+	ps, store := newPlatformTest(t, dir, false)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	blocked, err := store.SetStatus(sess.ID, workbench.StatusBlocked, true, "blocco amministrativo di test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := renderPlatformPage(t, ps, "platform_cockpit.html", buildPlatformSession(blocked.ArtifactDir, "csrf-x", blocked, false, "cockpit"))
+	for _, want := range []string{
+		"Gestione stato",
+		`action="/platform/migrations/` + sess.ID + `/status"`,
+		`name="gov_action" value="recover"`,
+		"Aggiorna stato",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("blocked cockpit missing governance control %q", want)
+		}
+	}
+}
+
+func TestPlatformStatusBlockStaysInPlatform(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	h, err := New(Options{Dir: dir, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/status",
+		url.Values{"csrf": {csrf}, "gov_action": {"block"}, "reason": {"blocco test"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("platform status block = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"?gov=blocked" {
+		t.Errorf("status block redirect = %q, want cockpit flash", loc)
+	}
+	got, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != workbench.StatusBlocked {
+		t.Errorf("session status after block = %q, want %q", got.Status, workbench.StatusBlocked)
+	}
+}
+
+func TestPlatformStatusRecoverStaysInPlatform(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	blocked, err := store.SetStatus(sess.ID, workbench.StatusBlocked, true, "blocco test", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(Options{Dir: dir, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+blocked.ID+"/status",
+		url.Values{"csrf": {csrf}, "gov_action": {"recover"}, "status": {string(workbench.StatusPreflightRequired)}, "reason": {"ripresa operativa di test"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("platform status recover = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+blocked.ID+"?gov=updated" {
+		t.Errorf("status recover redirect = %q, want cockpit flash", loc)
+	}
+	got, err := store.Get(blocked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != workbench.StatusPreflightRequired {
+		t.Errorf("session status after recover = %q, want %q", got.Status, workbench.StatusPreflightRequired)
+	}
+}
+
+func TestPlatformVerificationCTAExplainsExpertMode(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	done, err := store.SetStatus(sess.ID, workbench.StatusApplyDone, true, "test applicazione completata", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := buildPlatformSession(done.ArtifactDir, "csrf", done, false, "cockpit")
 	if page.HeroCTAURL != page.ExpertURL {
-		t.Errorf("blocked cockpit CTA = %q, want Modalità esperto %q", page.HeroCTAURL, page.ExpertURL)
+		t.Fatalf("apply-done HeroCTAURL = %q, want expert route", page.HeroCTAURL)
+	}
+	if !strings.Contains(page.Cockpit.CTA.Label, "eseguire le verifiche") {
+		t.Errorf("verification CTA label = %q, want explicit verification wording", page.Cockpit.CTA.Label)
+	}
+	if !strings.Contains(strings.ToLower(page.Cockpit.CTA.Detail), "modalità avanzata") {
+		t.Errorf("verification CTA detail = %q, want it to explain the expert route", page.Cockpit.CTA.Detail)
+	}
+}
+
+func TestPlatformPlanRendersRunAnalysisAction(t *testing.T) {
+	dir := t.TempDir()
+	ps, store := newPlatformTest(t, dir, false)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	body := platformSessionBody(t, ps, sess.ID, "plan")
+	for _, want := range []string{
+		`action="/platform/migrations/` + sess.ID + `/exec"`,
+		`name="action" value="run_pipeline"`,
+		"Esegui controllo iniziale",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("plan missing run-analysis control %q", want)
+		}
+	}
+}
+
+func TestPlatformTasksRenderVerifyActions(t *testing.T) {
+	dir := t.TempDir()
+	ps, _ := newPlatformTest(t, dir, false)
+	sess := &workbench.Session{
+		ID: "mig-test", Name: "giorgini", ArtifactDir: dir,
+		Setup: &workbench.SetupMeta{Content: workbench.ContentSelection{DNS: true, EmailConfig: true, Cron: true}},
+	}
+	writeChecklist(t, sess.ArtifactDir, countingChecklist())
+	mustWrite(t, filepath.Join(sess.ArtifactDir, "dns_import_plan.json"), []byte(`{}`))
+	mustWrite(t, filepath.Join(sess.ArtifactDir, "email_apply_plan.json"), []byte(`{}`))
+	mustWrite(t, filepath.Join(sess.ArtifactDir, "cron_apply_plan.json"), []byte(`{}`))
+	page := buildPlatformSession(sess.ArtifactDir, "csrf", sess, false, "tasks")
+	body := renderPlatformPage(t, ps, "platform_tasks.html", page)
+	for _, want := range []string{"Verifica DNS", "Verifica configurazioni email", "Verifica cron"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("tasks missing verify action %q", want)
+		}
+	}
+}
+
+func TestPlatformExecRunPipelineStaysInPlatform(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	fr := &fakeRunner{}
+	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/exec",
+		url.Values{"csrf": {csrf}, "action": {"run_pipeline"}, "return_to": {"plan"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("platform exec run_pipeline = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"/plan" {
+		t.Errorf("run_pipeline redirect = %q, want /platform/.../plan", loc)
+	}
+}
+
+func TestPlatformExecVerifyStaysInPlatform(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	fr := &fakeRunner{}
+	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/exec",
+		url.Values{"csrf": {csrf}, "action": {"dns_verify"}, "return_to": {"tasks"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("platform exec dns_verify = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"/tasks" {
+		t.Errorf("dns_verify redirect = %q, want /platform/.../tasks", loc)
 	}
 }
 
@@ -251,7 +483,7 @@ func TestPlatformConfirmScopeStaysInPlatform(t *testing.T) {
 	dir := t.TempDir()
 	store := mustStore(t, dir)
 	sess, _ := store.Create("giorgini", "acc@src", "acc@dst", time.Now())
-	writeChecklist(t, dir, countingChecklist())
+	writeChecklist(t, sess.ArtifactDir, countingChecklist())
 	h, err := New(Options{Dir: dir, SessionStore: store})
 	if err != nil {
 		t.Fatal(err)
@@ -310,13 +542,37 @@ func TestPlatformConfirmScopeGuards(t *testing.T) {
 	}
 }
 
+// Isolation guard: a stale/global artifact in the UI root must not freeze the
+// scope of a fresh session whose own artifact dir is still clean.
+func TestPlatformConfirmScopeIgnoresGlobalArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	store := mustStore(t, dir)
+	sess, _ := store.Create("giorgini", "s", "d", time.Now())
+	if err := os.WriteFile(filepath.Join(dir, "report.json"), []byte(`{"ok":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := New(Options{Dir: dir, SessionStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrf := fetchCSRF(t, h)
+	rr := doReq(h, http.MethodPost, "/platform/migrations/"+sess.ID+"/scope",
+		url.Values{"csrf": {csrf}, "preset": {"all_safe"}})
+	if rr.Code != http.StatusSeeOther {
+		t.Fatalf("scope POST = %d, want 303\n%s", rr.Code, rr.Body.String())
+	}
+	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"?scope=updated" {
+		t.Errorf("scope redirect = %q, want ...?scope=updated", loc)
+	}
+}
+
 // The Piano screen renders the scope form in-platform (posting to the platform
 // scope endpoint), not a link out to the workbench.
 func TestPlatformPlanRendersScopeForm(t *testing.T) {
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "s", "d", time.Now())
-	writeChecklist(t, dir, countingChecklist())
+	writeChecklist(t, sess.ArtifactDir, countingChecklist())
 	body := platformSessionBody(t, ps, sess.ID, "plan")
 	for _, want := range []string{
 		`action="/platform/migrations/` + sess.ID + `/scope"`,
@@ -346,7 +602,11 @@ func TestPlatformStartMigrationInPlatform(t *testing.T) {
 	}
 	// The run is asynchronous now: wait for it to settle so the goroutine's
 	// writes finish before the tempdir is cleaned up.
-	waitJobSettled(t, env.dir)
+	sess, err := env.store.Get(env.sessID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitJobSettled(t, sess.ArtifactDir)
 }
 
 // The in-platform start keeps CSRF plus an explicit server-side confirmation
@@ -382,7 +642,7 @@ func TestPlatformSmartStartRunsPreflightThenMigration(t *testing.T) {
 	if _, err := store.ConfirmScope(sess.ID, setup.Content, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeValidatedConfigAt(dir, yamlConfig{
+	if err := writeValidatedConfigAt(sess.ArtifactDir, yamlConfig{
 		Src:  yamlHost{IP: "1.2.3.4", Port: 22, SSHUser: "srcacct", SSHPass: "src-secret", Timeout: "15s"},
 		Dest: yamlHost{IP: "5.6.7.8", Port: 22, SSHUser: "dstacct", SSHPass: "dst-secret", Timeout: "15s"},
 	}); err != nil {
@@ -390,7 +650,7 @@ func TestPlatformSmartStartRunsPreflightThenMigration(t *testing.T) {
 	}
 	fr := &fakeRunner{onCall: func(name string) {
 		if name == "inventory checklist" {
-			writeChecklist(t, dir, readyChecklist())
+			writeChecklist(t, sess.ArtifactDir, readyChecklist())
 		}
 	}}
 	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
@@ -405,7 +665,7 @@ func TestPlatformSmartStartRunsPreflightThenMigration(t *testing.T) {
 	}
 	// The migration runs in the background now: wait for it to settle before
 	// asserting the recorded runner calls (and before tempdir cleanup).
-	waitJobSettled(t, dir)
+	waitJobSettled(t, sess.ArtifactDir)
 	names := []string{}
 	for _, c := range fr.recorded() {
 		names = append(names, c.name)
@@ -418,7 +678,7 @@ func TestPlatformSmartStartRunsPreflightThenMigration(t *testing.T) {
 	if strings.Contains(rr.Header().Get("Location"), "/workbench/") {
 		t.Fatal("smart-start must return to the platform")
 	}
-	waitJobSettled(t, dir)
+	waitJobSettled(t, sess.ArtifactDir)
 }
 
 // newSmartStartReady builds a session ready for the platform smart-start with a
@@ -437,18 +697,18 @@ func newSmartStartReady(t *testing.T, fr *fakeRunner) (h http.Handler, dir, id s
 	if _, err := store.ConfirmScope(sess.ID, setup.Content, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeValidatedConfigAt(dir, yamlConfig{
+	if err := writeValidatedConfigAt(sess.ArtifactDir, yamlConfig{
 		Src:  yamlHost{IP: "1.2.3.4", Port: 22, SSHUser: "srcacct", SSHPass: "src-secret", Timeout: "15s"},
 		Dest: yamlHost{IP: "5.6.7.8", Port: 22, SSHUser: "dstacct", SSHPass: "dst-secret", Timeout: "15s"},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 	h, err = New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return h, dir, sess.ID
+	return h, sess.ArtifactDir, sess.ID
 }
 
 // The smart-start is asynchronous: the 303 fires immediately with ?migrate=started
@@ -526,7 +786,7 @@ func TestPlatformAcceptInPlatform(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallManualActionRequired,
 		ManualActions: []accountinventory.ManualAction{
@@ -542,7 +802,7 @@ func TestPlatformAcceptInPlatform(t *testing.T) {
 	if loc := rr.Header().Get("Location"); loc != "/platform/migrations/"+sess.ID+"/tasks" {
 		t.Errorf("accept redirect = %q, want the platform Task screen", loc)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "acceptances.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(sess.ArtifactDir, "acceptances.json")); err != nil {
 		t.Error("acceptance must be persisted to acceptances.json")
 	}
 }
@@ -552,7 +812,7 @@ func TestPlatformTasksRendersAcceptForm(t *testing.T) {
 	dir := t.TempDir()
 	ps, store := newPlatformTest(t, dir, false)
 	sess, _ := store.Create("giorgini", "s", "d", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallManualActionRequired,
 		ManualActions: []accountinventory.ManualAction{

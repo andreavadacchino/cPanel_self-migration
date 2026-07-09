@@ -98,7 +98,7 @@ func TestPostToScreenRouteIs404(t *testing.T) {
 
 // TestMigrazioneCoverageGlyphs: coverage screen shows ✅/🟡/⚪ by class.
 func TestMigrazioneCoverageGlyphs(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	cl := accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
@@ -111,7 +111,7 @@ func TestMigrazioneCoverageGlyphs(t *testing.T) {
 			{Section: "email_filters", Acceptable: true, Accepted: false},
 		},
 	}
-	writeChecklist(t, dir, cl)
+	writeChecklist(t, sess.ArtifactDir, cl)
 	_, body := getBody(t, h, "/workbench/session/"+sess.ID+"/migrazione")
 	if !strings.Contains(body, "✅") || !strings.Contains(body, "🟡") || !strings.Contains(body, "⚪") {
 		t.Errorf("migrazione must show all three glyphs; body:\n%s", body)
@@ -127,7 +127,7 @@ func TestMigrazioneCoverageGlyphs(t *testing.T) {
 // TestConfermeAcceptForm: pending acceptable action shows the accept form with
 // its stable key; an accepted action shows the attribution.
 func TestConfermeAcceptForm(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	cl := accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
@@ -138,7 +138,7 @@ func TestConfermeAcceptForm(t *testing.T) {
 				Acceptable: true, Accepted: true, AcceptedBy: "andrea", AcceptedAt: "2026-07-05"},
 		},
 	}
-	writeChecklist(t, dir, cl)
+	writeChecklist(t, sess.ArtifactDir, cl)
 	_, body := getBody(t, h, "/workbench/session/"+sess.ID+"/conferme")
 	if !strings.Contains(body, `name="action_key" value="AK-pending"`) {
 		t.Error("pending action must expose an accept form with its key")
@@ -176,9 +176,9 @@ func TestApplicaDangerZone(t *testing.T) {
 
 // TestChiusuraYes: READY_TO_CUTOVER checklist → SÌ, runbook decisions shown.
 func TestChiusuraYes(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})
@@ -196,9 +196,9 @@ func TestChiusuraYes(t *testing.T) {
 
 // TestChiusuraNo: a cutover blocker + pending confirmation → NO with the list.
 func TestChiusuraNo(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyWithManualNotes,
 		Sections: []accountinventory.ChecklistSection{
@@ -237,7 +237,7 @@ func TestWorkbenchAcceptRedirectsToConferme(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
-	writeChecklistWithActions(t, dir) // AK-accept01 is acceptable
+	writeChecklistWithActions(t, sess.ArtifactDir) // AK-accept01 is acceptable
 	csrf := extractCSRF(t, h, sess.ID)
 
 	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sess.ID+"/accept",
@@ -255,10 +255,10 @@ func TestWorkbenchAcceptRedirectsToConferme(t *testing.T) {
 // at ready_for_cutover with a real checklist must render Panoramica and Chiusura
 // without a 500.
 func TestReadyForCutoverSessionRenders(t *testing.T) {
-	h, store, dir := newTestWorkbenchHandler(t)
+	h, store, _ := newTestWorkbenchHandler(t)
 	sess, _ := store.Create("giorgini", "src", "dst", time.Now())
 	advanceTo(t, store, sess.ID, workbench.StatusReadyForCutover)
-	writeChecklist(t, dir, accountinventory.MigrationChecklist{
+	writeChecklist(t, sess.ArtifactDir, accountinventory.MigrationChecklist{
 		Mode: "migration-checklist", FormatVersion: 1,
 		OverallStatus: accountinventory.OverallReadyToCutover,
 	})

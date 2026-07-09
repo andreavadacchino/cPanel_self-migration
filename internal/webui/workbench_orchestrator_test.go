@@ -77,16 +77,17 @@ func newOrchEnvRunner(t *testing.T, content workbench.ContentSelection, fr *fake
 	if _, err := store.ConfirmScope(sess.ID, content, time.Now().UTC()); err != nil {
 		t.Fatalf("ConfirmScope: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0o600); err != nil {
+	host := []byte("src:\n  ip: 1.2.3.4\n")
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "host.yaml"), host, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 
 	h, err := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &orchEnv{h: h, store: store, dir: dir, sessID: sess.ID, csrf: fetchCSRF(t, h), fr: fr}
+	return &orchEnv{h: h, store: store, dir: sess.ArtifactDir, sessID: sess.ID, csrf: fetchCSRF(t, h), fr: fr}
 }
 
 func (e *orchEnv) writePlan(t *testing.T, name string) {
@@ -183,7 +184,7 @@ func TestOrchestratorRefusesUnconfirmedScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 	fr := &fakeRunner{}
 	h, _ := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
 	csrf := fetchCSRF(t, h)
@@ -552,7 +553,7 @@ func TestOrchestratorUIHidesStartButtonWhenUnconfirmed(t *testing.T) {
 	store, _ := workbench.NewStore(storeDir)
 	sess, _ := store.CreateWithSetup("giorginisposi", "src", "dst",
 		&workbench.SetupMeta{Content: workbench.ContentSelection{Files: true}}, time.Now())
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 	h, _ := New(Options{Dir: dir, SessionStore: store})
 	code, body := getBody(t, h, "/workbench/session/"+sess.ID+"/migrazione")
 	if code != 200 {
@@ -594,7 +595,7 @@ func TestOrchestratorLegacySessionNotStartable(t *testing.T) {
 	os.MkdirAll(storeDir, 0o700)
 	store, _ := workbench.NewStore(storeDir)
 	sess, _ := store.Create("giorginisposi", "src", "dst", time.Now()) // Setup == nil
-	writeChecklist(t, dir, readyChecklist())
+	writeChecklist(t, sess.ArtifactDir, readyChecklist())
 	fr := &fakeRunner{}
 	h, _ := New(Options{Dir: dir, Runner: fr.run, SessionStore: store})
 	csrf := fetchCSRF(t, h)

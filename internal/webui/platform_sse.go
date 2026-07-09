@@ -92,10 +92,12 @@ func buildSSESnapshot(dir string, now time.Time) sseSnapshot {
 // pushes a delta ONLY when it changes, closing on client disconnect or when the
 // run is terminal/stalled.
 func (ps *platformServer) handleSessionEvents(w http.ResponseWriter, r *http.Request, id string) {
-	if _, err := ps.store.Get(id); err != nil {
+	sess, err := ps.store.Get(id)
+	if err != nil {
 		http.Error(w, "migrazione non trovata", http.StatusNotFound)
 		return
 	}
+	dir := sessionWorkDir(sess, ps.dir)
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming non supportato", http.StatusInternalServerError)
@@ -111,7 +113,7 @@ func (ps *platformServer) handleSessionEvents(w http.ResponseWriter, r *http.Req
 
 	last := ""
 	push := func() bool {
-		snap := buildSSESnapshot(ps.dir, time.Now().UTC())
+		snap := buildSSESnapshot(dir, time.Now().UTC())
 		b, err := json.Marshal(snap)
 		if err != nil {
 			return true // cannot encode → stop the stream

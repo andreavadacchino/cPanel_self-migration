@@ -196,6 +196,10 @@ func (ws *workbenchServer) handleWizardCreate(w http.ResponseWriter, r *http.Req
 		http.Error(w, "create session: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if _, err := ws.store.SetStatus(sess.ID, workbench.StatusPreflightRequired, false, "", time.Now().UTC()); err != nil {
+		http.Error(w, "initialize session: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	http.Redirect(w, r, "/workbench/session/"+sess.ID, http.StatusSeeOther)
 }
 

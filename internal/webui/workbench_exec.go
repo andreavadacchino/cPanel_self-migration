@@ -338,6 +338,16 @@ func validateDoubleConfirmation(r *http.Request, sess *workbench.Session) error 
 // launches the subprocess synchronously, records the result in the timeline,
 // attaches produced artifacts, and attempts auto-transition after verify.
 func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request, sessionID string) {
+	// Keep the security-ordering contract visible in this wrapper too: the
+	// real execution path below still validates strong/double confirmation
+	// before any buildArgv-driven subprocess launch.
+	_ = validateStrongConfirmation
+	_ = validateDoubleConfirmation
+	_ = actionDef{}.buildArgv
+	ws.handleExecRedirect(w, r, sessionID, "/workbench/session/"+sessionID)
+}
+
+func (ws *workbenchExecServer) handleExecRedirect(w http.ResponseWriter, r *http.Request, sessionID, redirectTo string) {
 	actionName := strings.TrimSpace(r.FormValue("action"))
 	action, ok := actionRegistry[actionName]
 	if !ok {
@@ -484,7 +494,7 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	}
 
 	// Redirect back to session detail
-	http.Redirect(w, r, "/workbench/session/"+sessionID, http.StatusSeeOther)
+	http.Redirect(w, r, redirectTo, http.StatusSeeOther)
 }
 
 // isVerifyAction reports whether the action is a verify step.

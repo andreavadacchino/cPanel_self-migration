@@ -204,6 +204,20 @@
 <section class="card">
   <h2>Monitor esecuzione</h2>
   {{if .Job}}<p class="muted">Job <strong>{{.Job.Action}}</strong> — avviato {{fmtTime .Job.StartedAt}}, ultimo aggiornamento {{fmtTime .Job.UpdatedAt}}.{{if .JobLive}} La pagina si aggiorna automaticamente ogni 2 s.{{end}}</p>{{end}}
+  {{if .Activity.Visible}}
+  <div class="banner info">
+    <strong>Attività reale</strong>
+    {{if .Activity.CurrentPhase}}<div style="margin-top:.35rem"><span class="muted">Fase corrente:</span> <strong>{{.Activity.CurrentPhase}}</strong>{{if .Activity.CurrentStateLabel}} <span class="badge draft">{{.Activity.CurrentStateLabel}}</span>{{end}}</div>{{end}}
+    {{range .Activity.Sections}}
+    <div style="margin-top:.7rem">
+      <div><strong>{{.Title}}</strong></div>
+      {{if .Items}}<ul class="stack">{{range .Items}}<li class="mono">{{.}}</li>{{end}}</ul>{{end}}
+      {{if .Note}}<div class="muted">{{.Note}}</div>{{end}}
+    </div>
+    {{end}}
+    {{if .Activity.EmptyNote}}<div class="muted" style="margin-top:.5rem">{{.Activity.EmptyNote}}</div>{{end}}
+  </div>
+  {{end}}
   <div class="cockpit-phases">
     {{range .Phases}}
     <div class="cockpit-phase">

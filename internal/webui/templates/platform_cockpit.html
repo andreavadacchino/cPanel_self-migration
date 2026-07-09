@@ -96,6 +96,22 @@
       <div class="card">
         <div class="card-h"><span class="ttl">📡 Monitor esecuzione</span></div>
         {{if .Cockpit.Monitor.Active}}
+          {{with .Cockpit.Monitor.Activity}}
+          {{if .Visible}}
+          <div class="callout info" style="margin-bottom:.75rem">
+            <div style="font-weight:660">Attività reale</div>
+            {{if .CurrentPhase}}<div class="sub" style="margin-top:.2rem"><strong>Fase corrente:</strong> {{.CurrentPhase}}{{if .CurrentStateLabel}} · {{.CurrentStateLabel}}{{end}}</div>{{end}}
+            {{range .Sections}}
+            <div style="margin-top:.55rem">
+              <div style="font-weight:600; font-size:.84rem">{{.Title}}</div>
+              {{if .Items}}<div class="stack" style="gap:.18rem; margin-top:.2rem">{{range .Items}}<div class="sub mono">{{.}}</div>{{end}}</div>{{end}}
+              {{if .Note}}<div class="sub" style="margin-top:.2rem">{{.Note}}</div>{{end}}
+            </div>
+            {{end}}
+            {{if .EmptyNote}}<div class="sub" style="margin-top:.35rem">{{.EmptyNote}}</div>{{end}}
+          </div>
+          {{end}}
+          {{end}}
           {{/* Live migration bar — width/percent/phase are driven by the SSE
                stream (mig-bar/mig-pct/mig-phase); they start neutral and the
                stream paints them on connect. Without EventSource the phase rows
@@ -151,6 +167,43 @@
         <p class="muted">Nessun task manuale aperto.</p>
         {{end}}
       </div>
+
+      {{if .Governance.Show}}
+      <div class="card">
+        <div class="card-h"><span class="ttl">🛟 Gestione stato</span></div>
+        <div class="sub" style="margin-bottom:.7rem">Stato attuale: <strong>{{.Governance.CurrentLabel}}</strong></div>
+
+        {{if .Governance.CanBlock}}
+        <form method="post" action="/platform/migrations/{{.Session.ID}}/status" class="stack" style="gap:.55rem">
+          <input type="hidden" name="csrf" value="{{.CSRF}}">
+          <input type="hidden" name="gov_action" value="block">
+          <label>
+            <div class="muted" style="font-size:.82rem; margin-bottom:.2rem">Perch&eacute; la migrazione va bloccata?</div>
+            <textarea name="reason" rows="3" style="width:100%" placeholder="Descrivi il blocco operativo o tecnico"></textarea>
+          </label>
+          <button type="submit" class="btn btn-danger" style="width:100%; justify-content:center">Segna come bloccata</button>
+        </form>
+        {{end}}
+
+        {{if .Governance.CanRecover}}
+        <form method="post" action="/platform/migrations/{{.Session.ID}}/status" class="stack" style="gap:.55rem">
+          <input type="hidden" name="csrf" value="{{.CSRF}}">
+          <input type="hidden" name="gov_action" value="recover">
+          <label>
+            <div class="muted" style="font-size:.82rem; margin-bottom:.2rem">Nuovo stato</div>
+            <select name="status" style="width:100%">
+              {{range .Governance.RecoveryTo}}<option value="{{.}}">{{statusLabel .}}</option>{{end}}
+            </select>
+          </label>
+          <label>
+            <div class="muted" style="font-size:.82rem; margin-bottom:.2rem">Motivo dell'aggiornamento</div>
+            <textarea name="reason" rows="3" style="width:100%" placeholder="Spiega perch&eacute; puoi riaprire o riposizionare la migrazione"></textarea>
+          </label>
+          <button type="submit" class="btn btn-primary" style="width:100%; justify-content:center">Aggiorna stato</button>
+        </form>
+        {{end}}
+      </div>
+      {{end}}
     </div>
 
   </div>

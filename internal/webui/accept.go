@@ -33,6 +33,10 @@ func (s *server) saveAccept(w http.ResponseWriter, r *http.Request) {
 // redirect differs — the acceptance logic (validate, upsert acceptances.json,
 // regenerate the checklist) is byte-identical for both callers.
 func (s *server) saveAcceptTo(w http.ResponseWriter, r *http.Request, redirectURL string) {
+	s.saveAcceptInDir(w, r, redirectURL, s.dir)
+}
+
+func (s *server) saveAcceptInDir(w http.ResponseWriter, r *http.Request, redirectURL, dir string) {
 	key := strings.TrimSpace(r.FormValue("action_key"))
 	reason := strings.TrimSpace(r.FormValue("reason"))
 	operator := strings.TrimSpace(r.FormValue("operator"))
@@ -45,12 +49,12 @@ func (s *server) saveAcceptTo(w http.ResponseWriter, r *http.Request, redirectUR
 	// slot taken and is refused, and vice versa — real mutual exclusion, so
 	// the two writers of migration_checklist.json never overlap.
 	if !s.job.tryReserve() {
-		writeBusy409(w, s.dir, s.job)
+		writeBusy409(w, dir, s.job)
 		return
 	}
 	defer s.job.release()
 
-	checklistPath := filepath.Join(s.dir, "migration_checklist.json")
+	checklistPath := filepath.Join(dir, "migration_checklist.json")
 	cb, err := os.ReadFile(checklistPath) // #nosec G304 -- fixed name in the operator-chosen dir
 	if err != nil {
 		http.Error(w, "no checklist to accept against — run the analysis first", http.StatusUnprocessableEntity)
@@ -75,7 +79,7 @@ func (s *server) saveAcceptTo(w http.ResponseWriter, r *http.Request, redirectUR
 	sha := hex.EncodeToString(sum[:])
 
 	var existing *accountinventory.AcceptanceFile
-	accPath := filepath.Join(s.dir, "acceptances.json")
+	accPath := filepath.Join(dir, "acceptances.json")
 	if ab, err := os.ReadFile(accPath); err == nil { // #nosec G304 -- fixed name in the operator-chosen dir
 		var af accountinventory.AcceptanceFile
 		if uerr := json.Unmarshal(ab, &af); uerr != nil {
@@ -104,7 +108,7 @@ func (s *server) saveAcceptTo(w http.ResponseWriter, r *http.Request, redirectUR
 	// because migration_checklist.json is still the file we hashed above.
 	ctx, cancel := context.WithTimeout(s.job.base, acceptTimeout)
 	defer cancel()
-	st := checklistStep(s.dir)
+	st := checklistStep(dir)
 	if err := s.job.runner(ctx, io.Discard, st.Name, st.Argv); err != nil {
 		http.Error(w, "acceptance saved but checklist regeneration failed: "+err.Error(), http.StatusInternalServerError)
 		return

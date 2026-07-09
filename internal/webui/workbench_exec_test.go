@@ -52,7 +52,7 @@ func newExecTestEnv(t *testing.T) (http.Handler, string, string, *fakeRunner) {
 	}
 
 	// Write a minimal host.yaml so commands find a config
-	hostYAML := filepath.Join(dir, "host.yaml")
+	hostYAML := filepath.Join(sess.ArtifactDir, "host.yaml")
 	if err := os.WriteFile(hostYAML, []byte("source:\n  ip: 1.2.3.4\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestExecBusySlot(t *testing.T) {
 			t.Fatalf("SetStatus %s: %v", s, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("source:\n  ip: 1.2.3.4\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "host.yaml"), []byte("source:\n  ip: 1.2.3.4\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -386,7 +386,7 @@ func TestExecTimelineRecorded(t *testing.T) {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("source:\n  ip: 1.2.3.4\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "host.yaml"), []byte("source:\n  ip: 1.2.3.4\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -450,7 +450,7 @@ func TestExecNoArtifactOnFailure(t *testing.T) {
 		}
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("source:\n  ip: 1.2.3.4\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(sess.ArtifactDir, "host.yaml"), []byte("source:\n  ip: 1.2.3.4\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 

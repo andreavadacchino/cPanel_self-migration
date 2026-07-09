@@ -15,11 +15,27 @@
   <div class="sess-head" style="margin-bottom:1rem">
     <div><h1 style="font-size:1.3rem">Piano migrazione</h1>
     <p class="muted">Ecco cosa verrà migrato, cosa richiede attenzione e cosa è escluso.</p></div>
-    <div class="sess-actions"><a class="btn btn-ghost btn-sm" href="{{.ExpertPreflightURL}}">Apri dettagli tecnici</a></div>
+    <div class="sess-actions">
+      {{with .RunAnalysis}}
+      <form method="POST" action="/platform/migrations/{{$.Session.ID}}/exec">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="action" value="{{.Name}}">
+        <input type="hidden" name="return_to" value="{{.Return}}">
+        <button type="submit" class="btn btn-primary btn-sm">{{.Label}}</button>
+      </form>
+      {{end}}
+      <a class="btn btn-ghost btn-sm" href="{{.ExpertPreflightURL}}">Apri dettagli tecnici</a>
+    </div>
   </div>
 
   {{if not .Plan.Ready}}
   <div class="callout warn" style="margin-bottom:1rem">{{.Plan.NotReadyMessage}}</div>
+  {{end}}
+  {{with .RunAnalysis}}
+  <div class="callout info" style="margin-bottom:1rem">
+    <strong>{{.Label}}</strong>
+    <div style="margin-top:.25rem">{{.Detail}}</div>
+  </div>
   {{end}}
 
   {{/* 3 semantic buckets */}}

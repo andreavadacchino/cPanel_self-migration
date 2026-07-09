@@ -404,6 +404,23 @@ func writeValidatedConfigAt(dir string, c yamlConfig) error {
 	if err != nil {
 		return err
 	}
+	return writeAndValidateConfigBytes(dir, b)
+}
+
+func validateConfigCandidate(c yamlConfig) error {
+	b, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp("", "csm-config-validate-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+	return writeAndValidateConfigBytes(tmpDir, b)
+}
+
+func writeAndValidateConfigBytes(dir string, b []byte) error {
 	f, err := os.CreateTemp(dir, "host.yaml.*.tmp")
 	if err != nil {
 		return err
@@ -667,13 +684,27 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		})
 	case action == "exec":
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.wbExec.handleExec(w, r, sessionID)
+			sess, err := s.workbench.store.Get(sessionID)
+			if err != nil {
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			}
+			exec := *s.wbExec
+			exec.dir = sessionWorkDir(sess, s.wbExec.dir)
+			exec.handleExec(w, r, sessionID)
 		})
 	case action == "start-migration":
 		// Fase 3: one strong confirmation runs the automatic, in-scope, safe
 		// phases in sequence (DNS excluded), stop-on-first-failure.
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.wbExec.handleStartMigration(w, r, sessionID, "/workbench/session/"+sessionID+"/"+screenMigrazione)
+			sess, err := s.workbench.store.Get(sessionID)
+			if err != nil {
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			}
+			exec := *s.wbExec
+			exec.dir = sessionWorkDir(sess, s.wbExec.dir)
+			exec.handleStartMigration(w, r, sessionID, "/workbench/session/"+sessionID+"/"+screenMigrazione)
 		})
 	case action == "scope":
 		// Fase 2: confirm/refine the migration scope after the preflight, then
@@ -685,7 +716,12 @@ func (s *server) routeWorkbench(w http.ResponseWriter, r *http.Request) bool {
 		// Register an operator acceptance from the Conferme screen, then return
 		// to that screen (the dashboard /accept still returns to "/").
 		s.post(w, r, func(w http.ResponseWriter, r *http.Request) {
-			s.saveAcceptTo(w, r, "/workbench/session/"+sessionID+"/"+screenConferme)
+			sess, err := s.workbench.store.Get(sessionID)
+			if err != nil {
+				http.Error(w, "session not found", http.StatusNotFound)
+				return
+			}
+			s.saveAcceptInDir(w, r, "/workbench/session/"+sessionID+"/"+screenConferme, sessionWorkDir(sess, s.dir))
 		})
 	default:
 		http.NotFound(w, r)
