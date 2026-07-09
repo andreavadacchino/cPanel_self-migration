@@ -122,7 +122,7 @@ def redact_value(value: Any) -> Any:
     return _redact_scalar(value)
 
 
-def _json_output(status: str, steps: dict[str, bool], notes: list[str]) -> str:
+def _json_output(status: str, steps: dict[str, Any], notes: list[str]) -> str:
     payload = {
         "status": status,
         "steps": steps,
@@ -164,6 +164,15 @@ def load_config() -> tuple[SmokeConfig | None, list[str]]:
     if missing:
         return None, missing
 
+    # M2: SMOKE_DEST_MAILBOX_USER must be a local-part. Accept a full address
+    # only when its domain matches SMOKE_DOMAIN; otherwise fail closed so we
+    # never build a doubled 'user@domain@domain' target downstream.
+    dest_user, dest_user_error = _normalize_local_part(
+        required["SMOKE_DEST_MAILBOX_USER"] or "", required["SMOKE_DOMAIN"] or ""
+    )
+    if dest_user_error:
+        return None, [dest_user_error]
+
     host = _env("DEST_IMAP_HOST") or _strip_scheme(required["DEST_CPANEL_HOST"] or "")
     port_raw = _env("DEST_IMAP_PORT") or "993"
     cfg = SmokeConfig(
@@ -179,7 +188,7 @@ def load_config() -> tuple[SmokeConfig | None, list[str]]:
         smoke_domain=required["SMOKE_DOMAIN"] or "",
         smoke_mailbox_user=required["SMOKE_MAILBOX_USER"] or "",
         smoke_mailbox_old_password=required["SMOKE_MAILBOX_OLD_PASSWORD"] or "",
-        smoke_dest_mailbox_user=required["SMOKE_DEST_MAILBOX_USER"] or "",
+        smoke_dest_mailbox_user=dest_user,
         dest_imap_host=host,
         dest_imap_port=int(port_raw),
         source_maildir_path=_env("SOURCE_MAILDIR_PATH"),
@@ -193,6 +202,27 @@ def _strip_scheme(host: str) -> str:
         return host
     parsed = urllib.parse.urlparse(host)
     return parsed.hostname or host
+
+
+def _normalize_local_part(value: str, domain: str) -> tuple[str, str | None]:
+    """Return ``(local_part, error)`` for a mailbox user value.
+
+    A bare local-part is returned unchanged. A full ``user@dom`` address is
+    accepted (returning only ``user``) *only* when ``dom`` equals ``domain``;
+    any other case returns a clear error so the caller can fail closed instead
+    of constructing a doubled ``user@domain@domain`` target.
+    """
+    if "@" not in value:
+        return value, None
+    local, _, dom = value.partition("@")
+    if not local:
+        return "", "SMOKE_DEST_MAILBOX_USER invalid (empty local-part)"
+    if dom.lower() != domain.lower():
+        return "", (
+            "SMOKE_DEST_MAILBOX_USER domain mismatch "
+            "(must be a local-part or match SMOKE_DOMAIN)"
+        )
+    return local, None
 
 
 def build_dry_run_plan(cfg: SmokeConfig | None, missing: list[str]) -> dict[str, Any]:
@@ -218,6 +248,10 @@ def build_dry_run_plan(cfg: SmokeConfig | None, missing: list[str]) -> dict[str,
                 "SOURCE_SSH_PASSWORD is not supported by this harness.",
                 "Private key path is redacted to basename only: "
                 f"{_path_basename(cfg.source_ssh_key_path) or 'n/a'}.",
+                "Live mode runs a destination mailbox pre-check via "
+                "Email::list_pops before add_pop.",
+                "On add_pop rejection, sanitized cPanel diagnostics "
+                "(status + error text) are surfaced.",
             ]
         )
     return {
@@ -225,6 +259,7 @@ def build_dry_run_plan(cfg: SmokeConfig | None, missing: list[str]) -> dict[str,
         "steps": {
             "source_shadow_readable": False,
             "source_hash_found": False,
+            "destination_mailbox_preexisting": None,
             "destination_mailbox_created": False,
             "login_verified": False,
             "redaction_verified": True,
@@ -304,13 +339,24 @@ def _read_source_hash(cfg: SmokeConfig) -> str:
     return value
 
 
-def _cpanel_request(cfg: SmokeConfig, function: str, params: dict[str, str]) -> dict[str, Any]:
+def _cpanel_request(
+    cfg: SmokeConfig,
+    function: str,
+    params: dict[str, str],
+    method: str = "POST",
+) -> dict[str, Any]:
     host = cfg.dest_cpanel_host
     if "://" not in host:
         host = f"https://{host}"
-    url = f"{host.rstrip('/')}/execute/Email/{function}"
-    body = urllib.parse.urlencode(params).encode("utf-8")
-    request = urllib.request.Request(url, data=body, method="POST")
+    base_url = f"{host.rstrip('/')}/execute/Email/{function}"
+    encoded = urllib.parse.urlencode(params)
+    if method.upper() == "GET":
+        url = f"{base_url}?{encoded}" if encoded else base_url
+        data = None
+    else:
+        url = base_url
+        data = encoded.encode("utf-8")
+    request = urllib.request.Request(url, data=data, method=method.upper())
     if cfg.dest_cpanel_token:
         request.add_header(
             "Authorization", f"cpanel {cfg.dest_cpanel_user}:{cfg.dest_cpanel_token}"
@@ -333,7 +379,100 @@ def _cpanel_request(cfg: SmokeConfig, function: str, params: dict[str, str]) -> 
     return payload
 
 
-def _create_destination_mailbox(cfg: SmokeConfig, password_hash: str) -> None:
+def _sanitize_cpanel_text(text: Any) -> str:
+    """Redact secrets from cPanel-provided text and neutralize transport
+    tokens so echoed diagnostics never trip the global secret tripwire.
+
+    ``_redact_scalar`` already strips hashes, filesystem paths, and known
+    secret values; we additionally collapse the ``key=value`` transport forms
+    (``password_hash=``, ``token=``, ``authorization: cpanel``) that
+    ``_assert_no_secrets`` bans outright, so a legitimate error string that
+    happens to mention them can still be surfaced instead of failing closed.
+    """
+    redacted = _redact_scalar(str(text))
+    redacted = re.sub(
+        r"(?i)password_hash\s*=\s*\S*", "password_hash [redacted]", redacted
+    )
+    redacted = re.sub(r"(?i)\btoken\s*=\s*\S*", "token [redacted]", redacted)
+    redacted = re.sub(
+        r"(?i)authorization:\s*cpanel\S*", "authorization [redacted]", redacted
+    )
+    return redacted
+
+
+def _summarize_cpanel_errors(payload: dict[str, Any]) -> list[str]:
+    """Extract sanitized diagnostics from a UAPI (apiversion 3) response.
+
+    UAPI nests the outcome under ``result`` with an ``errors`` list; some
+    transport-level failures surface at the top level instead. Everything is
+    sanitized before being returned as human-readable notes so the operator
+    can see *why* the destination rejected the request without leaking values.
+    """
+    result = payload.get("result") or {}
+    notes: list[str] = [f"cPanel add_pop result.status={result.get('status')!r}."]
+    found_text = False
+    for label, source in (
+        ("error", result.get("errors")),
+        ("message", result.get("messages")),
+        ("top-level error", payload.get("errors")),
+    ):
+        if not source:
+            continue
+        items = source if isinstance(source, list) else [source]
+        for item in items:
+            found_text = True
+            notes.append(f"cPanel {label}: {_sanitize_cpanel_text(item)}")
+    if not found_text:
+        notes.append(
+            "cPanel returned no structured error text; inspect destination "
+            "account feature limits or password_hash acceptance policy."
+        )
+    return notes
+
+
+def _destination_mailbox_exists(cfg: SmokeConfig) -> bool:
+    """Return True if the destination mailbox already exists.
+
+    Uses UAPI ``Email::list_pops`` (a read) so a live run can distinguish
+    'add_pop was a no-op because the mailbox already existed' from 'add_pop
+    genuinely failed'. This is a pre-check, never a mutation.
+    """
+    payload = _cpanel_request(cfg, "list_pops", {}, method="GET")
+    result = payload.get("result") or {}
+    data = result.get("data") or []
+    target = f"{cfg.smoke_dest_mailbox_user}@{cfg.smoke_domain}".lower()
+    for entry in data:
+        if isinstance(entry, dict):
+            email = str(entry.get("email") or entry.get("login") or "")
+        else:
+            email = str(entry)
+        if email.lower() == target:
+            return True
+    return False
+
+
+def _cpanel_failure_reason(payload: dict[str, Any]) -> str:
+    """One-line, sanitized reason derived from a UAPI failure response.
+
+    Prefers the first real error/message text; falls back to the status code.
+    Never hardcodes an assumed cause (e.g. 'rejected password_hash') so an
+    'already exists' or feature-limit failure is not mislabeled.
+    """
+    result = payload.get("result") or {}
+    for source in (result.get("errors"), result.get("messages"), payload.get("errors")):
+        if not source:
+            continue
+        items = source if isinstance(source, list) else [source]
+        for item in items:
+            text = _sanitize_cpanel_text(item).strip()
+            if text:
+                return text
+    return f"status={result.get('status')!r}, no structured error text"
+
+
+def _create_destination_mailbox(
+    cfg: SmokeConfig, password_hash: str
+) -> tuple[bool, list[str]]:
     payload = _cpanel_request(
         cfg,
         "add_pop",
@@ -345,8 +484,12 @@ def _create_destination_mailbox(cfg: SmokeConfig, password_hash: str) -> None:
         },
     )
     result = payload.get("result") or {}
-    if result.get("status") != 1:
-        raise RuntimeError("destination rejected password_hash")
+    if result.get("status") == 1:
+        return True, ["destination add_pop accepted password_hash"]
+    # Label derived from the real cPanel context, not a hardcoded assumption.
+    diagnostics = ["destination add_pop failed: " + _cpanel_failure_reason(payload)]
+    diagnostics.extend(_summarize_cpanel_errors(payload))
+    return False, diagnostics
 
 
 def _verify_imap_login(cfg: SmokeConfig) -> None:
@@ -364,9 +507,10 @@ def _verify_imap_login(cfg: SmokeConfig) -> None:
 
 
 def execute_live_smoke(cfg: SmokeConfig) -> dict[str, Any]:
-    steps = {
+    steps: dict[str, Any] = {
         "source_shadow_readable": False,
         "source_hash_found": False,
+        "destination_mailbox_preexisting": None,
         "destination_mailbox_created": False,
         "login_verified": False,
         "redaction_verified": True,
@@ -379,8 +523,41 @@ def execute_live_smoke(cfg: SmokeConfig) -> dict[str, Any]:
         password_hash = _read_source_hash(cfg)
         steps["source_shadow_readable"] = True
         steps["source_hash_found"] = True
-        _create_destination_mailbox(cfg, password_hash)
-        steps["destination_mailbox_created"] = True
+
+        # Explicit pre-check: does the destination mailbox already exist? This
+        # disambiguates a later destination_mailbox_created=False. A failing
+        # pre-check must never mask the smoke result, so it is non-fatal and
+        # leaves preexisting=None (inconclusive).
+        try:
+            steps["destination_mailbox_preexisting"] = _destination_mailbox_exists(cfg)
+            notes.append(
+                "Destination mailbox pre-check: "
+                + ("already present" if steps["destination_mailbox_preexisting"] else "not present")
+                + "."
+            )
+        except Exception as exc:
+            notes.append(
+                "Destination mailbox pre-check failed (inconclusive): " + str(exc)
+            )
+
+        # F1: if the mailbox already exists, add_pop cannot set a password_hash
+        # on it and would fail spuriously ("already exists"). Skip add_pop and
+        # IMAP entirely; this is a blocked precondition, never a pass. Only a
+        # conclusive preexisting=True gates it — an inconclusive None proceeds.
+        if steps["destination_mailbox_preexisting"] is True:
+            notes.append("destination mailbox already exists; add_pop skipped")
+            notes.append(
+                "hash injection for existing mailbox requires a separate "
+                "passwd_pop/update-password path, not add_pop"
+            )
+            return {"status": "blocked", "steps": steps, "notes": notes}
+
+        created, create_notes = _create_destination_mailbox(cfg, password_hash)
+        notes.extend(create_notes)
+        steps["destination_mailbox_created"] = created
+        if not created:
+            return {"status": "fail", "steps": steps, "notes": notes}
+
         _verify_imap_login(cfg)
         steps["login_verified"] = True
         return {"status": "pass", "steps": steps, "notes": notes}
