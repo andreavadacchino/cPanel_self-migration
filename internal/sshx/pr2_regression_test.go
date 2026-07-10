@@ -74,7 +74,7 @@ func TestDialCancelledCtxDrains(t *testing.T) {
 	addr, _ := signalClosedServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	c, err := sshx.Dial(ctx, "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	c, err := sshx.Dial(ctx, "test", addr, "u", sshx.PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err == nil || c != nil {
 		t.Fatalf("cancelled ctx: want (nil, error), got (%v, %v)", c, err)
 	}

@@ -24,13 +24,8 @@ var DialRetries = 3
 // connection in a *Client, stashing the dial recipe so a later keepalive-observed
 // drop can self-heal (Client.heal), and starts the keepalive loop — preserving
 // Dial's original contract.
-func dialWithRetry(ctx context.Context, name, addr, user, pass string, timeout, keepalive time.Duration, hostKeyCB ssh.HostKeyCallback) (*Client, error) {
-	cfg := &ssh.ClientConfig{
-		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.Password(pass)},
-		HostKeyCallback: hostKeyCB,
-		Timeout:         timeout,
-	}
+func dialWithRetry(ctx context.Context, name, addr, user string, auth Authentication, timeout, keepalive time.Duration, hostKeyCB ssh.HostKeyCallback) (*Client, error) {
+	cfg := newClientConfig(user, auth, hostKeyCB, timeout)
 	cli, err := dialAttempts(ctx, name, addr, timeout, cfg)
 	if err != nil {
 		return nil, err
@@ -43,7 +38,7 @@ func dialWithRetry(ctx context.Context, name, addr, user, pass string, timeout, 
 		stopKA:    make(chan struct{}),
 		addr:      addr,
 		user:      user,
-		pass:      pass,
+		auth:      auth,
 		timeout:   timeout,
 		keepalive: keepalive,
 		hostKeyCB: hostKeyCB,

@@ -66,7 +66,7 @@ func TestDialSilentBannerAbortsWithinTimeout(t *testing.T) {
 	addr, _ := silentBannerServer(t)
 	start := time.Now()
 	err := withTimeout(t, deadlockTimeout, func() error {
-		_, e := Dial(context.Background(), "test", addr, "u", "p", 300*time.Millisecond, 0, ssh.InsecureIgnoreHostKey())
+		_, e := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 300*time.Millisecond, 0, ssh.InsecureIgnoreHostKey())
 		return e
 	})
 	if err == nil {
@@ -89,7 +89,7 @@ func TestDialSilentBannerAbortsWithinTimeout(t *testing.T) {
 // timeout — no leaked goroutine/socket. Run under -race.
 func TestDialSilentBannerReclaimsConn(t *testing.T) {
 	addr, closed := silentBannerServer(t)
-	_, err := Dial(context.Background(), "test", addr, "u", "p", 300*time.Millisecond, 0, ssh.InsecureIgnoreHostKey())
+	_, err := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 300*time.Millisecond, 0, ssh.InsecureIgnoreHostKey())
 	if err == nil {
 		t.Fatal("dial against a silent-banner peer must fail")
 	}
@@ -123,7 +123,7 @@ func TestDialAbortClosesOwnedConn(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	c, err := Dial(ctx, "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	c, err := Dial(ctx, "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err == nil || c != nil {
 		t.Fatalf("cancelled ctx: want (nil, error), got (%v, %v)", c, err)
 	}
@@ -178,7 +178,7 @@ func TestDialAbortNeverReturnsLiveClientOnDoneCtx(t *testing.T) {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		c, err := Dial(ctx, "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+		c, err := Dial(ctx, "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 		if raw != nil {
 			_ = raw.Close() // release the real conn this iteration
 		}
@@ -202,7 +202,7 @@ func TestDialParentCancelClassifiedAsCancel(t *testing.T) {
 	}()
 	err := withTimeout(t, deadlockTimeout, func() error {
 		// timeout (5s) >> cancel delay (50ms), so the parent cancel wins.
-		_, e := Dial(ctx, "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+		_, e := Dial(ctx, "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 		return e
 	})
 	if err == nil || !errors.Is(err, context.Canceled) {
@@ -221,7 +221,7 @@ func TestDialSuccessNoLingeringDeadline(t *testing.T) {
 		_, _ = io.WriteString(stdout, "ok")
 		return 0
 	})
-	c, err := Dial(context.Background(), "test", addr, "u", "p", 300*time.Millisecond, 0, ssh.InsecureIgnoreHostKey())
+	c, err := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 300*time.Millisecond, 0, ssh.InsecureIgnoreHostKey())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

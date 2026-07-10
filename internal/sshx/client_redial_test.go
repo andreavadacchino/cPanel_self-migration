@@ -248,7 +248,7 @@ func TestRedialBoundedWhenDestStaysDown(t *testing.T) {
 // loop) against a no-reply server so the probe times out deterministically.
 func TestKeepaliveProbeReportsTimeoutWithoutKilling(t *testing.T) {
 	addr := noReplyServer(t)
-	c, err := Dial(context.Background(), "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	c, err := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestKeepaliveProbeReportsTimeoutWithoutKilling(t *testing.T) {
 // intervals before the transport is marked dead, then self-heal (DEAD, not CLOSED).
 func TestKeepaliveLoopToleratesMissesBeforeMarkingDead(t *testing.T) {
 	addr := noReplyServer(t)
-	c, err := Dial(context.Background(), "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	c, err := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestPoolCloseRacesKeepaliveNoRedial(t *testing.T) {
 // redials do not leak goroutines.
 func TestKeepaliveLoopNotLeakedOnRedial(t *testing.T) {
 	addr := newCmdServer(t, true, okHandler)
-	c, err := Dial(context.Background(), "test", addr, "u", "p", 5*time.Second, 30*time.Millisecond, ssh.InsecureIgnoreHostKey())
+	c, err := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 5*time.Second, 30*time.Millisecond, ssh.InsecureIgnoreHostKey())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
