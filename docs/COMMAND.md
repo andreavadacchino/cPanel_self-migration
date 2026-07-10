@@ -598,3 +598,33 @@ exit 2.
 
 Exit codes: `0` success, `1` operational error (session not found,
 transition not allowed), `2` usage error (bad flags, unknown kind/status).
+
+## Subcommand: `execute`
+
+The **platform → executor bridge** (ADR-001 §D5). Consumes an
+`execution-spec-v1` JSON document and runs a **governed dry-run** — it
+never writes to the destination. It emits the versioned executor →
+platform output: `execution-event-v1` lines to `events.jsonl` and a final
+`execution-result-v1` `report.json`.
+
+```bash
+cpanel-self-migration execute \
+  --spec ./execution-spec.json \
+  [--config ./host.yaml] \
+  [--output-dir ./out]
+```
+
+The spec carries only **non-secret references** (`plan_id`,
+`source_snapshot_id`, `destination_snapshot_id`, `comparison_report_id`,
+`mode`, `scope`); the connection details and credentials come from
+`host.yaml`, resolved at run time and never taken from the spec. `mode`
+must be `dry_run` and `scope` must select at least one of
+`mail`/`files`/`databases` — both enforced by the contract parser; an
+invalid spec is rejected before any connection.
+
+`Apply` is always false: this command cannot write to the destination
+regardless of the spec.
+
+Exit codes: `0` dry-run completed, `1` input/runtime failure (the
+`report.json` is still written when the run reached it), `2` flag/usage
+error, `130` interrupted.
