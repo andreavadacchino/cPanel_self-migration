@@ -211,6 +211,18 @@ def _key_dns(item: dict) -> str:
     )
 
 
+def _key_forwarder(item: dict) -> str:
+    # A forwarder's identity is the source→destination pair (one source may
+    # forward to several destinations).
+    src = str(item.get("source") or "").strip().lower()
+    dst = str(item.get("destination") or "").strip().lower()
+    return f"{src} → {dst}"
+
+
+def _key_ftp(item: dict) -> str:
+    return str(item.get("user") or item.get("login") or "").strip().lower()
+
+
 @dataclass(frozen=True)
 class _CategorySpec:
     name: str
@@ -312,6 +324,45 @@ _LIST_CATEGORIES: tuple[_CategorySpec, ...] = (
         _key_dns,
         {
             # DNS is re-pointed at cutover; a delta is advisory, never a blocker.
+            State.MISSING_ON_DESTINATION: Severity.WARNING,
+            State.ONLY_ON_DESTINATION: Severity.INFO,
+            State.DIFFERENT: Severity.WARNING,
+        },
+    ),
+    # P1 categories read by the inventory and shown in the coverage matrix; they
+    # are diffed item-by-item here too so a source item missing on the
+    # destination is surfaced (not just tracked for readability in coverage).
+    _CategorySpec(
+        "email_forwarders",
+        "Inoltro email",
+        "email_forwarders",
+        "forwarders",
+        _key_forwarder,
+        {
+            State.MISSING_ON_DESTINATION: Severity.WARNING,
+            State.ONLY_ON_DESTINATION: Severity.INFO,
+            State.DIFFERENT: Severity.WARNING,
+        },
+    ),
+    _CategorySpec(
+        "email_autoresponders",
+        "Risponditore automatico",
+        "email_autoresponders",
+        "autoresponders",
+        _key_email,
+        {
+            State.MISSING_ON_DESTINATION: Severity.WARNING,
+            State.ONLY_ON_DESTINATION: Severity.INFO,
+            State.DIFFERENT: Severity.WARNING,
+        },
+    ),
+    _CategorySpec(
+        "ftp_accounts",
+        "Account FTP",
+        "ftp_accounts",
+        "ftp",
+        _key_ftp,
+        {
             State.MISSING_ON_DESTINATION: Severity.WARNING,
             State.ONLY_ON_DESTINATION: Severity.INFO,
             State.DIFFERENT: Severity.WARNING,
