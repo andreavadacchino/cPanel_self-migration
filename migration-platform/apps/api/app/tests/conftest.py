@@ -33,6 +33,7 @@ from app.main import app
 # Import model modules so their tables are registered on Base.metadata.
 from app.modules.comparison import models as _comparison_models  # noqa: F401
 from app.modules.endpoints import models as _endpoints_models  # noqa: F401
+from app.modules.executions import models as _executions_models  # noqa: F401
 from app.modules.inventory import models as _inventory_models  # noqa: F401
 from app.modules.jobs import models as _jobs_models  # noqa: F401
 from app.modules.migrations import models as _migrations_models  # noqa: F401

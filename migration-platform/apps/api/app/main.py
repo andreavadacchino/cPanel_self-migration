@@ -12,6 +12,10 @@ from app.modules.endpoints.router import (
     endpoints_router,
     migration_endpoints_router,
 )
+from app.modules.executions.router import (
+    executions_router,
+    migration_executions_router,
+)
 from app.modules.health.router import router as health_router
 from app.modules.inventory.router import (
     capabilities_router,
@@ -48,6 +52,9 @@ def create_app() -> FastAPI:
     app.include_router(capabilities_router)
     app.include_router(comparison_router)
     app.include_router(plan_router)
+    # Read-only: listing and fetching executions. Nothing here starts a run.
+    app.include_router(migration_executions_router)
+    app.include_router(executions_router)
 
     return app
 
