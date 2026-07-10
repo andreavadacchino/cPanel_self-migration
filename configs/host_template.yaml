@@ -5,13 +5,31 @@
 #
 # The SOURCE host is ALWAYS read-only. All writes target the DESTINATION.
 # ============================
+#
+# ---- SSH AUTHENTICATION ----
+# Each host authenticates with EXACTLY ONE method — a password OR a private key.
+# Setting both, or neither, is a configuration error (the tool refuses to run;
+# there is no implicit precedence). Source and destination may use DIFFERENT
+# methods (e.g. source by key, destination by password).
+#
+#   Password:      ssh_pass: "your_password"
+#   Private key:   ssh_key_path: "/path/to/id_ed25519"
+#                  ssh_key_passphrase: "..."   # ONLY for an encrypted key; omit otherwise
+#
+# ssh_key_path may be absolute, or relative to THIS file's directory (never the
+# shell's working directory). No "~" expansion. Keep the private key file with
+# restrictive permissions (e.g. 0600), just like host.yaml itself. SSH agents are
+# NOT supported in this phase. Host-key trust is unchanged (TOFU accept-new).
+# ============================
 
 # ---- SOURCE server (analyzed first; never written to) ----
 src:
   ip: "192.168.1.100"
   port: 22
   ssh_user: "your_cpanel_user"   # the cPanel ACCOUNT user (user-level SSH; root/WHM NOT needed)
-  ssh_pass: "your_password"
+  ssh_pass: "your_password"      # OR use a key instead (see below), not both
+  # ssh_key_path: "/run/secrets/source_ssh_key"
+  # ssh_key_passphrase: ""       # only if the key is encrypted
   timeout: "10s"        # max time to establish the connection
 
 # ---- DESTINATION server (all writes go here) ----
@@ -19,7 +37,9 @@ dest:
   ip: "192.168.1.200"
   port: 22
   ssh_user: "your_cpanel_user"   # the cPanel ACCOUNT user (user-level SSH; root/WHM NOT needed)
-  ssh_pass: "your_password"
+  ssh_pass: "your_password"      # OR use a key instead (see above), not both
+  # ssh_key_path: "keys/dest_id_ed25519"   # relative to this file's directory
+  # ssh_key_passphrase: ""
   timeout: "10s"
 # Fill in EVERY dest field, or remove the whole `dest:` block to run a
 # source-only analysis. A partially-filled dest (e.g. a forgotten ssh_pass) is

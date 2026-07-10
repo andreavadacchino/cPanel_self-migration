@@ -25,7 +25,7 @@ cpanel-self-migration [--apply|--apply-mirror|--dry-run] [--mail] [--file] [--db
 | `--force-sync`            | Alias of `--full`.                                                  |
 | `--verify-checksums`      | With `--apply`: stricter mailbox skip (compare message-ID set); also enables the deep mail content check below. |
 | `--deep-verify`           | With `--apply`: verify by CONTENT hash, not metadata — sha256 per web file + per mail message, exact DB row counts + same-version table checksum. Catches same-size corruption; slower (reads every byte on both sides). |
-| `--config PATH`           | Path to `host.yaml` (default: `configs/host.yaml`).               |
+| `--config PATH`           | Path to `host.yaml` (default: `configs/host.yaml`). Each host authenticates with **either** `ssh_pass` **or** `ssh_key_path` (+ `ssh_key_passphrase` if encrypted), never both; a relative key path resolves against the config file's directory. |
 | `--log-level info\|debug` | Verbosity (`debug` → diagnostics to stderr). Default `info`.       |
 | `--run-id ID`             | Optional run identifier for structured output. Default: auto-generated `run-YYYYMMDD-HHMMSS`. |
 | `--output-dir DIR`        | Output directory for all artifacts (default: CWD). Created if missing. |

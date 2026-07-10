@@ -69,14 +69,43 @@ dest:                      # DESTINATION — receives all writes
 #     password: "the_db_password"
 ```
 
+### SSH authentication: password OR private key
+
+Each host authenticates with **exactly one** method — a password or a private
+key. Setting **both** (or **neither**) is a configuration error: the tool refuses
+to run rather than silently pick one. Source and destination may use **different**
+methods.
+
+```yaml
+# Password (as above):
+src:
+  ssh_pass: "********"
+
+# Unencrypted private key:
+src:
+  ssh_key_path: "/run/secrets/source_ssh_key"
+
+# Encrypted private key (passphrase ONLY for an encrypted key):
+src:
+  ssh_key_path: "keys/id_ed25519"          # relative to host.yaml's directory
+  ssh_key_passphrase: "the-key-passphrase"
+```
+
+`ssh_key_path` may be **absolute**, or **relative to the directory of the
+`host.yaml` file** (never the shell's working directory); there is no `~`
+expansion. Keep the private key file with restrictive permissions (e.g. `0600`),
+just like `host.yaml` itself. **SSH agents are not supported** in this phase, and
+the host-key policy is unchanged (TOFU accept-new). Old password-only configs
+keep working with no change.
+
 The file is auto-discovered at `configs/host.yaml` (next to the binary or in the
 current directory); override the path with `--config`.
 
 If the `dest` section is **entirely** absent, the tool only runs the **SOURCE
 analysis** and stops. A **partially-filled** `dest` (some fields set, others
-missing — e.g. a forgotten `ssh_pass`) is treated as a mistake and **rejected
-with a clear error**, rather than being silently ignored (which would run a
-source-only analysis with no migration and no warning).
+missing — e.g. a forgotten auth method or `ip`) is treated as a mistake and
+**rejected with a clear error**, rather than being silently ignored (which would
+run a source-only analysis with no migration and no warning).
 
 > The cPanel **account password** (the `ssh_pass`) doubles as the MySQL
 > credential the tool uses to dump databases on the SOURCE (the account user is
