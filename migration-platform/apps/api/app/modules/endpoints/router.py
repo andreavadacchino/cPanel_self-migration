@@ -65,8 +65,15 @@ def update_endpoint(
     return service.update_endpoint(db, endpoint_id, payload)
 
 
+# response_model=None is explicit: a ``-> None`` return annotation is otherwise
+# read as a NoneType response body, which makes route registration assert
+# "Status code 204 must not have a response body" on fastapi>=0.111's low end
+# (0.111.x) and crashes app import. Explicit None disables the response model so
+# the 204 stays body-less across the whole supported FastAPI range.
 @endpoints_router.delete(
-    "/{endpoint_id}", status_code=status.HTTP_204_NO_CONTENT
+    "/{endpoint_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
 )
 def delete_endpoint(
     endpoint_id: int, db: Session = Depends(get_db)

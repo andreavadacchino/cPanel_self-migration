@@ -212,6 +212,21 @@ export interface ComparisonReport {
   updated_at: string
 }
 
+// A failed HTTP response. Carries the status so callers can react to a specific
+// code (e.g. treat only 404 as "not found yet") instead of swallowing every
+// error. A network failure never becomes an ApiError — it stays the original
+// TypeError thrown by fetch(), so runtime failures also surface.
+export class ApiError extends Error {
+  readonly status: number
+  readonly body?: unknown
+  constructor(message: string, status: number, body?: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
+
 // FastAPI reports errors in `detail`, which is a string for our domain errors
 // (404/409/422 raised by services) but a *list* of {loc,msg,...} objects for
 // request-validation errors. Coerce every shape to a readable string so the UI
@@ -241,15 +256,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     let detail = `Errore API (${response.status})`
+    let body: unknown
     try {
-      const body = (await response.json()) as { detail?: unknown }
-      if (body?.detail !== undefined && body.detail !== null) {
-        detail = formatApiError(body.detail, response.status)
+      body = await response.json()
+      const d = (body as { detail?: unknown })?.detail
+      if (d !== undefined && d !== null) {
+        detail = formatApiError(d, response.status)
       }
     } catch {
       // response had no JSON body; keep the status-based message
     }
-    throw new Error(detail)
+    throw new ApiError(detail, response.status, body)
   }
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
@@ -425,8 +442,10 @@ export async function fetchPlan(
 ): Promise<MigrationPlan | null> {
   try {
     return await request<MigrationPlan>(`/api/migrations/${migrationId}/plan`)
-  } catch {
-    // 404 → no plan generated yet.
-    return null
+  } catch (err) {
+    // Only a 404 means "no plan generated yet". Every other error (500, 401/
+    // 403, 409, network) must surface so the UI never hides a real failure.
+    if (err instanceof ApiError && err.status === 404) return null
+    throw err
   }
 }
