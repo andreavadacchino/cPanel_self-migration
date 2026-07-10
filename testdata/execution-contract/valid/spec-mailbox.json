@@ -1,0 +1,16 @@
+{
+  "format_version": 1,
+  "run_id": "run-20260710-120000",
+  "plan_id": 1,
+  "source_snapshot_id": 2,
+  "destination_snapshot_id": 3,
+  "comparison_report_id": 4,
+  "mode": "dry_run",
+  "scope": {
+    "mail": true,
+    "files": true,
+    "databases": false,
+    "domain_filter": "example.com",
+    "mailbox_filter": "user@example.com"
+  }
+}

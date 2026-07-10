@@ -1,0 +1,309 @@
+{
+  "description": "Shared fixture corpus for execution-contract v1. Go and Python read this same file; a fixture must be accepted or rejected identically by both, and a rejection must carry the declared error substring. See docs/JSON_EVENTS.md and docs/ADR_V2_GO_EXECUTOR.md. The invalid/ corpus includes regressions for every Go/Python divergence found by differential fuzzing: int64 overflow, non-JSON whitespace, byte-vs-codepoint run_id length, colon in artifact paths, calendar-invalid and year-zero timestamps, and sub-microsecond finished_at ordering.",
+  "format_version": 1,
+  "fixtures": [
+    {
+      "path": "valid/spec-minimal.json",
+      "kind": "spec",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/spec-mailbox.json",
+      "kind": "spec",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/event-run-started.json",
+      "kind": "event",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/event-phase-completed.json",
+      "kind": "event",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/event-redacted-nested.json",
+      "kind": "event",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/event-extra-field.json",
+      "kind": "event",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/result-success.json",
+      "kind": "result",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/result-interrupted.json",
+      "kind": "result",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/result-extra-field.json",
+      "kind": "result",
+      "expected_valid": true
+    },
+    {
+      "path": "invalid/spec-missing-version.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "missing field: format_version"
+    },
+    {
+      "path": "invalid/spec-future-version.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "unsupported format_version"
+    },
+    {
+      "path": "invalid/spec-version-float.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field format_version"
+    },
+    {
+      "path": "invalid/spec-unknown-field.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "unknown field: output_dir"
+    },
+    {
+      "path": "invalid/spec-secret-field.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "unknown field: ssh_pass"
+    },
+    {
+      "path": "invalid/spec-no-scope.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "missing field: scope"
+    },
+    {
+      "path": "invalid/spec-scope-empty.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "at least one of mail, files, databases"
+    },
+    {
+      "path": "invalid/spec-scope-bool-as-string.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field scope.mail"
+    },
+    {
+      "path": "invalid/spec-mailbox-without-mail.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field mailbox_filter"
+    },
+    {
+      "path": "invalid/spec-invalid-run-id.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field run_id"
+    },
+    {
+      "path": "invalid/spec-id-as-string.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field plan_id"
+    },
+    {
+      "path": "invalid/spec-id-as-bool.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field plan_id"
+    },
+    {
+      "path": "invalid/spec-mode-apply.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field mode"
+    },
+    {
+      "path": "invalid/spec-trailing-json.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "trailing JSON after document"
+    },
+    {
+      "path": "invalid/event-missing-version.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "missing field: format_version"
+    },
+    {
+      "path": "invalid/event-future-version.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "unsupported format_version"
+    },
+    {
+      "path": "invalid/event-unknown-level.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "unknown level"
+    },
+    {
+      "path": "invalid/event-unknown-phase.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "unknown phase"
+    },
+    {
+      "path": "invalid/event-unknown-event-type.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "unknown event type"
+    },
+    {
+      "path": "invalid/event-unredacted-password.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "is not redacted"
+    },
+    {
+      "path": "invalid/event-unredacted-token-nested.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "is not redacted"
+    },
+    {
+      "path": "invalid/event-unredacted-object-secret.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "is not redacted"
+    },
+    {
+      "path": "invalid/event-invalid-timestamp.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field ts"
+    },
+    {
+      "path": "invalid/event-timestamp-no-timezone.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field ts"
+    },
+    {
+      "path": "invalid/event-missing-source.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "missing field: source"
+    },
+    {
+      "path": "invalid/result-missing-version.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "missing field: format_version"
+    },
+    {
+      "path": "invalid/result-future-version.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "unsupported format_version"
+    },
+    {
+      "path": "invalid/result-unknown-exit-status.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "unknown exit status"
+    },
+    {
+      "path": "invalid/result-finished-before-started.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "finished_at is before started_at"
+    },
+    {
+      "path": "invalid/result-empty-executor-version.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field version"
+    },
+    {
+      "path": "invalid/result-unknown-phase-completed.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field phases_completed"
+    },
+    {
+      "path": "invalid/result-absolute-artifact.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "invalid artifact path"
+    },
+    {
+      "path": "invalid/result-parent-traversal-artifact.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "invalid artifact path"
+    },
+    {
+      "path": "invalid/result-windows-parent-traversal.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "invalid artifact path"
+    },
+    {
+      "path": "invalid/result-windows-drive-artifact.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "invalid artifact path"
+    },
+    {
+      "path": "invalid/result-unredacted-warning-key.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "is not redacted"
+    },
+    {
+      "path": "invalid/spec-id-overflow-int64.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field plan_id"
+    },
+    {
+      "path": "invalid/spec-run-id-too-long-utf8.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field run_id"
+    },
+    {
+      "path": "invalid/spec-leading-form-feed.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid JSON"
+    },
+    {
+      "path": "invalid/event-calendar-invalid-timestamp.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field ts"
+    },
+    {
+      "path": "invalid/event-year-zero-timestamp.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field ts"
+    },
+    {
+      "path": "invalid/result-artifact-colon.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "invalid artifact path"
+    },
+    {
+      "path": "invalid/result-finished-before-started-nanos.json",
+      "kind": "result",
+      "expected_valid": false,
+      "expected_error_substring": "finished_at is before started_at"
+    }
+  ]
+}
