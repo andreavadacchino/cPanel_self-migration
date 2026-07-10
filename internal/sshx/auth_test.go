@@ -44,15 +44,34 @@ func TestPrivateKeyAuthEncryptedMissingPassphrase(t *testing.T) {
 	assertErrClean(t, err, "s3cr3t-phrase")
 }
 
-// A wrong passphrase errors, and the error must NOT contain the passphrase.
+// A wrong passphrase errors with a message DISTINCT from a malformed-key error
+// (so an operator can tell "bad passphrase" from "unsupported key format"), and the
+// error must NOT contain the passphrase.
 func TestPrivateKeyAuthWrongPassphrase(t *testing.T) {
 	keyPath, _ := genKeyFile(t, "the-real-passphrase")
 	_, err := PrivateKeyAuth(keyPath, "wrong-guess-123")
 	if err == nil {
 		t.Fatal("a wrong passphrase must error")
 	}
+	if !strings.Contains(err.Error(), "passphrase") {
+		t.Errorf("wrong-passphrase error should name the passphrase as the cause, got %v", err)
+	}
 	assertErrClean(t, err, "wrong-guess-123")
 	assertErrClean(t, err, "the-real-passphrase")
+
+	// The wrong-passphrase message must differ from a malformed-key message: pass a
+	// passphrase to garbage bytes and confirm the two error strings are not identical.
+	bogus := filepath.Join(t.TempDir(), "bogus")
+	if werr := os.WriteFile(bogus, []byte("not a key"), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	_, malformedErr := PrivateKeyAuth(bogus, "any-passphrase")
+	if malformedErr == nil {
+		t.Fatal("a malformed key must error")
+	}
+	if err.Error() == malformedErr.Error() {
+		t.Errorf("wrong-passphrase and malformed-key errors must differ, both were %q", err.Error())
+	}
 }
 
 // Garbage bytes are not a valid key; the error must not echo the file content.

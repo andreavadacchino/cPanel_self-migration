@@ -1,6 +1,7 @@
 package sshx
 
 import (
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"os"
@@ -79,10 +80,16 @@ func PrivateKeyAuth(keyPath, passphrase string) (Authentication, error) {
 	} else {
 		signer, err = ssh.ParsePrivateKeyWithPassphrase(keyBytes, []byte(passphrase))
 		if err != nil {
-			// A wrong passphrase surfaces as x509.IncorrectPasswordError
-			// ("x509: decryption password incorrect") — no passphrase echoed. Rewrap
-			// with a stable, self-explanatory prefix; the passphrase never appears.
-			return Authentication{}, fmt.Errorf("parse encrypted private key (wrong passphrase or unsupported key): %w", err)
+			// Distinguish the two operationally-different failures (neither message
+			// echoes the passphrase or the PEM): a WRONG passphrase surfaces as
+			// x509.IncorrectPasswordError (for OpenSSH keys, a check1/check2 mismatch
+			// after bcrypt decrypt), whereas a malformed/unsupported key is any other
+			// parse error. Reporting them the same way hid a common operator mistake
+			// (bad passphrase) behind a generic "unsupported key" wording.
+			if errors.Is(err, x509.IncorrectPasswordError) {
+				return Authentication{}, errors.New("incorrect private key passphrase")
+			}
+			return Authentication{}, fmt.Errorf("parse encrypted private key: %w", err)
 		}
 	}
 	return Authentication{methods: []ssh.AuthMethod{ssh.PublicKeys(signer)}, method: "private_key"}, nil
