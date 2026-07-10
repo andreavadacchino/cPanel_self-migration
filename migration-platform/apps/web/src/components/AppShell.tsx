@@ -10,7 +10,7 @@ export default function AppShell({ children }: AppShellProps) {
   return (
     <div className="app-shell">
       <Sidebar />
-      <div>
+      <div className="app-shell__main">
         <Topbar />
         <main className="content">{children}</main>
       </div>
