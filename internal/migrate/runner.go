@@ -60,10 +60,10 @@ type Options struct {
 	// OnlyMailbox, when non-empty (local@domain), narrows the run to exactly one
 	// ACTIVE mailbox; it is inherently mail-only.
 	OnlyMailbox string
-	OutputDir string // where artifacts (logs) are written
-	Now       time.Time
-	RunID     string         // optional; generated if empty
-	Events    events.Emitter // optional; zero value = no events emitted
+	OutputDir   string // where artifacts (logs) are written
+	Now         time.Time
+	RunID       string         // optional; generated if empty
+	Events      events.Emitter // optional; zero value = no events emitted
 }
 
 // timeFormat is the timestamp layout used in the log artifacts.
@@ -225,6 +225,13 @@ func Run(ctx context.Context, cfg config.Config, opts Options) error {
 	opts.DoMail, opts.DoFile, opts.DoDB = doMail, doFile, doDB
 	if opts.Apply && !destConfigured {
 		return fmt.Errorf("apply mode requires a configured destination; fill dest in host.yaml or run without --apply for source-only analysis")
+	}
+	// A key-authenticated SOURCE cannot supply the MySQL account credential the DB
+	// apply/verify path needs (it is derived from the source ssh_pass). Reject the
+	// combination fail-fast — before any dial or write — instead of running mysql with
+	// an empty password. Source-only DB analysis (UAPI) and file/mail runs are fine.
+	if err := validateSourceAuthForDBApply(cfg, opts); err != nil {
+		return err
 	}
 	// The --domain/--mailbox filters narrow a MIGRATION (compare against, and write
 	// to, a destination). Source-only analysis (no dest configured) covers the whole
@@ -540,6 +547,23 @@ func validateScopeCombos(opts Options) error {
 	}
 	if opts.OnlyDomain != "" && opts.DoDB {
 		return fmt.Errorf("--domain does not support databases (cPanel databases are account-wide); drop --db")
+	}
+	return nil
+}
+
+// validateSourceAuthForDBApply rejects APPLYING a database migration when the SOURCE
+// authenticates with a private key. The DB apply/verify path (applyDBs/verifyDBs ->
+// dbmig) derives the source MySQL account credential from ssh_pass — the cPanel
+// convention that the account password is also its MySQL password — so a
+// key-authenticated source (no ssh_pass) would run mysql/mysqldump with an EMPTY
+// password. That is exactly the silent degradation this project fails loudly on, so
+// reject it here. It fires ONLY for apply + database scope + a key source: source-only
+// DB analysis uses UAPI (no MySQL login), and file/mail runs never need the credential,
+// so those keep working with key auth; a password source is unaffected. Pure and
+// unit-tested. opts must carry the RESOLVED DoDB (Run sets it before calling this).
+func validateSourceAuthForDBApply(cfg config.Config, opts Options) error {
+	if opts.Apply && opts.DoDB && cfg.Src.SSHKeyPath != "" {
+		return fmt.Errorf("database migration is not supported with a key-authenticated source: the source MySQL credential is derived from the source ssh_pass, which a private-key source does not provide — use a password for the source, or exclude databases from the run")
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/logx"
@@ -17,12 +18,40 @@ import (
 )
 
 // HostConfig holds the SSH coordinates for one cPanel host.
+//
+// Authentication is EXACTLY ONE of a password (SSHPass) or a private key
+// (SSHKeyPath); Load rejects a host that sets both or neither. SSHKeyPassphrase
+// applies only to an encrypted SSHKeyPath. A relative SSHKeyPath is resolved by
+// Load against the directory of the config file (never the process CWD).
 type HostConfig struct {
-	IP      string        `yaml:"ip"`
-	Port    int           `yaml:"port"`
-	SSHUser string        `yaml:"ssh_user"`
-	SSHPass string        `yaml:"ssh_pass"`
-	Timeout time.Duration `yaml:"timeout"`
+	IP               string        `yaml:"ip"`
+	Port             int           `yaml:"port"`
+	SSHUser          string        `yaml:"ssh_user"`
+	SSHPass          string        `yaml:"ssh_pass"`
+	SSHKeyPath       string        `yaml:"ssh_key_path"`
+	SSHKeyPassphrase string        `yaml:"ssh_key_passphrase"`
+	Timeout          time.Duration `yaml:"timeout"`
+}
+
+// hasAuth reports whether the host has any SSH authentication method configured.
+// After a successful Load, validate() guarantees EXACTLY one of pass/key is set,
+// so this is equivalent to "authentication is usable".
+func (h HostConfig) hasAuth() bool {
+	return h.SSHPass != "" || h.SSHKeyPath != ""
+}
+
+// AuthMethod returns a NON-SENSITIVE label of the configured authentication
+// method ("private_key", "password", or "none") for logging. It never exposes the
+// password, passphrase or key material.
+func (h HostConfig) AuthMethod() string {
+	switch {
+	case h.SSHKeyPath != "":
+		return "private_key"
+	case h.SSHPass != "":
+		return "password"
+	default:
+		return "none"
+	}
 }
 
 // DatabaseCred is an OPTIONAL per-database credential override/fallback for the
@@ -120,6 +149,15 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("parse config %q: multiple YAML documents are not supported", path)
 	}
 
+	// Resolve a RELATIVE ssh_key_path against the CONFIG FILE's directory (not the
+	// process CWD), so `ssh_key_path: keys/id` always refers to <configdir>/keys/id
+	// regardless of where the binary is launched. An absolute path is left verbatim;
+	// no ~ expansion, no shell interpretation. The file is NOT read here — a missing
+	// or unreadable key surfaces later, contextually, when the auth is built.
+	baseDir := filepath.Dir(path)
+	cfg.Src.SSHKeyPath = resolveKeyPath(baseDir, cfg.Src.SSHKeyPath)
+	cfg.Dest.SSHKeyPath = resolveKeyPath(baseDir, cfg.Dest.SSHKeyPath)
+
 	if err := cfg.Src.validate("src"); err != nil {
 		return Config{}, err
 	}
@@ -130,8 +168,10 @@ func Load(path string) (Config, error) {
 	// the run would silently do source-only analysis, with no migration and no
 	// warning, looking as if it had "nothing to do".
 	if cfg.destIntended() {
-		logx.Debug("config: destination block treated as intended (ip=%v ssh_user=%v ssh_pass=%v port=%d timeout=%v) — validating it",
-			cfg.Dest.IP != "", cfg.Dest.SSHUser != "", cfg.Dest.SSHPass != "", cfg.Dest.Port, cfg.Dest.Timeout)
+		// Log only WHICH fields are present and the auth METHOD name — never the
+		// password, passphrase or key path value.
+		logx.Debug("config: destination block treated as intended (ip=%v ssh_user=%v auth_method=%s port=%d timeout=%v) — validating it",
+			cfg.Dest.IP != "", cfg.Dest.SSHUser != "", cfg.Dest.AuthMethod(), cfg.Dest.Port, cfg.Dest.Timeout)
 		if err := cfg.Dest.validate("dest"); err != nil {
 			return Config{}, err
 		}
@@ -141,19 +181,29 @@ func Load(path string) (Config, error) {
 	}
 	// Summary of what loaded (NEVER the passwords): src/dest endpoints, whether
 	// the destination is configured, and how many optional db overrides exist.
-	logx.Debug("config loaded: src=%s@%s:%d, dest configured=%v (%s@%s:%d), %d db override(s)",
-		cfg.Src.SSHUser, cfg.Src.IP, cfg.Src.Port, cfg.DestConfigured(),
-		cfg.Dest.SSHUser, cfg.Dest.IP, cfg.Dest.Port, len(cfg.Databases))
+	logx.Debug("config loaded: src=%s@%s:%d auth=%s, dest configured=%v (%s@%s:%d auth=%s), %d db override(s)",
+		cfg.Src.SSHUser, cfg.Src.IP, cfg.Src.Port, cfg.Src.AuthMethod(), cfg.DestConfigured(),
+		cfg.Dest.SSHUser, cfg.Dest.IP, cfg.Dest.Port, cfg.Dest.AuthMethod(), len(cfg.Databases))
 	return cfg, nil
 }
 
+// resolveKeyPath makes a relative ssh_key_path absolute against baseDir (the
+// directory of the config file). Empty and already-absolute paths are returned
+// unchanged. filepath.Join performs no ~ expansion and no shell interpretation.
+func resolveKeyPath(baseDir, p string) string {
+	if p == "" || filepath.IsAbs(p) {
+		return p
+	}
+	return filepath.Join(baseDir, p)
+}
+
 // DestConfigured reports whether the destination host has the minimum fields
-// set (ip, ssh_user, ssh_pass). After a successful Load this is equivalent to
-// destIntended (validate requires all three once any is present), so the caller
-// can use it to choose source-only vs. a full migration without re-checking for
-// a half-filled block.
+// set (ip, ssh_user, and ONE authentication method — password OR private key).
+// After a successful Load this is equivalent to destIntended (validate requires
+// ip+user+one-auth once any field is present), so the caller can use it to choose
+// source-only vs. a full migration without re-checking for a half-filled block.
 func (c Config) DestConfigured() bool {
-	return c.Dest.IP != "" && c.Dest.SSHUser != "" && c.Dest.SSHPass != ""
+	return c.Dest.IP != "" && c.Dest.SSHUser != "" && c.Dest.hasAuth()
 }
 
 // destIntended reports whether the destination block looks like the operator meant
@@ -165,6 +215,7 @@ func (c Config) DestConfigured() bool {
 // an absent dest block has Port==0 and Timeout==0 and stays correctly source-only.
 func (c Config) destIntended() bool {
 	return c.Dest.IP != "" || c.Dest.SSHUser != "" || c.Dest.SSHPass != "" ||
+		c.Dest.SSHKeyPath != "" || c.Dest.SSHKeyPassphrase != "" ||
 		c.Dest.Port != 0 || c.Dest.Timeout != 0
 }
 
@@ -175,8 +226,19 @@ func (h HostConfig) validate(which string) error {
 	if h.SSHUser == "" {
 		return fmt.Errorf("config %s: ssh_user is required", which)
 	}
-	if h.SSHPass == "" {
-		return fmt.Errorf("config %s: ssh_pass is required", which)
+	// Exactly one authentication method: password OR private key, never both, never
+	// neither. No implicit precedence — an ambiguous config fails instead of the tool
+	// silently picking one. Error messages name the FIELDS, never their secret values.
+	hasPass := h.SSHPass != ""
+	hasKey := h.SSHKeyPath != ""
+	switch {
+	case hasPass && hasKey:
+		return fmt.Errorf("config %s: set either ssh_pass or ssh_key_path, not both", which)
+	case !hasPass && !hasKey:
+		return fmt.Errorf("config %s: an SSH authentication method is required (set ssh_pass or ssh_key_path)", which)
+	}
+	if h.SSHKeyPassphrase != "" && !hasKey {
+		return fmt.Errorf("config %s: ssh_key_passphrase is set but ssh_key_path is not (a passphrase only applies to a private key)", which)
 	}
 	if h.Port <= 0 || h.Port > 65535 {
 		return fmt.Errorf("config %s: port %d out of range", which, h.Port)

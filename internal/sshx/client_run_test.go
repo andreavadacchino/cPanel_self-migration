@@ -170,7 +170,7 @@ func TestKeepaliveProbeHealthy(t *testing.T) {
 // once), and Close stops it cleanly.
 func TestKeepaliveLoopRunsAndStops(t *testing.T) {
 	addr := newCmdServer(t, true, okHandler)
-	c, err := Dial(context.Background(), "ka", addr, "u", "p", 5*time.Second, 20*time.Millisecond, ssh.InsecureIgnoreHostKey())
+	c, err := Dial(context.Background(), "ka", addr, "u", PasswordAuth("p"), 5*time.Second, 20*time.Millisecond, ssh.InsecureIgnoreHostKey())
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

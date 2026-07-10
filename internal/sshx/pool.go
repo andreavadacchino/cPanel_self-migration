@@ -72,18 +72,27 @@ func DialBoth(ctx context.Context, cfg config.Config, knownHostsPath string) (*P
 		return nil, err
 	}
 
+	srcAuth, err := AuthFromHost(cfg.Src)
+	if err != nil {
+		return nil, fmt.Errorf("source: %w", err)
+	}
 	src, err := Dial(ctx, "source",
 		net.JoinHostPort(cfg.Src.IP, strconv.Itoa(cfg.Src.Port)),
-		cfg.Src.SSHUser, cfg.Src.SSHPass, cfg.Src.Timeout, keepaliveInterval, cb)
+		cfg.Src.SSHUser, srcAuth, cfg.Src.Timeout, keepaliveInterval, cb)
 	if err != nil {
 		return nil, err
 	}
 
 	p := &Pool{Src: src}
 	if cfg.DestConfigured() {
+		destAuth, err := AuthFromHost(cfg.Dest)
+		if err != nil {
+			_ = src.Close()
+			return nil, fmt.Errorf("dest: %w", err)
+		}
 		dest, err := Dial(ctx, "dest",
 			net.JoinHostPort(cfg.Dest.IP, strconv.Itoa(cfg.Dest.Port)),
-			cfg.Dest.SSHUser, cfg.Dest.SSHPass, cfg.Dest.Timeout, keepaliveInterval, cb)
+			cfg.Dest.SSHUser, destAuth, cfg.Dest.Timeout, keepaliveInterval, cb)
 		if err != nil {
 			_ = src.Close()
 			return nil, err
@@ -103,15 +112,19 @@ func DialDest(ctx context.Context, cfg config.Config, knownHostsPath string) (*C
 		return nil, err
 	}
 	if !cfg.DestConfigured() {
-		return nil, fmt.Errorf("destination host is not configured (ip, ssh_user and ssh_pass are required)")
+		return nil, fmt.Errorf("destination host is not configured (ip, ssh_user and one SSH authentication method are required)")
 	}
 	cb, err := hostKeyCallback(knownHostsPath)
 	if err != nil {
 		return nil, err
 	}
+	destAuth, err := AuthFromHost(cfg.Dest)
+	if err != nil {
+		return nil, fmt.Errorf("dest: %w", err)
+	}
 	return Dial(ctx, "dest",
 		net.JoinHostPort(cfg.Dest.IP, strconv.Itoa(cfg.Dest.Port)),
-		cfg.Dest.SSHUser, cfg.Dest.SSHPass, cfg.Dest.Timeout, keepaliveInterval, cb)
+		cfg.Dest.SSHUser, destAuth, cfg.Dest.Timeout, keepaliveInterval, cb)
 }
 
 // Close shuts down both connections. Safe to call once.

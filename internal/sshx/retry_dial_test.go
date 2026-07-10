@@ -116,7 +116,7 @@ func TestDialRetriesTransientThenSucceeds(t *testing.T) {
 		return origDial(ctx, network, address)
 	}
 
-	c, err := Dial(context.Background(), "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	c, err := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err != nil {
 		t.Fatalf("dial must recover on the 2nd attempt: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestDialDoesNotRetryAuthFailure(t *testing.T) {
 	addr := authRejectServer(t)
 	calls := countingDialer(t)
 
-	_, err := Dial(context.Background(), "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	_, err := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err == nil {
 		t.Fatal("dial against an auth-rejecting server must fail")
 	}
@@ -161,7 +161,7 @@ func TestDialDoesNotRetryHostKeyMismatch(t *testing.T) {
 	}
 	calls := countingDialer(t)
 
-	_, err = Dial(context.Background(), "test", addr, "u", "p", 5*time.Second, 0, cb)
+	_, err = Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, cb)
 	if err == nil {
 		t.Fatal("a changed host key must reject the connection")
 	}
@@ -179,7 +179,7 @@ func TestDialRetriesExhaustsAndReturnsLastError(t *testing.T) {
 	withDialKnobs(t, 3, 0)
 	calls := refusingDialer(t)
 
-	_, err := Dial(context.Background(), "test", "127.0.0.1:1", "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	_, err := Dial(context.Background(), "test", "127.0.0.1:1", "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err == nil {
 		t.Fatal("dial must fail after exhausting all retries")
 	}
@@ -196,7 +196,7 @@ func TestDialRetriesOneIsSingleAttempt(t *testing.T) {
 	withDialKnobs(t, 1, 0)
 	calls := refusingDialer(t)
 
-	if _, err := Dial(context.Background(), "test", "127.0.0.1:1", "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey()); err == nil {
+	if _, err := Dial(context.Background(), "test", "127.0.0.1:1", "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey()); err == nil {
 		t.Fatal("dial must fail")
 	}
 	if got := atomic.LoadInt32(calls); got != 1 {
@@ -210,7 +210,7 @@ func TestDialRetriesZeroClampedToOne(t *testing.T) {
 	withDialKnobs(t, 0, 0)
 	calls := refusingDialer(t)
 
-	_, err := Dial(context.Background(), "test", "127.0.0.1:1", "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	_, err := Dial(context.Background(), "test", "127.0.0.1:1", "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err == nil {
 		t.Fatal("dial must fail")
 	}
@@ -239,7 +239,7 @@ func TestDialRetryHonorsCtxCancelDuringBackoff(t *testing.T) {
 	}
 
 	start := time.Now()
-	_, err := Dial(ctx, "test", "127.0.0.1:1", "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	_, err := Dial(ctx, "test", "127.0.0.1:1", "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel during backoff must return context.Canceled, got %v", err)
 	}

@@ -126,7 +126,7 @@ func runExec(ch ssh.Channel, command string, env []string) {
 // DialExec dials an *sshx.Client to an exec server started by NewExecServer.
 func DialExec(t *testing.T, addr string) *sshx.Client {
 	t.Helper()
-	c, err := sshx.Dial(context.Background(), "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey()) // #nosec G106 -- test-only dialer to an in-process localhost server with an ephemeral key
+	c, err := sshx.Dial(context.Background(), "test", addr, "u", sshx.PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey()) // #nosec G106 -- test-only dialer to an in-process localhost server with an ephemeral key
 	if err != nil {
 		t.Fatalf("dial %s: %v", addr, err)
 	}

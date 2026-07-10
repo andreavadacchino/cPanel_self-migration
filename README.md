@@ -113,6 +113,22 @@ dest:                      # DESTINATION, receives all writes
   timeout: "10s"
 ```
 
+Each host authenticates with **either** a password (`ssh_pass`) **or** a private
+key (`ssh_key_path`, plus `ssh_key_passphrase` only if the key is encrypted) —
+exactly one, never both. Source and destination may use different methods. A
+relative `ssh_key_path` is resolved against the `host.yaml` directory (no `~`
+expansion); keep the key file `0600`. SSH agents are not supported yet, and the
+host-key policy (TOFU accept-new) is unchanged.
+
+```yaml
+src:                        # example: source by key, destination by password
+  ip: "192.0.2.10"
+  port: 22
+  ssh_user: "your_cpanel_user"
+  ssh_key_path: "/run/secrets/source_ssh_key"
+  timeout: "10s"
+```
+
 The binary finds this config next to itself, so you can run it from any directory.
 (Building from source instead? Copy `configs/host_template.yaml` to
 `configs/host.yaml` and `chmod 600` it.)

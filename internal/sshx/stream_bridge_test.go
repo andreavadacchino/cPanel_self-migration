@@ -111,7 +111,7 @@ func bigWriter(_ string, ch ssh.Channel) {
 
 func dialTest(t *testing.T, addr string) *Client {
 	t.Helper()
-	c, err := Dial(context.Background(), "test", addr, "u", "p", 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
+	c, err := Dial(context.Background(), "test", addr, "u", PasswordAuth("p"), 5*time.Second, 0, ssh.InsecureIgnoreHostKey())
 	if err != nil {
 		t.Fatalf("dial test server: %v", err)
 	}

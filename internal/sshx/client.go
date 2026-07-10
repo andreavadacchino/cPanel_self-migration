@@ -2,7 +2,8 @@
 //
 // It uses a single reusable *ssh.Client per host (channels are multiplexed over
 // one TCP connection, so every remote command and every tar stream reuses one
-// auth). Passwords are held only in memory and never appear in argv/ps/env.
+// auth). A host authenticates with EITHER a password OR a private key (see
+// Authentication); both are held only in memory and never appear in argv/ps/env.
 //
 // Host keys follow OpenSSH's "accept-new" policy: an unknown host is trusted
 // and recorded; a host whose key has CHANGED is rejected with an error.
@@ -51,12 +52,14 @@ type Client struct {
 	redials atomic.Int64 // count of successful redials (test seam + diagnostics)
 
 	// Dial recipe, stashed once at construction and read under mu on redial so a heal
-	// rebuilds the EXACT same authenticated connection (same TOFU host-key callback).
-	// pass is held in memory for the connection's lifetime (in-process only — never
-	// argv/ps/env); the live authenticated *ssh.Client already implies that exposure.
+	// rebuilds the EXACT same authenticated connection via newClientConfig (same auth
+	// method — password OR private key — and same TOFU host-key callback). auth holds
+	// the already-parsed credential in memory for the connection's lifetime (in-process
+	// only — never argv/ps/env); an encrypted key is NOT re-read on redial. The live
+	// authenticated *ssh.Client already implies that in-memory exposure.
 	addr      string
 	user      string
-	pass      string
+	auth      Authentication
 	timeout   time.Duration
 	keepalive time.Duration
 	hostKeyCB ssh.HostKeyCallback
@@ -119,15 +122,11 @@ func (c *Client) heal(ctx context.Context, gotGen uint64) (*ssh.Client, error) {
 }
 
 // redialLocked builds a fresh authenticated *ssh.Client from the stashed dial recipe
-// (bounded by ctx + DialRetries inside dialAttempts). The caller must hold c.mu.
+// via the SAME newClientConfig builder the initial dial used (bounded by ctx +
+// DialRetries inside dialAttempts), so the redial's auth method is byte-for-byte the
+// initial dial's — never a password fabricated as a fallback. The caller must hold c.mu.
 func (c *Client) redialLocked(ctx context.Context) (*ssh.Client, error) {
-	cfg := &ssh.ClientConfig{
-		User:            c.user,
-		Auth:            []ssh.AuthMethod{ssh.Password(c.pass)},
-		HostKeyCallback: c.hostKeyCB,
-		Timeout:         c.timeout,
-	}
-	return dialAttempts(ctx, c.name, c.addr, c.timeout, cfg)
+	return dialAttempts(ctx, c.name, c.addr, c.timeout, newClientConfig(c.user, c.auth, c.hostKeyCB, c.timeout))
 }
 
 // newSession opens a session and tracks the live count for debug diagnostics. It
@@ -186,15 +185,17 @@ func (c *Client) closeSession(sess *ssh.Session, what string) {
 	logx.Debug("%s: session closed [%s] — now %d open", c.name, what, n)
 }
 
-// Dial opens a password-authenticated SSH connection to addr (host:port).
+// Dial opens an SSH connection to addr (host:port) authenticated with auth — a
+// password OR a private key (see Authentication). The same auth is reused verbatim
+// on every self-heal redial.
 //
 // hostKeyCB enforces the host-key policy (see AcceptNewHostKey). keepalive, if
 // > 0, sends an SSH keepalive at that interval. timeout bounds the WHOLE
 // connection setup — TCP connect, banner, key exchange and auth — not just the
 // TCP connect, and a transient connect failure is retried up to DialRetries
 // times. The actual dial+retry lives in dialWithRetry (retry.go).
-func Dial(ctx context.Context, name, addr, user, pass string, timeout, keepalive time.Duration, hostKeyCB ssh.HostKeyCallback) (*Client, error) {
-	return dialWithRetry(ctx, name, addr, user, pass, timeout, keepalive, hostKeyCB)
+func Dial(ctx context.Context, name, addr, user string, auth Authentication, timeout, keepalive time.Duration, hostKeyCB ssh.HostKeyCallback) (*Client, error) {
+	return dialWithRetry(ctx, name, addr, user, auth, timeout, keepalive, hostKeyCB)
 }
 
 // dialContext is the TCP-dial seam. It defaults to a plain context-aware dialer
