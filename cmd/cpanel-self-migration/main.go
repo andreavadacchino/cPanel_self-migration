@@ -533,16 +533,22 @@ func (c *phaseCollector) applyPhaseSeen() bool {
 // apply run that failed before runApply (connect/analyze error) must not
 // claim a stale log left by a previous run. events.jsonl is recorded only
 // when --json-events was set (this run created it).
+//
+// The recorded VALUE is the slash-separated path relative to outDir, while the
+// existence check runs against the absolute path. report.json travels to an
+// orchestrator that resolves artifacts inside its own per-run workspace, so an
+// absolute path from the executor's filesystem would be meaningless there — and
+// execution-result-v1 rejects absolute paths and `..` segments outright.
 func runArtifacts(outDir string, applyPhaseSeen, jsonEvents bool) map[string]string {
 	arts := map[string]string{}
 	if applyPhaseSeen {
 		if p := filepath.Join(outDir, "logs", "migration_report.log"); fileIsRegular(p) {
-			arts["migration_report_log"] = p
+			arts["migration_report_log"] = "logs/migration_report.log"
 		}
 	}
 	if jsonEvents {
 		if p := filepath.Join(outDir, "events.jsonl"); fileIsRegular(p) {
-			arts["events_jsonl"] = p
+			arts["events_jsonl"] = "events.jsonl"
 		}
 	}
 	return arts
