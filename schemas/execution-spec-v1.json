@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cpanel-self-migration:schema:execution-spec:v1",
+  "title": "execution-spec-v1",
+  "description": "Input contract, platform -> executor. Persisted by the control plane and handed to the Go execution engine. Carries references and non-secret data only: no host, no path, no argv, no environment variable, no password, no token, no key, no passphrase, no credential reference, and no output_dir (the workspace belongs to the worker, not to the persisted spec). Version 1 governs a dry run and nothing else. Unknown fields are rejected at every level: a field the executor does not understand may be a field the operator believes is being honoured. This schema describes structure; cross-field rules (scope must select at least one area, mailbox_filter requires mail, domain_filter requires mail or files) live in the semantic validators internal/executioncontract/contract.go and domain/execution_contract.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "run_id",
+    "plan_id",
+    "source_snapshot_id",
+    "destination_snapshot_id",
+    "comparison_report_id",
+    "mode",
+    "scope"
+  ],
+  "properties": {
+    "format_version": {
+      "description": "Document format version. Absent, zero, and future versions are rejected; there is no silent downgrade. Not the executor build version, which appears only as execution-result-v1.version.",
+      "type": "integer",
+      "const": 1
+    },
+    "run_id": {
+      "description": "Run identifier. Same rules as events.ValidateRunID: non-empty, at most 128 characters, no forward slash, no backslash, no NUL byte. The NUL exclusion is enforced by the semantic validators; it is not expressible as a JSON Schema pattern.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^/\\\\]+$"
+    },
+    "plan_id": {
+      "description": "The migration plan this execution is anchored to: the plan the operator actually saw.",
+      "type": "integer",
+      "exclusiveMinimum": 0
+    },
+    "source_snapshot_id": {
+      "description": "Inventory snapshot of the source, as it was when the plan was produced.",
+      "type": "integer",
+      "exclusiveMinimum": 0
+    },
+    "destination_snapshot_id": {
+      "description": "Inventory snapshot of the destination, as it was when the plan was produced.",
+      "type": "integer",
+      "exclusiveMinimum": 0
+    },
+    "comparison_report_id": {
+      "description": "Comparison report the plan derives its severities from.",
+      "type": "integer",
+      "exclusiveMinimum": 0
+    },
+    "mode": {
+      "description": "Only dry_run in v1. Note the underscore: the executor's report emits mode as dry-run (hyphen), apply, or account-inventory. Input and output modes are different enums over different vocabularies and must never be merged.",
+      "type": "string",
+      "const": "dry_run"
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    }
+  },
+  "$defs": {
+    "scope": {
+      "title": "spec scope",
+      "description": "What the run covers. The three booleans are required and never defaulted: an absent mail must not mean false in one language and an error in the other. DNS is absent by design — it stays inventoried, compared and surfaced as a manual task, never auto-run.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mail",
+        "files",
+        "databases"
+      ],
+      "properties": {
+        "mail": {
+          "type": "boolean"
+        },
+        "files": {
+          "type": "boolean"
+        },
+        "databases": {
+          "type": "boolean"
+        },
+        "domain_filter": {
+          "description": "Restrict the run to one domain. Valid only when mail or files is true.",
+          "type": "string",
+          "minLength": 1
+        },
+        "mailbox_filter": {
+          "description": "Restrict the run to one mailbox. Valid only when mail is true.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

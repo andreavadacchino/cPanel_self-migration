@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cpanel-self-migration:schema:execution-result:v1",
+  "title": "execution-result-v1",
+  "description": "Output contract, executor -> platform: report.json. DERIVED from internal/events.RunReport. Additional top-level properties are tolerated (additive evolution), under the same recursive redaction rule as execution-event-v1. Cross-field rules (finished_at >= started_at) and artifact path confinement live in the semantic validators.",
+  "type": "object",
+  "required": [
+    "format_version",
+    "run_id",
+    "version",
+    "mode",
+    "scope",
+    "source",
+    "destination",
+    "started_at",
+    "finished_at",
+    "exit_status",
+    "phases_completed",
+    "warnings",
+    "errors"
+  ],
+  "properties": {
+    "format_version": {
+      "description": "Document format version. Absent, zero, and future versions are rejected. This is the DOCUMENT version, not the executor build version.",
+      "type": "integer",
+      "const": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^/\\\\]+$",
+      "description": "Run identifier; same rules as events.ValidateRunID."
+    },
+    "version": {
+      "description": "The EXECUTOR BUILD version (internal/version, set via ldflags). This is NOT the document format version — that is format_version. The two are deliberately distinct fields and must never be merged.",
+      "type": "string",
+      "minLength": 1
+    },
+    "mode": {
+      "description": "What the executor did. Note the hyphen in dry-run: execution-spec-v1.mode uses dry_run with an underscore. Input and output speak different mode vocabularies.",
+      "type": "string",
+      "enum": [
+        "dry-run",
+        "apply",
+        "account-inventory"
+      ]
+    },
+    "scope": {
+      "title": "report scope",
+      "description": "events.ReportScope: a record of what ran. Unlike the spec's scope it has no 'at least one true' rule — an account-inventory report legitimately carries all three false.",
+      "type": "object",
+      "required": [
+        "mail",
+        "files",
+        "databases"
+      ],
+      "properties": {
+        "mail": {
+          "type": "boolean"
+        },
+        "files": {
+          "type": "boolean"
+        },
+        "databases": {
+          "type": "boolean"
+        },
+        "domain_filter": {
+          "type": "string"
+        },
+        "mailbox_filter": {
+          "type": "string"
+        }
+      }
+    },
+    "source": {
+      "title": "host reference",
+      "description": "events.HostRef. A non-pointer Go struct, so `omitempty` never fires: the key is always present in the JSON, and both members are always present, possibly as \"\". Never carries a password, a key, or a port.",
+      "type": "object",
+      "required": [
+        "ip",
+        "user"
+      ],
+      "properties": {
+        "ip": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        }
+      }
+    },
+    "destination": {
+      "title": "host reference",
+      "description": "events.HostRef. A non-pointer Go struct, so `omitempty` never fires: the key is always present in the JSON, and both members are always present, possibly as \"\". Never carries a password, a key, or a port.",
+      "type": "object",
+      "required": [
+        "ip",
+        "user"
+      ],
+      "properties": {
+        "ip": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        }
+      }
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "finished_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+      "description": "Must not precede started_at; enforced by the semantic validators."
+    },
+    "exit_status": {
+      "type": "string",
+      "enum": [
+        "success",
+        "failed",
+        "interrupted"
+      ]
+    },
+    "phases_completed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "connect",
+          "analyze_mail",
+          "analyze_files",
+          "analyze_db",
+          "gather_data",
+          "compare_mail",
+          "compare_files",
+          "compare_db",
+          "create_domains",
+          "migrate_mail",
+          "verify_mail",
+          "copy_files",
+          "verify_files",
+          "migrate_db",
+          "verify_db"
+        ]
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "artifacts": {
+      "description": "Artifact name -> path, omitted when empty. Paths are slash-separated and relative to the run workspace. The platform resolves them against a directory it owns, so the semantic validators reject absolute paths, Windows drive letters, UNC prefixes, '..' segments (under either separator) and NUL bytes: an escaping path is a write-anywhere primitive.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

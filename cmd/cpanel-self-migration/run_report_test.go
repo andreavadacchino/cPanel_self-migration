@@ -108,9 +108,11 @@ func TestRunArtifactsChecksExistence(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The existence check runs against the absolute path, but the recorded
+	// value is workspace-relative: execution-result-v1 rejects absolute paths.
 	arts := runArtifacts(outDir, true, true)
-	if arts["migration_report_log"] != repLog || arts["events_jsonl"] != evPath {
-		t.Errorf("artifacts = %v, want both files recorded", arts)
+	if arts["migration_report_log"] != "logs/migration_report.log" || arts["events_jsonl"] != "events.jsonl" {
+		t.Errorf("artifacts = %v, want both files recorded as workspace-relative paths", arts)
 	}
 
 	// No apply phase seen (dry-run, or an apply run that died before

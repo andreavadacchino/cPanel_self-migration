@@ -13,6 +13,24 @@ var sensitiveSubstrings = []string{
 
 const redactedPlaceholder = "<redacted>"
 
+// RedactedPlaceholder is the value a redacted field carries. Exported so a
+// contract validator checks the same literal the writer emits.
+const RedactedPlaceholder = redactedPlaceholder
+
+// IsSensitiveKey reports whether a JSON key triggers redaction. Exported so
+// the execution-contract validator shares this exact predicate instead of
+// re-declaring the substring list, which would silently drift.
+func IsSensitiveKey(k string) bool { return isSensitiveKey(k) }
+
+// SensitiveSubstrings returns a copy of the substrings that mark a key as
+// sensitive. Used by cross-language tests to assert the Python validator has
+// not drifted from this list.
+func SensitiveSubstrings() []string {
+	out := make([]string, len(sensitiveSubstrings))
+	copy(out, sensitiveSubstrings)
+	return out
+}
+
 func isSensitiveKey(k string) bool {
 	lower := strings.ToLower(strings.TrimSpace(k))
 	for _, sub := range sensitiveSubstrings {

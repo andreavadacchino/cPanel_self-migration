@@ -1,0 +1,1 @@
+{"run_id":"run-x","version":"2.2.1","mode":"dry-run","scope":{"mail":true,"files":false,"databases":false},"source":{"ip":"","user":""},"destination":{"ip":"","user":""},"started_at":"2026-07-10T12:00:00Z","finished_at":"2026-07-10T12:05:00Z","exit_status":"success","phases_completed":[],"warnings":[],"errors":[]}

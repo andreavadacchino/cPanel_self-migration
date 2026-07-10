@@ -1,0 +1,15 @@
+{
+  "format_version": 1,
+  "run_id": "run-20260710-120000",
+  "version": "2.2.1",
+  "mode": "account-inventory",
+  "scope": {"mail": false, "files": false, "databases": false},
+  "source": {"ip": "1.2.3.4", "user": "srcuser"},
+  "destination": {"ip": "", "user": ""},
+  "started_at": "2026-07-10T12:00:00Z",
+  "finished_at": "2026-07-10T12:00:00Z",
+  "exit_status": "interrupted",
+  "phases_completed": [],
+  "warnings": ["dns unavailable"],
+  "errors": ["interrupted by signal"]
+}

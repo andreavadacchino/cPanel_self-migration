@@ -1,0 +1,16 @@
+{
+  "format_version": 1,
+  "run_id": "run-20260710-120000",
+  "version": "2.2.1",
+  "mode": "dry-run",
+  "scope": {"mail": true, "files": false, "databases": false},
+  "source": {"ip": "1.2.3.4", "user": "srcuser"},
+  "destination": {"ip": "5.6.7.8", "user": "destuser"},
+  "started_at": "2026-07-10T12:00:00Z",
+  "finished_at": "2026-07-10T12:05:00Z",
+  "exit_status": "success",
+  "phases_completed": ["connect", "analyze_mail"],
+  "warnings": [],
+  "errors": [],
+  "artifacts": {"events_jsonl": "events.jsonl", "migration_report_log": "logs/migration_report.log"}
+}

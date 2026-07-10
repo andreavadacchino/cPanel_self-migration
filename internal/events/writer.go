@@ -33,6 +33,7 @@ func (w *Writer) Write(ev Event) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	safe := ev
+	safe.FormatVersion = CurrentFormatVersion
 	safe.Data = redactData(safe.Data)
 	if err := w.enc.Encode(safe); err != nil {
 		return fmt.Errorf("events: write: %w", err)

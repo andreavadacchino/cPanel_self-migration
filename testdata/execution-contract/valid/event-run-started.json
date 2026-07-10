@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "run_id": "run-20260710-120000",
+  "ts": "2026-07-10T12:00:00.123456Z",
+  "level": "info",
+  "phase": "",
+  "event": "run_started",
+  "message": "run started",
+  "source": {"ip": "", "user": ""},
+  "destination": {"ip": "", "user": ""}
+}

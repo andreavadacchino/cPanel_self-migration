@@ -1,0 +1,19 @@
+{
+  "format_version": 1,
+  "run_id": "run-20260710-120000",
+  "ts": "2026-07-10T12:00:02.5+02:00",
+  "level": "warn",
+  "phase": "migrate_mail",
+  "event": "phase_failed",
+  "message": "mailbox failed",
+  "source": {"ip": "1.2.3.4", "user": "srcuser"},
+  "destination": {"ip": "5.6.7.8", "user": "destuser"},
+  "data": {
+    "mailbox": "user@example.com",
+    "password": "<redacted>",
+    "empty_secret": "",
+    "null_token": null,
+    "nested": {"api_token": "<redacted>", "count": 3},
+    "list": [{"session_id": "<redacted>"}, {"benign": "ok"}]
+  }
+}

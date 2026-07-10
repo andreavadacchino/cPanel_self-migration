@@ -24,23 +24,29 @@ type ReportScope struct {
 	MailboxFilter string `json:"mailbox_filter,omitempty"`
 }
 
+// RunReport is report.json. FormatVersion is stamped by WriteReport.
+//
+// Version is the executor build version (internal/version), NOT the document
+// format version. The two are deliberately distinct fields.
 type RunReport struct {
-	RunID           string     `json:"run_id"`
-	Version         string     `json:"version"`
-	Mode            string     `json:"mode"`
-	Scope           ReportScope `json:"scope"`
-	Source          HostRef    `json:"source"`
-	Dest            HostRef    `json:"destination"`
-	StartedAt       time.Time  `json:"started_at"`
-	FinishedAt      time.Time  `json:"finished_at"`
-	ExitStatus      ExitStatus `json:"exit_status"`
-	PhasesCompleted []Phase    `json:"phases_completed"`
-	Warnings        []string   `json:"warnings"`
-	Errors          []string   `json:"errors"`
+	FormatVersion   int               `json:"format_version"`
+	RunID           string            `json:"run_id"`
+	Version         string            `json:"version"`
+	Mode            string            `json:"mode"`
+	Scope           ReportScope       `json:"scope"`
+	Source          HostRef           `json:"source"`
+	Dest            HostRef           `json:"destination"`
+	StartedAt       time.Time         `json:"started_at"`
+	FinishedAt      time.Time         `json:"finished_at"`
+	ExitStatus      ExitStatus        `json:"exit_status"`
+	PhasesCompleted []Phase           `json:"phases_completed"`
+	Warnings        []string          `json:"warnings"`
+	Errors          []string          `json:"errors"`
 	Artifacts       map[string]string `json:"artifacts,omitempty"`
 }
 
 func WriteReport(path string, r RunReport) error {
+	r.FormatVersion = CurrentFormatVersion
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("events: create directory %s: %w", dir, err)

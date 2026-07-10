@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cpanel-self-migration:schema:execution-event:v1",
+  "title": "execution-event-v1",
+  "description": "Output contract, executor -> platform: one line of events.jsonl. DERIVED from internal/events.Event, not designed anew — the field shapes are whatever the Go writer actually marshals. Additional top-level properties are tolerated so the executor can add purely additive fields without breaking an older platform; an incompatible change requires a new format_version. Tolerating extra keys is not a leak channel: the semantic validators scan every document recursively and reject any sensitive key (token, secret, pass, key, auth, cred, cookie, session, bearer — case-insensitive substring) whose value is neither null, nor \"\", nor \"<redacted>\".",
+  "type": "object",
+  "required": [
+    "format_version",
+    "run_id",
+    "ts",
+    "level",
+    "phase",
+    "event",
+    "message",
+    "source",
+    "destination"
+  ],
+  "properties": {
+    "format_version": {
+      "description": "Document format version. Absent, zero, and future versions are rejected. This is the DOCUMENT version, not the executor build version.",
+      "type": "integer",
+      "const": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[^/\\\\]+$",
+      "description": "Run identifier; same rules as events.ValidateRunID."
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+      "description": "RFC3339 / RFC3339Nano with a timezone. Go emits nanosecond precision."
+    },
+    "level": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warn",
+        "error"
+      ]
+    },
+    "phase": {
+      "description": "Phase enum, plus the empty string. Run-level events (run_started, run_completed, run_failed) carry no phase, and Go's `phase` field has no omitempty, so the writer emits \"\". That is valid, and the schema must say so.",
+      "type": "string",
+      "enum": [
+        "",
+        "connect",
+        "analyze_mail",
+        "analyze_files",
+        "analyze_db",
+        "gather_data",
+        "compare_mail",
+        "compare_files",
+        "compare_db",
+        "create_domains",
+        "migrate_mail",
+        "verify_mail",
+        "copy_files",
+        "verify_files",
+        "migrate_db",
+        "verify_db"
+      ]
+    },
+    "event": {
+      "type": "string",
+      "enum": [
+        "phase_started",
+        "phase_completed",
+        "phase_skipped",
+        "phase_failed",
+        "run_started",
+        "run_completed",
+        "run_failed"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "source": {
+      "title": "host reference",
+      "description": "events.HostRef. A non-pointer Go struct, so `omitempty` never fires: the key is always present in the JSON, and both members are always present, possibly as \"\". Never carries a password, a key, or a port.",
+      "type": "object",
+      "required": [
+        "ip",
+        "user"
+      ],
+      "properties": {
+        "ip": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        }
+      }
+    },
+    "destination": {
+      "title": "host reference",
+      "description": "events.HostRef. A non-pointer Go struct, so `omitempty` never fires: the key is always present in the JSON, and both members are always present, possibly as \"\". Never carries a password, a key, or a port.",
+      "type": "object",
+      "required": [
+        "ip",
+        "user"
+      ],
+      "properties": {
+        "ip": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        }
+      }
+    },
+    "data": {
+      "description": "Free-form payload, extensible. Routed through the redaction net by events.Writer before it is written.",
+      "type": [
+        "object",
+        "array",
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
+    }
+  }
+}
