@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/events"
 )
@@ -302,6 +303,36 @@ func TestCheckArtifactPath(t *testing.T) {
 		if err := checkArtifactPath(p); err != nil {
 			t.Errorf("checkArtifactPath(%q) = %v, want nil", p, err)
 		}
+	}
+}
+
+// TestInvalidUTF8IsRejected pins a shape encoding/json would otherwise accept.
+//
+// Go replaces invalid UTF-8 inside a string with U+FFFD and decodes happily, so
+// a truncated events.jsonl would validate here while Python's decoder raised.
+// Both now reject: silently accepting mojibake in a run_id is worse than failing.
+func TestInvalidUTF8IsRejected(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(fixtureRoot, "invalid/event-invalid-utf8.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if utf8.Valid(raw) {
+		t.Fatal("fixture is supposed to hold invalid UTF-8")
+	}
+	err = ValidateEventJSON(raw)
+	if err == nil {
+		t.Fatal("invalid UTF-8 must be rejected")
+	}
+	if !strings.Contains(err.Error(), "not valid UTF-8") {
+		t.Errorf("error = %q, want it to name the UTF-8 problem", err)
+	}
+	// Trailing garbage bytes must not decode as a valid document either.
+	good, err := os.ReadFile(filepath.Join(fixtureRoot, "valid/event-run-started.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ValidateEventJSON(append(append([]byte{}, good...), 0xA0)) == nil {
+		t.Error("a trailing invalid byte must be rejected")
 	}
 }
 

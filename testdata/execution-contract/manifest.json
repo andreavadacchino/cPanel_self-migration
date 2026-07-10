@@ -304,6 +304,12 @@
       "kind": "result",
       "expected_valid": false,
       "expected_error_substring": "finished_at is before started_at"
+    },
+    {
+      "path": "invalid/event-invalid-utf8.json",
+      "kind": "event",
+      "expected_valid": false,
+      "expected_error_substring": "input is not valid UTF-8"
     }
   ]
 }

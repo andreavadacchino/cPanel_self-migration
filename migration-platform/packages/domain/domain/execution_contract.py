@@ -408,7 +408,17 @@ def _decode_single_object(raw: str | bytes) -> dict[str, Any]:
     ``str.strip()`` also eats U+00A0, U+2028, form feed and friends, which Go's
     decoder rejects — a document one language accepts and the other refuses.
     """
-    text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+    if isinstance(raw, bytes):
+        # Go's encoding/json silently replaces invalid UTF-8 inside strings with
+        # U+FFFD, so a truncated artifact would decode into mojibake there while
+        # raising UnicodeDecodeError here — opposite verdicts, and an exception
+        # this module promises never to raise. Both validators reject instead.
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ContractError("invalid JSON: input is not valid UTF-8") from None
+    else:
+        text = raw
     stripped = text.lstrip(_JSON_WHITESPACE)
     try:
         doc, end = json.JSONDecoder().raw_decode(stripped)

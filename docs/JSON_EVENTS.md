@@ -65,6 +65,11 @@ honoured.
 > Artifacts produced **before** this contract existed carry no `format_version`
 > and are **not** version 1 documents. Nothing here promises to read them.
 
+A document must be valid UTF-8. Go's `encoding/json` would otherwise replace an
+invalid byte inside a string with U+FFFD and decode a truncated artifact into
+mojibake; both validators reject it instead. Silently accepting a corrupted
+`run_id` is worse than failing to read the file.
+
 ## Schemas
 
 JSON Schema, draft 2020-12, in `schemas/`:

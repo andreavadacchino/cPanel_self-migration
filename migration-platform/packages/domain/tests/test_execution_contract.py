@@ -78,7 +78,9 @@ _ALL = _fixtures()
 
 @pytest.mark.parametrize("fixture", _ALL, ids=_ids(_ALL))
 def test_manifest_fixture(fixture: dict) -> None:
-    raw = (FIXTURE_ROOT / fixture["path"]).read_text()
+    # Bytes, not text: one fixture is deliberately not valid UTF-8, and the
+    # validator must be the thing that rejects it, not the test harness.
+    raw = (FIXTURE_ROOT / fixture["path"]).read_bytes()
     validator = VALIDATORS[fixture["kind"]]
 
     if fixture["expected_valid"]:
@@ -364,6 +366,22 @@ def test_only_json_whitespace_is_stripped() -> None:
             validate_event_json(exotic + raw)
         with pytest.raises(ContractError, match="trailing JSON"):
             validate_event_json(raw.rstrip() + exotic)
+
+
+def test_invalid_utf8_raises_contract_error_not_unicodedecodeerror() -> None:
+    """A truncated artifact must be rejected, not crash the validator.
+
+    Go's encoding/json replaces invalid UTF-8 inside strings with U+FFFD and
+    decodes happily, so it used to accept a run_id of mojibake that Python
+    refused. Both now reject, and the exception stays inside the API's contract.
+    """
+    raw = (FIXTURE_ROOT / "invalid" / "event-invalid-utf8.json").read_bytes()
+    with pytest.raises(ContractError, match="not valid UTF-8"):
+        validate_event_json(raw)
+
+    good = (FIXTURE_ROOT / "valid" / "event-run-started.json").read_bytes()
+    with pytest.raises(ContractError, match="not valid UTF-8"):
+        validate_event_json(good + b"\xa0")
 
 
 def test_calendar_invalid_timestamps_raise_contract_error_not_valueerror() -> None:

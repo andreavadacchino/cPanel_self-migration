@@ -34,6 +34,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tis24dev/cPanel_self-migration/internal/events"
 )
@@ -443,6 +444,14 @@ func ValidateResultJSON(raw []byte) error {
 //
 // UseNumber keeps integers exact, so 1.0 is distinguishable from 1.
 func decodeSingleObject(raw []byte) (map[string]any, error) {
+	// encoding/json silently replaces invalid UTF-8 inside strings with U+FFFD,
+	// so a truncated or corrupted artifact would decode "successfully" into
+	// mojibake — and Python's decoder raises instead, giving the two validators
+	// opposite verdicts. Reject the input outright and agree.
+	if !utf8.Valid(raw) {
+		return nil, fmt.Errorf("invalid JSON: input is not valid UTF-8")
+	}
+
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 
