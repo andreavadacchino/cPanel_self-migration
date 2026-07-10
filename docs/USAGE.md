@@ -111,6 +111,14 @@ run a source-only analysis with no migration and no warning).
 > credential the tool uses to dump databases on the SOURCE (the account user is
 > a MySQL user that can read all the account's databases). No per-database
 > passwords are required for the dump.
+>
+> **Limitation:** because the source MySQL credential is derived from the source
+> `ssh_pass`, **applying a database migration is not supported when the SOURCE
+> authenticates with a private key** (there is no `ssh_pass` to reuse). The tool
+> **rejects** that combination up front. Use a password for the source when you
+> need `--db`, or exclude databases from the run (`--mail`/`--file`/`--domain`).
+> Source-only database *analysis* (which uses UAPI, not a MySQL login) and
+> file/mail migration work fine with a key-authenticated source.
 
 ---
 
