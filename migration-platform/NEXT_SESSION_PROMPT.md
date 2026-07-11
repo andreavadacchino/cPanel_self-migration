@@ -159,6 +159,15 @@ Ultima fotografia nota:
   i lati; sorgente quota 6/2 usati, destinazione quota illimitata/1 usato.
 - utenti MySQL sono `eligible_for_real_design`: 6/6 coppie sorgente e 1/1
   destinazione verificate, nessun privilegio fuori contratto.
+- FTP e mailing list hanno ora contract evidence read-only esplicite
+  (`ftp_contract`, `mailing_list_contract`); la fotografia pilota deve essere
+  rigenerata prima di attribuire loro uno stato aggiornato.
+- Forwarder e autoresponder hanno ora evidenze read-only esplicite
+  (`forwarder_contract`, `autoresponder_contract`) per il futuro fresh check;
+  l'evidenza autoresponder esclude body, subject e from.
+- DNS ha ora `dns_contract`: zone proprietarie attese, collision keys, tipi non
+  supportati e strategia fresh-read. I passi conservano `comparison_state` e
+  solo `missing_on_destination` non ambiguo può restare candidato additivo.
 - 3 autoresponder sorgente con dettaglio riuscito, 0 destinazione;
 - i 3 autoresponder sono `missing_on_destination` e ancora `manual`;
 - execution run non dry-run: 0;
@@ -304,8 +313,11 @@ da svolgere. Nessun flag writer è stato abilitato e non esiste dispatch reale.
 
 ## Prossimo incremento richiesto
 
-Completare i contract test read-only rimanenti, in ordine: FTP, mailing list,
-forwarder/autoresponder e DNS. Persistire le evidenze negli snapshot o in un
+I contract test read-only previsti (FTP, mailing list, forwarder,
+autoresponder e DNS) sono completati e persistiti negli snapshot. Il prossimo
+incremento deve consolidare il design del percorso reale senza implementare
+writer o dispatch finché manca una nuova autorizzazione esplicita. Se servono
+nuove evidenze, persistirle negli snapshot o in un
 modello esplicito, escluderle dai passi operativi e aggiornare readiness. Non
 implementare writer reali né dispatch operativo senza nuova autorizzazione.
 
@@ -371,7 +383,7 @@ docker compose exec -T api sh -lc \
   'cd /srv/apps/worker && DRAMATIQ_TESTING=1 python -m pytest worker/tests/test_actors.py'
 ```
 
-Baseline nota: 115 test API, 15 test worker, frontend build verde, Alembic
+Baseline nota: 117 test API, 15 test worker, frontend build verde, Alembic
 `0007_writer_readiness`, stack Docker operativo.
 
 Al termine riferire con precisione file modificati, test eseguiti, limitazioni

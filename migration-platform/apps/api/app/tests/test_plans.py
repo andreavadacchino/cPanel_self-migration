@@ -17,6 +17,11 @@ def test_plan_classifies_and_deduplicates_ftp_subaccount() -> None:
         entry("php_settings", "demo.example.test"),
         entry("mysql_grants", "user@database", state="different", severity="warning"),
         entry("database_contract", "contract", state="different", severity="warning"),
+        entry("ftp_contract", "contract", state="different", severity="warning"),
+        entry("mailing_list_contract", "contract", state="different", severity="warning"),
+        entry("forwarder_contract", "contract", state="different", severity="warning"),
+        entry("autoresponder_contract", "contract", state="different", severity="warning"),
+        entry("dns_contract", "contract", state="different", severity="warning"),
     ])
     by_id = {step["id"]: step for step in steps}
     assert by_id["domains:demo.example.test"]["mode"] == "automatic"
@@ -25,8 +30,14 @@ def test_plan_classifies_and_deduplicates_ftp_subaccount() -> None:
     assert by_id["subaccounts:mailbox"]["mode"] == "excluded"
     assert by_id["subaccounts:account_logs"]["mode"] == "excluded"
     assert by_id["cron_jobs:* * * * *|echo ok"]["mode"] == "approval"
+    assert by_id["cron_jobs:* * * * *|echo ok"]["comparison_state"] == "missing_on_destination"
     assert by_id["php_settings:demo.example.test"]["mode"] == "manual"
     assert by_id["php_settings:demo.example.test"]["depends_on_categories"] == ["domains"]
     assert by_id["mysql_grants:user@database"]["mode"] == "excluded"
     assert by_id["database_contract:contract"]["mode"] == "excluded"
-    assert summary["excluded"] == 5
+    assert by_id["ftp_contract:contract"]["mode"] == "excluded"
+    assert by_id["mailing_list_contract:contract"]["mode"] == "excluded"
+    assert by_id["forwarder_contract:contract"]["mode"] == "excluded"
+    assert by_id["autoresponder_contract:contract"]["mode"] == "excluded"
+    assert by_id["dns_contract:contract"]["mode"] == "excluded"
+    assert summary["excluded"] == 10

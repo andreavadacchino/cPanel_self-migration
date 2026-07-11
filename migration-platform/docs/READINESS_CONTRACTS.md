@@ -62,8 +62,10 @@ marca `excluded` e non crea operazioni duplicate.
 ### FTP
 
 Gli account migrabili devono avere quota e home directory esplicite da
-`Ftp::list_ftp_with_disk`. Il completamento rimuove il gap di inventario, ma il
-writer resta `needs_contract_test`.
+`Ftp::list_ftp_with_disk`. `ftp_contract` valida il mapping read-only
+`login→user/domain/quota/homedir` e richiede il limite
+`maximum_ftp_accounts` leggibile. Il readiness richiede successo su entrambi gli
+endpoint prima di dichiarare la categoria `eligible_for_real_design`.
 
 ### Mailing list
 
@@ -75,12 +77,37 @@ writer resta `needs_contract_test`.
 
 La provenienza è registrata in `_privacy_source`. Nessun valore implicito viene
 inventato; in assenza di evidenza la coverage resta `partial`.
+`mailing_list_contract` valida il mapping read-only
+`address→list/domain/private` e richiede il limite `maximum_mailing_lists`
+leggibile su entrambi gli endpoint.
+
+### Forwarder
+
+`forwarder_contract` normalizza soltanto la coppia completa
+`source→destination` restituita da `Email::list_forwarders`. Una coverage
+riuscita dimostra che il futuro writer potrà ripetere la stessa lettura subito
+prima della scrittura e distinguere una coppia identica da una destinazione
+diversa per lo stesso alias. Il readiness richiede successo su entrambi i lati.
+
+### Autoresponder
+
+`autoresponder_contract` richiede lista per dominio, dettaglio riuscito per ogni
+indirizzo e presenza dei campi obbligatori del futuro writer. L'evidenza salva
+solo indirizzo, nomi dei campi presenti e strategia di fresh read; non copia
+body, subject o from. Il percorso reale dovrà rieseguire lista+dettaglio subito
+prima dell'upsert e bloccare qualsiasi collisione differente.
 
 ### DNS
 
 `DNS::parse_zone` interroga soltanto dominio principale, addon e alias. I
-sottodomini sono record della zona genitore e non zone autonome. Restano da
-implementare collision detection e fresh zone verification pre-write.
+sottodomini sono record della zona genitore e non zone autonome.
+
+`dns_contract` rende esplicite le zone proprietarie attese, la strategia
+`parse_zone_per_owned_zone`, le identità record ambigue e i tipi fuori dal
+contratto additivo. Il planner conserva separatamente `comparison_state`: un
+passo è candidabile soltanto quando è `missing_on_destination`, non ambiguo e di
+tipo supportato. `different` e `unknown` restano `not_ready` e manuali; una
+conferma forte non li trasforma in scritture sicure.
 
 ## Dati esclusi
 
@@ -102,14 +129,13 @@ messaggi di errore o negli eventi aggregati.
 - DNS `not_ready` per collisioni/fresh verification;
 - tutti i writer e `MOCK_ORCHESTRATOR_MODE` disabilitati.
 
-Gli ID sono storici: rileggerli sempre dalle API prima di usarli.
+Gli ID e gli stati sono storici: i nuovi contract richiedono un nuovo preflight,
+comparazione, piano e readiness prima di aggiornare la fotografia pilota.
 
-## Prossimi contratti
+## Contratti pianificati
 
-1. FTP: validazione completa degli argomenti quota/home del futuro writer.
-2. Mailing list: mapping `private` verso `Email::add_list`.
-3. Forwarder e autoresponder: fresh read anti-upsert.
-4. DNS: collisioni, record differenti e rilettura fresca della zona.
+I contract read-only pianificati sono completi. Non costituiscono un execution
+contract reale e non autorizzano l'abilitazione dei writer.
 
 Ogni futuro percorso reale richiederà autorizzazione esplicita separata,
 destinazione-only, conferma forte, nessun overwrite/delete implicito e nuovo

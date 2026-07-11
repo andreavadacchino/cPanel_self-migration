@@ -38,6 +38,13 @@ def test_autoresponder_inventory_collects_full_detail_per_domain() -> None:
     assert responder["from"] == "Support"
     assert responder["interval"] == 8
     assert responder["_detail_status"] == "succeeded"
+    assert data["coverage"]["autoresponder_contract"]["status"] == "succeeded"
+    contract_item = data["autoresponder_contract"]["items"][0]
+    assert contract_item == {"email": "away@example.test", "required_fields_present": ["body", "from", "interval", "subject"], "detail_status": "succeeded"}
+    assert "body" not in contract_item and "subject" not in contract_item and "from" not in contract_item
+    assert "Torno presto" not in str(data["autoresponder_contract"])
+    assert "Support" not in str(data["autoresponder_contract"])
+    assert "Assente" not in str(data["autoresponder_contract"])
 
 
 def test_autoresponder_detail_failure_is_partial_never_empty() -> None:
@@ -46,6 +53,7 @@ def test_autoresponder_detail_failure_is_partial_never_empty() -> None:
     assert coverage["status"] == "partial"
     assert coverage["items_count"] == 1
     assert data["email_autoresponders"][0]["_detail_status"] == "failed"
+    assert data["coverage"]["autoresponder_contract"]["status"] == "failed"
 
 
 def test_autoresponder_comparison_includes_body_and_schedule() -> None:

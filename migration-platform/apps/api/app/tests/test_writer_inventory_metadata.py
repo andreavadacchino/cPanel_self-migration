@@ -16,9 +16,10 @@ class MetadataClient:
             ("Mysql", "list_databases"): [{"database": "acct_app"}],
             ("Mysql", "list_users"): [{"user": "acct_user"}],
             ("Mysql", "get_restrictions"): {"prefix": "acct_", "max_database_name_length": 64, "max_username_length": 32},
-            ("Variables", "get_user_information"): {"maximum_databases": 10},
+            ("Variables", "get_user_information"): {"maximum_databases": 10, "maximum_ftp_accounts": 10, "maximum_mailing_lists": 10},
             ("Ftp", "list_ftp_with_disk"): [{"login": "deploy@example.test", "accttype": "sub", **({"diskquota": 250, "homedir": "/home/acct/site"} if self.complete_ftp else {})}],
             ("Email", "list_lists"): [{"list": "team", "domain": "example.test", **({"private": self.private} if self.private != "missing" else {})}],
+            ("Email", "list_forwarders"): [{"dest": "alias@example.test", "forward": "target@example.test"}],
             ("DNS", "parse_zone"): [],
             ("Email", "list_auto_responders"): [],
             ("Email", "list_filters"): [],
@@ -51,13 +52,21 @@ def test_collects_mysql_grants_ftp_home_quota_and_mailing_privacy() -> None:
     assert data["ftp_accounts"][0]["_writer_metadata_status"] == "succeeded"
     assert data["coverage"]["ftp_accounts"]["status"] == "succeeded"
     assert data["mailing_lists"][0]["_privacy_status"] == "succeeded"
+    assert data["coverage"]["ftp_contract"]["status"] == "succeeded"
+    assert data["ftp_contract"]["mappings"][0]["user"] == "deploy"
+    assert data["coverage"]["mailing_list_contract"]["status"] == "succeeded"
+    assert data["mailing_list_contract"]["mappings"][0] == {"address": "team@example.test", "list": "team", "domain": "example.test", "private": 1}
+    assert data["coverage"]["forwarder_contract"]["status"] == "succeeded"
+    assert data["forwarder_contract"]["mappings"] == [{"source": "alias@example.test", "destination": "target@example.test"}]
 
     categories, _, _, _ = build_report([], data, data)
     by_category = {item["category"]: item for item in categories}
     assert by_category["mysql_users"]["status"] == "eligible_for_real_design"
     assert by_category["databases"]["status"] == "eligible_for_real_design"
-    assert by_category["ftp_accounts"]["status"] == "needs_contract_test"
-    assert by_category["mailing_lists"]["status"] == "needs_contract_test"
+    assert by_category["ftp_accounts"]["status"] == "eligible_for_real_design"
+    assert by_category["mailing_lists"]["status"] == "eligible_for_real_design"
+    assert by_category["email_forwarders"]["status"] == "eligible_for_real_design"
+    assert by_category["email_autoresponders"]["status"] == "eligible_for_real_design"
 
 
 def test_detail_failures_are_partial_and_never_empty() -> None:
@@ -69,6 +78,21 @@ def test_detail_failures_are_partial_and_never_empty() -> None:
     assert data["coverage"]["mailing_lists"]["status"] == "partial"
     assert data["ftp_accounts"][0]["_writer_metadata_status"] == "failed"
     assert data["mailing_lists"][0]["_privacy_status"] == "failed"
+    assert data["coverage"]["ftp_contract"]["status"] == "failed"
+    assert data["coverage"]["mailing_list_contract"]["status"] == "failed"
+
+
+def test_contracts_require_known_account_limits() -> None:
+    client = MetadataClient()
+    original = client.execute
+    def execute(module: str, function: str, params: dict | None = None) -> dict:
+        if (module, function) == ("Variables", "get_user_information"):
+            return {"result": {"status": 1, "data": {"maximum_databases": 10}}}
+        return original(module, function, params)
+    client.execute = execute  # type: ignore[method-assign]
+    data, _ = collect(client)  # type: ignore[arg-type]
+    assert data["coverage"]["ftp_contract"]["status"] == "unavailable"
+    assert data["coverage"]["mailing_list_contract"]["status"] == "unavailable"
 
 
 def test_mailing_listtype_is_normalized_without_inventing_privacy() -> None:

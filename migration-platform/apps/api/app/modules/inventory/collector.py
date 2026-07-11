@@ -64,10 +64,15 @@ def collect(client: CpanelClient) -> tuple[dict, dict]:
     _collect_database_contract(client, data, coverage)
     _assess_ftp_writer_metadata(data, coverage)
     _assess_mailing_list_privacy(client, data, coverage)
+    _assess_ftp_contract(data, coverage)
+    _assess_mailing_list_contract(data, coverage)
+    _assess_forwarder_contract(data, coverage)
     _collect_dns(client, data, coverage)
+    _assess_dns_contract(data, coverage)
     if coverage["dns_records"]["status"] in {"partial", "unavailable"}:
         warnings += 1
     _collect_autoresponders(client, data, coverage)
+    _assess_autoresponder_contract(data, coverage)
     if coverage["email_autoresponders"]["status"] in {"partial", "unavailable"}:
         warnings += 1
     _collect_email_filters(client, data, coverage)
@@ -271,6 +276,137 @@ def _assess_mailing_list_privacy(client: CpanelClient, data: dict, coverage: dic
         coverage["mailing_lists"]["message"] = f"Privacy non verificata per {incomplete} mailing list."
 
 
+def _account_capacity(data: dict, field: str, items_count: int) -> dict:
+    account = data.get("account") if isinstance(data.get("account"), dict) else {}
+    maximum = account.get(field)
+    known = maximum not in {None, ""}
+    return {"maximum": maximum, "current": items_count, "known": known}
+
+
+def _assess_ftp_contract(data: dict, coverage: dict) -> None:
+    method = "Ftp::list_ftp_with_disk argument mapping + Variables::get_user_information quota"
+    items = data.get("ftp_accounts") if isinstance(data.get("ftp_accounts"), list) else []
+    migratable = [item for item in items if isinstance(item, dict) and (item.get("accttype") == "sub" or item.get("type") == "sub")]
+    capacity = _account_capacity(data, "maximum_ftp_accounts", len(migratable))
+    invalid: list[str] = []
+    mappings: list[dict] = []
+    for item in migratable:
+        login = str(item.get("login") or "").strip().lower()
+        quota = item.get("diskquota", item.get("quota"))
+        homedir = str(item.get("homedir", item.get("dir")) or "")
+        if login.count("@") != 1 or not all(login.split("@")) or quota is None or not homedir.startswith("/"):
+            invalid.append(login or "[missing-login]")
+            continue
+        user, domain = login.split("@", 1)
+        mappings.append({"login": login, "user": user, "domain": domain, "quota": quota, "homedir": homedir})
+    readable = coverage.get("ftp_accounts", {}).get("status") in {"succeeded", "empty"}
+    account_readable = coverage.get("account", {}).get("status") in {"succeeded", "empty"}
+    succeeded = readable and account_readable and capacity["known"] and not invalid
+    data["ftp_contract"] = {"mappings": mappings, "invalid_logins": sorted(invalid), "capacity": capacity}
+    coverage["ftp_contract"] = {
+        "status": "succeeded" if succeeded else "failed" if invalid else "unavailable",
+        "method": method, "read_only_verified": True,
+        "items_count": len(mappings) if succeeded else None,
+        "message": None if succeeded else "Mapping FTP non valido." if invalid else "Inventario FTP o limite account non verificabile.",
+    }
+
+
+def _assess_mailing_list_contract(data: dict, coverage: dict) -> None:
+    method = "Email::list_lists add_list mapping + Variables::get_user_information quota"
+    items = data.get("mailing_lists") if isinstance(data.get("mailing_lists"), list) else []
+    capacity = _account_capacity(data, "maximum_mailing_lists", len(items))
+    invalid: list[str] = []
+    mappings: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            invalid.append("[invalid-item]")
+            continue
+        address = _mailing_list_key(item)
+        private = item.get("private")
+        if address.count("@") != 1 or not all(address.split("@")) or private not in {0, 1, False, True}:
+            invalid.append(address or "[missing-address]")
+            continue
+        name, domain = address.split("@", 1)
+        mappings.append({"address": address, "list": name, "domain": domain, "private": int(private)})
+    readable = coverage.get("mailing_lists", {}).get("status") in {"succeeded", "empty"}
+    account_readable = coverage.get("account", {}).get("status") in {"succeeded", "empty"}
+    succeeded = readable and account_readable and capacity["known"] and not invalid
+    data["mailing_list_contract"] = {"mappings": mappings, "invalid_lists": sorted(invalid), "capacity": capacity}
+    coverage["mailing_list_contract"] = {
+        "status": "succeeded" if succeeded else "failed" if invalid else "unavailable",
+        "method": method, "read_only_verified": True,
+        "items_count": len(mappings) if succeeded else None,
+        "message": None if succeeded else "Mapping mailing list non valido." if invalid else "Inventario mailing list o limite account non verificabile.",
+    }
+
+
+def _assess_forwarder_contract(data: dict, coverage: dict) -> None:
+    method = "UAPI Email::list_forwarders exact-pair pre-write read contract"
+    raw = data.get("email_forwarders")
+    if isinstance(raw, dict):
+        raw = raw.get("forwarders", raw.get("data", []))
+    items = raw if isinstance(raw, list) else []
+    mappings: list[dict] = []
+    invalid: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            invalid.append("[invalid-item]")
+            continue
+        source = str(item.get("dest") or item.get("source") or "").strip().lower()
+        destination = str(item.get("forward") or item.get("destination") or "").strip().lower()
+        if source.count("@") != 1 or not all(source.split("@")) or not destination:
+            invalid.append(source or "[missing-source]")
+            continue
+        mappings.append({"source": source, "destination": destination})
+    readable = coverage.get("email_forwarders", {}).get("status") in {"succeeded", "empty"}
+    succeeded = readable and not invalid
+    data["forwarder_contract"] = {
+        "mappings": mappings,
+        "invalid_sources": sorted(invalid),
+        "fresh_read_strategy": "list_forwarders_exact_pair",
+    }
+    coverage["forwarder_contract"] = {
+        "status": "succeeded" if succeeded else "failed" if invalid else "unavailable",
+        "method": method,
+        "read_only_verified": True,
+        "items_count": len(mappings) if succeeded else None,
+        "message": None if succeeded else "Mapping forwarder non valido." if invalid else "Inventario forwarder non leggibile.",
+    }
+
+
+def _assess_autoresponder_contract(data: dict, coverage: dict) -> None:
+    method = "UAPI Email::list_auto_responders + get_auto_responder pre-write read contract"
+    items = data.get("email_autoresponders") if isinstance(data.get("email_autoresponders"), list) else []
+    evidence: list[dict] = []
+    invalid: list[str] = []
+    required = ("from", "subject", "body", "interval")
+    for item in items:
+        if not isinstance(item, dict):
+            invalid.append("[invalid-item]")
+            continue
+        address = str(item.get("email") or "").strip().lower()
+        present = sorted(field for field in required if item.get(field) is not None)
+        valid = address.count("@") == 1 and all(address.split("@")) and item.get("_detail_status") == "succeeded" and len(present) == len(required)
+        if not valid:
+            invalid.append(address or "[missing-address]")
+            continue
+        evidence.append({"email": address, "required_fields_present": present, "detail_status": "succeeded"})
+    readable = coverage.get("email_autoresponders", {}).get("status") in {"succeeded", "empty"}
+    succeeded = readable and not invalid
+    data["autoresponder_contract"] = {
+        "items": evidence,
+        "invalid_addresses": sorted(invalid),
+        "fresh_read_strategy": "list_then_get_detail_by_address",
+    }
+    coverage["autoresponder_contract"] = {
+        "status": "succeeded" if succeeded else "failed" if invalid else "unavailable",
+        "method": method,
+        "read_only_verified": True,
+        "items_count": len(evidence) if succeeded else None,
+        "message": None if succeeded else "Dettaglio autoresponder non idoneo al contratto anti-upsert." if invalid else "Inventario autoresponder non leggibile.",
+    }
+
+
 def _collect_autoresponders(client: CpanelClient, data: dict, coverage: dict) -> None:
     responders: list[dict] = []
     failures: list[str] = []
@@ -427,4 +563,40 @@ def _collect_dns(client: CpanelClient, data: dict, coverage: dict) -> None:
         "read_only_verified": True,
         "items_count": len(records) if status in {"succeeded", "empty", "partial"} else None,
         "message": "; ".join(failures) if failures else None,
+    }
+
+
+def _assess_dns_contract(data: dict, coverage: dict) -> None:
+    from app.modules.comparison.engine import _normalize
+
+    method = "UAPI DNS::parse_zone per owned zone collision/fresh-read contract"
+    expected_zones = [zone.rstrip(".").lower() for zone in _dns_zones(data.get("domains"))]
+    records = [item for item in _normalize("dns_records", data.get("dns_records")) if isinstance(item, dict)]
+    by_key: dict[str, list[dict]] = {}
+    unsupported_keys: list[str] = []
+    allowed_types = {"A", "AAAA", "CNAME", "MX", "TXT", "CAA", "SRV"}
+    for record in records:
+        key = str(record.get("name") or "")
+        by_key.setdefault(key, []).append(record)
+        if record.get("type") not in allowed_types:
+            unsupported_keys.append(key)
+    collision_keys = sorted(key for key, grouped in by_key.items() if key and len(grouped) > 1)
+    observed_zones = sorted({str(record.get("zone") or "").rstrip(".").lower() for record in records if record.get("zone")})
+    readable = coverage.get("dns_records", {}).get("status") in {"succeeded", "empty"}
+    domains_readable = coverage.get("domains", {}).get("status") in {"succeeded", "empty"}
+    succeeded = readable and domains_readable
+    data["dns_contract"] = {
+        "expected_zones": expected_zones,
+        "observed_zones_with_records": observed_zones,
+        "record_keys_count": len(by_key),
+        "collision_keys": collision_keys,
+        "unsupported_keys": sorted(set(unsupported_keys)),
+        "fresh_read_strategy": "parse_zone_per_owned_zone",
+    }
+    coverage["dns_contract"] = {
+        "status": "succeeded" if succeeded else "unavailable",
+        "method": method,
+        "read_only_verified": True,
+        "items_count": len(by_key) if succeeded else None,
+        "message": None if succeeded else "Zone DNS o domini proprietari non leggibili integralmente.",
     }

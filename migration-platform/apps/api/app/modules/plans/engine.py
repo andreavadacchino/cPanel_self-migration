@@ -21,6 +21,8 @@ def build_steps(entries: list[dict]) -> tuple[list[dict], dict]:
         category, key = entry["category"], entry["key"]
         if category in {"database_contract", "mysql_grant_contract"}:
             mode, reason = "excluded", "Evidenza di quota/restrizioni per il passo database; non è una risorsa autonoma da accodare."
+        elif category in {"ftp_contract", "mailing_list_contract", "forwarder_contract", "autoresponder_contract", "dns_contract"}:
+            mode, reason = "excluded", "Evidenza read-only per il writer; non è una risorsa autonoma da accodare."
         elif category == "mysql_grants":
             mode, reason = "excluded", "Evidenza di supporto per il passo utente MySQL; non è una risorsa autonoma da accodare."
         elif category == "subaccounts" and (key.split("@", 1)[0] in ftp_names or key.split("@", 1)[0] in email_names or key.endswith("_logs")):
@@ -47,7 +49,7 @@ def build_steps(entries: list[dict]) -> tuple[list[dict], dict]:
         steps.append({
             "id": f"{category}:{key}", "category": category, "key": key,
             "title": entry["title"], "mode": mode, "reason": reason,
-            "state": "pending", "severity": entry["severity"],
+            "state": "pending", "comparison_state": entry["state"], "severity": entry["severity"],
             "depends_on_categories": dependencies,
         })
     order = {"domains": 10, "databases": 20, "mysql_users": 30, "ftp_accounts": 40, "subaccounts": 41,

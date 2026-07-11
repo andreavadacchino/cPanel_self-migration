@@ -171,6 +171,24 @@ readiness report di classificare `databases` come `eligible_for_real_design`.
 lette e che ogni privilegio appartenga all'insieme supportato dall'API. Solo un
 esito riuscito su entrambi gli endpoint rende `mysql_users` eleggibile al design reale.
 
+`ftp_contract` valida il mapping non sensibile `login→user/domain/quota/homedir`
+e la presenza del limite `maximum_ftp_accounts`; `mailing_list_contract` valida
+`address→list/domain/private` e `maximum_mailing_lists`. Entrambe le evidenze
+devono riuscire su sorgente e destinazione per rendere la categoria eleggibile
+al design reale. Non contengono né richiedono password.
+
+`forwarder_contract` conserva le coppie complete sorgente→destinazione e prova
+che `Email::list_forwarders` può essere riutilizzata come fresh read
+pre-scrittura. `autoresponder_contract` prova lista per dominio e dettaglio per
+indirizzo, ma conserva soltanto metadati strutturali: body, subject e from non
+entrano nell'evidenza. Entrambi richiedono successo sui due endpoint.
+
+`dns_contract` conserva zone proprietarie attese, identità ambigue, tipi non
+supportati e la strategia di fresh read `parse_zone_per_owned_zone`. I passi del
+piano mantengono anche `comparison_state`: soltanto `missing_on_destination`
+senza ambiguità può restare candidato additivo con approval; `different` e
+`unknown` sono bloccati come `not_ready`.
+
 DNS viene interrogato separatamente per ogni zona proprietaria (dominio
 principale, addon e alias) tramite il parametro obbligatorio `zone`; i
 sottodomini restano record della zona genitore e non sono interrogati come zone
@@ -315,9 +333,11 @@ risorse da migrare.
 |----------|---------|------------------------|------------------|
 | `database_contract` | `Mysql::get_restrictions`, account e database inventory | restrizioni presenti e quota nota su entrambi i lati | `databases` → `eligible_for_real_design` |
 | `mysql_grant_contract` | `Mysql::get_privileges_on_database` per ogni coppia | tutte le coppie lette e privilegi nel set supportato | `mysql_users` → `eligible_for_real_design` |
-| FTP metadata | `Ftp::list_ftp_with_disk` | quota e home presenti per ogni account migrabile | resta `needs_contract_test` |
-| Mailing-list privacy | UAPI `list_lists`, fallback API 2 `listlists` | privacy derivata solo da campi espliciti | resta `needs_contract_test` |
-| DNS coverage | `DNS::parse_zone` per main/addon/alias | tutte le zone proprietarie lette | collisioni/fresh read ancora `not_ready` |
+| `ftp_contract` | `Ftp::list_ftp_with_disk`, account inventory | mapping quota/home valido e limite FTP noto su entrambi i lati | `ftp_accounts` → `eligible_for_real_design` |
+| `mailing_list_contract` | UAPI `list_lists`, fallback API 2 `listlists`, account inventory | mapping private valido e limite mailing list noto su entrambi i lati | `mailing_lists` → `eligible_for_real_design` |
+| `forwarder_contract` | UAPI `Email::list_forwarders` | coppie complete leggibili per il futuro fresh check su entrambi i lati | `email_forwarders` → `eligible_for_real_design` |
+| `autoresponder_contract` | UAPI lista per dominio + dettaglio per indirizzo | dettagli completi; contenuti sensibili esclusi dall'evidenza | `email_autoresponders` → `eligible_for_real_design` |
+| `dns_contract` | UAPI `DNS::parse_zone` per zona proprietaria | tutte le zone leggibili, collisioni e tipi non supportati censiti | `dns_records` → `eligible_for_real_design`; passi non additivi restano `not_ready` |
 
 `eligible_for_real_design` non abilita un writer e non equivale a `verified`:
 significa soltanto che inventario e contratto read-only sono sufficienti per
@@ -724,7 +744,7 @@ sempre essere riletti dalle API prima dell'uso):
 - tutti i flag writer sono `disabled`;
 - execution run non dry-run nel database: 0.
 
-La baseline di test corrente è 115 test API e 15 test worker. La build frontend,
+La baseline di test corrente è 117 test API e 15 test worker. La build frontend,
 `docker compose config -q`, health API e stack Docker risultano verdi.
 
 ## Limitazioni e prossimi incrementi
@@ -734,13 +754,15 @@ La baseline di test corrente è 115 test API e 15 test worker. La build frontend
   dall'upsert; il fresh check reale UAPI non è ancora implementato.
 - Database e utenti MySQL sono eleggibili soltanto per il design reale; non
   esiste ancora un execution contract né un writer reale autorizzato.
-- FTP e mailing list richiedono ancora contract test completi del futuro writer.
-- Forwarder e autoresponder richiedono fresh read reale anti-upsert.
-- DNS richiede rilevazione collisioni e verifica fresca della zona pre-write.
+- FTP, mailing list, forwarder e autoresponder hanno contract evidence
+  read-only; la fotografia pilota va rigenerata prima di aggiornare il loro
+  stato readiness storico.
+- DNS dispone del contratto read-only; il futuro writer reale dovrà eseguire la
+  fresh read della zona immediatamente prima e dopo la scrittura.
 - PHP resta manuale perché il writer documentato richiede privilegi WHM.
 - SSL non copia mai chiavi private e dovrà essere rigenerato tramite AutoSSL.
-- I prossimi incrementi sono i contract test read-only per FTP, mailing list,
-  forwarder/autoresponder e DNS. Nessuno di essi autorizza scritture reali.
+- I contract test read-only pianificati sono completi. Nessuna evidenza
+  autorizza scritture reali o sostituisce la futura verifica pre/post-write.
 
 ## Sviluppo locale (senza Docker)
 

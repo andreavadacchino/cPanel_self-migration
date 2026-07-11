@@ -30,6 +30,12 @@ def _coverage(snapshot_data: dict | None, category: str) -> str:
 
 def _category_gaps(category: str, source_data: dict | None, destination_data: dict | None = None) -> list[tuple[str, str, str]]:
     data = source_data or {}
+    if category == "email_forwarders" and _coverage(data, "forwarder_contract") == "succeeded" and _coverage(destination_data or {}, "forwarder_contract") == "succeeded":
+        return [("eligible_for_real_design", "forwarder_contract_verified", "La fresh read per coppia completa è supportata da evidenze read-only correnti su entrambi gli endpoint.")]
+    if category == "email_autoresponders" and _coverage(data, "autoresponder_contract") == "succeeded" and _coverage(destination_data or {}, "autoresponder_contract") == "succeeded":
+        return [("eligible_for_real_design", "autoresponder_contract_verified", "Lista e dettaglio per indirizzo supportano il futuro controllo anti-upsert su entrambi gli endpoint.")]
+    if category == "dns_records" and _coverage(data, "dns_contract") == "succeeded" and _coverage(destination_data or {}, "dns_contract") == "succeeded":
+        return [("eligible_for_real_design", "dns_contract_verified", "Zone proprietarie, collisioni e strategia di fresh read sono censite su entrambi gli endpoint.")]
     if category == "databases" and _coverage(data, "database_contract") == "succeeded" and _coverage(destination_data or {}, "database_contract") == "succeeded":
         return [("eligible_for_real_design", "database_contract_verified", "Restrizioni e quota database sono state verificate in lettura su evidenze correnti.")]
     if category == "mysql_users" and _coverage(data, "mysql_grant_contract") == "succeeded" and _coverage(destination_data or {}, "mysql_grant_contract") == "succeeded":
@@ -37,11 +43,15 @@ def _category_gaps(category: str, source_data: dict | None, destination_data: di
     if category == "mysql_users" and _coverage(data, "mysql_grants") in READABLE:
         return [("needs_contract_test", "privilege_contract", "La matrice utente→database→privilegi è disponibile; serve validare il contratto reale di grant.")]
     if category == "ftp_accounts":
+        if _coverage(data, "ftp_contract") == "succeeded" and _coverage(destination_data or {}, "ftp_contract") == "succeeded":
+            return [("eligible_for_real_design", "ftp_contract_verified", "Mapping quota/home e limite account FTP sono verificati in lettura su entrambi gli endpoint.")]
         items = data.get("ftp_accounts", [])
         migratable = [item for item in items if isinstance(item, dict) and (item.get("accttype") == "sub" or item.get("type") == "sub")]
         if all(item.get("_writer_metadata_status") == "succeeded" for item in migratable):
             return [("needs_contract_test", "ftp_contract", "Quota e home sono disponibili; serve un contract test account-level del writer.")]
     if category == "mailing_lists":
+        if _coverage(data, "mailing_list_contract") == "succeeded" and _coverage(destination_data or {}, "mailing_list_contract") == "succeeded":
+            return [("eligible_for_real_design", "mailing_list_contract_verified", "Mapping private e limite mailing list sono verificati in lettura su entrambi gli endpoint.")]
         items = data.get("mailing_lists", [])
         if all(isinstance(item, dict) and item.get("_privacy_status") == "succeeded" for item in items):
             return [("needs_contract_test", "mailing_list_contract", "La privacy è verificata; serve un contract test account-level del writer.")]
@@ -70,6 +80,21 @@ def build_report(plan_steps: list[dict], source_data: dict | None, destination_d
         for step in category_steps:
             step_gaps = list(gaps)
             step_statuses = list(statuses)
+            if category == "dns_records":
+                source_contract = (source_data or {}).get("dns_contract", {})
+                destination_contract = (destination_data or {}).get("dns_contract", {})
+                key = str(step.get("key") or "")
+                collision_keys = set(source_contract.get("collision_keys", [])) | set(destination_contract.get("collision_keys", []))
+                unsupported_keys = set(source_contract.get("unsupported_keys", [])) | set(destination_contract.get("unsupported_keys", []))
+                if step.get("comparison_state") != "missing_on_destination":
+                    step_statuses.append("not_ready")
+                    step_gaps.append({"code": "dns_not_additive", "message": "Il passo DNS non è puramente additivo: record differenti o ignoti richiedono intervento manuale."})
+                if key in collision_keys:
+                    step_statuses.append("not_ready")
+                    step_gaps.append({"code": "dns_ambiguous_identity", "message": "Più record condividono la stessa identità di piano; il writer non può sceglierne uno implicitamente."})
+                if key in unsupported_keys:
+                    step_statuses.append("not_ready")
+                    step_gaps.append({"code": "dns_type_unsupported", "message": "Il tipo record non appartiene al contratto additivo supportato."})
             if step.get("mode") == "secret_required":
                 step_statuses.append("needs_operator_input")
                 step_gaps.append({"code": "new_secret_required", "message": "L'operatore dovrà fornire una nuova password al momento dell'esecuzione."})
