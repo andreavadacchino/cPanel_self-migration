@@ -24,6 +24,17 @@ import MigrationPlanPanel from './MigrationPlanPanel'
 import ExecutionDryRunPanel from './ExecutionDryRunPanel'
 import WriterReadinessPanel from './WriterReadinessPanel'
 
+type MigrationStage = 'connections' | 'inventory' | 'comparison' | 'plan' | 'readiness' | 'execution'
+
+const STAGES: { id: MigrationStage; label: string; short: string }[] = [
+  { id: 'connections', label: 'Connessioni', short: 'Endpoint e preflight' },
+  { id: 'inventory', label: 'Inventario', short: 'Copertura letture' },
+  { id: 'comparison', label: 'Comparazione', short: 'Differenze rilevate' },
+  { id: 'plan', label: 'Piano', short: 'Classificazione azioni' },
+  { id: 'readiness', label: 'Readiness', short: 'Evidenze e gap' },
+  { id: 'execution', label: 'Esecuzione', short: 'Solo dry-run' },
+]
+
 function isTerminal(job: Job | null): boolean {
   return job != null && (job.status === 'succeeded' || job.status === 'failed')
 }
@@ -128,6 +139,44 @@ function MigrationDirector({
   )
 }
 
+function MigrationRail({
+  active,
+  onChange,
+  ready,
+  inventoryReady,
+}: {
+  active: MigrationStage
+  onChange: (stage: MigrationStage) => void
+  ready: boolean
+  inventoryReady: boolean
+}) {
+  return (
+    <nav className="migration-rail" aria-label="Fasi della migrazione">
+      <div className="migration-rail__line" aria-hidden="true" />
+      {STAGES.map((stage, index) => {
+        const complete = stage.id === 'connections' ? ready : stage.id === 'inventory' ? inventoryReady : false
+        const available = index < 2 || inventoryReady
+        return (
+          <button
+            aria-current={active === stage.id ? 'step' : undefined}
+            className={`migration-step ${active === stage.id ? 'migration-step--active' : ''} ${complete ? 'migration-step--complete' : ''}`}
+            disabled={!available}
+            key={stage.id}
+            onClick={() => onChange(stage.id)}
+            type="button"
+          >
+            <span className="migration-step__index">{complete ? '✓' : String(index + 1).padStart(2, '0')}</span>
+            <span className="migration-step__copy">
+              <strong>{stage.label}</strong>
+              <small>{stage.short}</small>
+            </span>
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
 export default function MigrationSetupPage() {
   const params = useParams<{ id: string }>()
   const migrationId = Number(params.id)
@@ -141,6 +190,7 @@ export default function MigrationSetupPage() {
   const [preflightError, setPreflightError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const [planRevision, setPlanRevision] = useState(0)
+  const [activeStage, setActiveStage] = useState<MigrationStage>('connections')
 
   const source = endpoints.find((e) => e.role === 'source')
   const destination = endpoints.find((e) => e.role === 'destination')
@@ -263,47 +313,40 @@ export default function MigrationSetupPage() {
         inventory={inventory}
       />
 
-      <div className="setup-grid">
-        <EndpointCard
-          migrationId={migrationId}
-          role="source"
-          endpoint={source}
-          onChanged={upsertEndpoint}
-          onRemoved={removeEndpoint}
-        />
-        <EndpointCard
-          migrationId={migrationId}
-          role="destination"
-          endpoint={destination}
-          onChanged={upsertEndpoint}
-          onRemoved={removeEndpoint}
-        />
-      </div>
+      <MigrationRail active={activeStage} onChange={setActiveStage} ready={ready} inventoryReady={comparisonReady} />
 
-      <PreflightPanel
-        configured={configured}
-        ready={ready}
-        running={starting}
-        hasRun={Boolean(job)}
-        onStart={handleStartPreflight}
-        error={preflightError}
-      />
+      <section className="stage-workspace" aria-live="polite">
+        <header className="stage-workspace__head">
+          <div>
+            <span className="stage-workspace__eyebrow">Fase {String(STAGES.findIndex((stage) => stage.id === activeStage) + 1).padStart(2, '0')}</span>
+            <h2>{STAGES.find((stage) => stage.id === activeStage)?.label}</h2>
+          </div>
+          <span className="safety-chip"><span /> Read-only · writer disabilitati</span>
+        </header>
 
-      <JobStatusPanel job={job} events={events} />
+        {activeStage === 'connections' && <>
+          <div className="setup-grid">
+            <EndpointCard migrationId={migrationId} role="source" endpoint={source} onChanged={upsertEndpoint} onRemoved={removeEndpoint} />
+            <EndpointCard migrationId={migrationId} role="destination" endpoint={destination} onChanged={upsertEndpoint} onRemoved={removeEndpoint} />
+          </div>
+          <PreflightPanel configured={configured} ready={ready} running={starting} hasRun={Boolean(job)} onStart={handleStartPreflight} error={preflightError} />
+          <JobStatusPanel job={job} events={events} />
+        </>}
 
-      <InventorySummaryPanel overview={inventory} />
+        {activeStage === 'inventory' && <>
+          <InventorySummaryPanel overview={inventory} />
+          <InventoryCoveragePanel overview={inventory} />
+        </>}
 
-      <InventoryCoveragePanel overview={inventory} />
+        {activeStage === 'comparison' && <>
+          <ComparisonPanel migrationId={migrationId} canGenerate={comparisonReady} blockedReason="Completa un preflight con inventario disponibile su sorgente e destinazione prima di generare la comparativa." />
+          <ManualTasksPanel migrationId={migrationId} />
+        </>}
 
-      <ComparisonPanel
-        migrationId={migrationId}
-        canGenerate={comparisonReady}
-        blockedReason="Completa un preflight con inventario disponibile su sorgente e destinazione prima di generare la comparativa."
-      />
-      <ManualTasksPanel migrationId={migrationId} />
-      <MigrationPlanPanel migrationId={migrationId} onPlanChanged={() => setPlanRevision((value) => value + 1)} />
-      <WriterReadinessPanel migrationId={migrationId} planRevision={planRevision} />
-      <ExecutionDryRunPanel migrationId={migrationId} planRevision={planRevision} />
+        {activeStage === 'plan' && <MigrationPlanPanel migrationId={migrationId} onPlanChanged={() => setPlanRevision((value) => value + 1)} />}
+        {activeStage === 'readiness' && <WriterReadinessPanel migrationId={migrationId} planRevision={planRevision} />}
+        {activeStage === 'execution' && <ExecutionDryRunPanel migrationId={migrationId} planRevision={planRevision} />}
+      </section>
     </>
   )
 }
