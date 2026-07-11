@@ -232,6 +232,7 @@ Le migrazioni Alembic correnti arrivano a `0007_writer_readiness`:
 | `execution_runs` | selezione, piano/report/snapshot, stato e segreti cifrati |
 | `execution_events` | preview, risultato e verifica per passo |
 | `execution_attempts` | tentativi reali con numero monotòno, checkpoint, compensazione e stato |
+| `account_execution_leases` | lease di mutua esclusione per account destinazione con fencing token |
 | `writer_readiness_reports` | gap immutabili legati a piano, comparazione e snapshot esatti |
 
 PostgreSQL è la fonte di verità; Redis trasporta soltanto messaggi. Gli snapshot
@@ -434,6 +435,33 @@ fallisce chiuso e nessun tentativo, lease o mutazione della destinazione può
 essere aperto. Un dry-run non apre mai tentativi. Rollback: `alembic downgrade
 0007_writer_readiness` elimina `execution_attempts` senza toccare le altre
 tabelle.
+
+#### Lease per account di destinazione (fencing)
+
+La migrazione Alembic `0009_account_leases` aggiunge `account_execution_leases` e
+la colonna `execution_attempts.fencing_token`. Il lease garantisce che **un solo
+writer** muti un account di destinazione alla volta (una riga per endpoint,
+vincolo `uq_account_lease_endpoint`).
+
+- **Un solo vincitore.** `acquire` respinge un secondo writer finché il lease è
+  attivo; il riacquisto dello stesso owner è idempotente e non incrementa il
+  token (i retry non si auto-escludono).
+- **Takeover sicuro.** Un lease scaduto (nessun heartbeat entro
+  `EXECUTION_LEASE_TTL_SECONDS`, default 300s) o rilasciato può essere acquisito
+  da un altro worker: `fencing_token` viene incrementato in modo monotòno.
+- **Fencing.** Il tentativo memorizza il `fencing_token` sotto cui gira.
+  `finalize_attempt` chiama `assert_fencing_current` prima di persistere un esito
+  terminale: un worker il cui lease è stato sottratto (token obsoleto, lease
+  scaduto o assente) **non può completare il run né scrivere risultati** e viene
+  respinto con `409`, lasciando il tentativo invariato.
+- **Heartbeat/release.** Solo l'owner con il token corrente può rinnovare o
+  rilasciare; un detentore obsoleto è respinto. `owner` è un identificatore
+  opaco del worker: il lease non contiene segreti.
+
+Come tutto il percorso reale, `acquire` fallisce chiuso quando
+`REAL_EXECUTION_MODE=disabled`. Rollback: `alembic downgrade
+0008_execution_attempts` elimina `account_execution_leases` e la colonna
+`fencing_token`.
 
 ## Writer domini mock-only
 

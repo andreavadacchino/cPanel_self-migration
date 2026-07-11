@@ -128,6 +128,10 @@ class ExecutionAttempt(Base):
     attempt_number: Mapped[int] = mapped_column(nullable=False)
     status: Mapped[str] = mapped_column(String(32), default=ExecutionStatus.queued.value, nullable=False)
     lease_key: Mapped[str | None] = mapped_column(String(255))
+    # Fencing token of the destination-account lease this attempt runs under. A
+    # stale token (a newer holder took the lease over) blocks the attempt from
+    # persisting a terminal result — see `finalize_attempt`.
+    fencing_token: Mapped[int | None] = mapped_column()
     checkpoint: Mapped[dict | None] = mapped_column(JSON)
     compensation: Mapped[dict | None] = mapped_column(JSON)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -152,3 +156,35 @@ class ExecutionEvent(Base):
     verification: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     run: Mapped[ExecutionRun] = relationship(back_populates="events")
+
+
+class AccountExecutionLease(Base):
+    """Mutual-exclusion lease over a single destination account.
+
+    Exactly one lease row exists per destination endpoint (the unique
+    constraint), so only one worker can hold the account at a time. ``owner``
+    identifies the current holder and ``fencing_token`` is a monotonically
+    increasing guard: every acquisition of a free/expired lease bumps the token,
+    so a stalled previous holder presenting an older token is fenced out and can
+    no longer commit. ``expires_at`` bounds the hold; a holder renews it via a
+    heartbeat, and once it lapses the lease is eligible for a safe takeover.
+
+    The lease carries no secret: ``owner`` is an opaque worker identifier.
+    """
+
+    __tablename__ = "account_execution_leases"
+    __table_args__ = (
+        UniqueConstraint("destination_endpoint_id", name="uq_account_lease_endpoint"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    destination_endpoint_id: Mapped[int] = mapped_column(ForeignKey("endpoints.id", ondelete="CASCADE"), nullable=False)
+    owner: Mapped[str] = mapped_column(String(255), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(nullable=False)
+    execution_run_id: Mapped[int | None] = mapped_column(ForeignKey("execution_runs.id", ondelete="SET NULL"))
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

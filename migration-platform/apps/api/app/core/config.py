@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # attempt, lease, or destination mutation can be opened without an explicit,
     # audited opt-in for an authorized environment.
     real_execution_mode: str = "disabled"
+    # Time-to-live of a destination-account execution lease. A holder must renew
+    # (heartbeat) within this window or the lease becomes eligible for a fenced
+    # takeover by another worker.
+    execution_lease_ttl_seconds: int = 300
 
     @property
     def cors_origins_list(self) -> list[str]:

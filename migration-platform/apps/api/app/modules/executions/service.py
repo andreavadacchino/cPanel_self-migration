@@ -11,8 +11,10 @@ from app.core.errors import ConflictError, NotFoundError
 from app.modules.comparison.models import ComparisonReport
 from app.modules.endpoints import service as endpoint_service
 from app.modules.endpoints.models import Endpoint
+from app.modules.executions import lease as lease_service
 from app.modules.executions.models import (
     TERMINAL_STATUSES,
+    AccountExecutionLease,
     ExecutionAttempt,
     ExecutionEvent,
     ExecutionRun,
@@ -191,15 +193,20 @@ def cancel(db: Session, run_id: int) -> dict:
     return _read(run)
 
 
-def open_attempt(db: Session, run_id: int) -> ExecutionAttempt:
+def open_attempt(
+    db: Session, run_id: int, *, lease: AccountExecutionLease | None = None,
+) -> ExecutionAttempt:
     """Open the next real execution attempt for a confirmed, non-dry-run run.
 
     Fail-closed: this is the smallest real-path production entry point and it
     refuses unless real execution is explicitly enabled for an authorized
     environment. The attempt number is monotonic and unique per run, so a retry
     is a fresh attempt row and a duplicate open is rejected by the constraint
-    rather than silently starting a second concurrent attempt (the per-account
-    lease in task A4 owns true concurrency control).
+    rather than silently starting a second concurrent attempt.
+
+    When a destination-account ``lease`` is supplied its owner and fencing token
+    are stamped on the attempt so ``finalize_attempt`` can refuse a commit from a
+    holder that was fenced out (task A4).
     """
     if not settings.real_execution_enabled:
         raise ConflictError("L'esecuzione reale è disabilitata")
@@ -208,10 +215,14 @@ def open_attempt(db: Session, run_id: int) -> ExecutionAttempt:
         raise ConflictError("Un dry-run non apre tentativi reali")
     if run.status in TERMINAL_STATUSES:
         raise ConflictError("Il run è in uno stato terminale")
+    if lease is not None and lease.destination_endpoint_id != run.destination_endpoint_id:
+        raise ConflictError("Il lease non appartiene all'account di destinazione del run")
     next_number = max((a.attempt_number for a in run.attempts), default=0) + 1
     attempt = ExecutionAttempt(
         execution_run_id=run.id, attempt_number=next_number,
         status=ExecutionStatus.running.value, started_at=datetime.now(timezone.utc),
+        lease_key=(lease.owner if lease is not None else None),
+        fencing_token=(lease.fencing_token if lease is not None else None),
     )
     run.attempts.append(attempt)
     db.commit(); db.refresh(attempt)
@@ -225,13 +236,20 @@ def finalize_attempt(
     """Record a legal terminal (or compensating) outcome for a real attempt.
 
     ``assert_transition`` rejects any status the attempt state machine forbids.
-    ``checkpoint`` and ``compensation`` are caller-supplied redacted descriptors
-    (step ids, counters, reversible-action metadata) and must never carry a
-    secret; ``error`` is an already-redacted message.
+    If the attempt carries a fencing token, ``assert_fencing_current`` re-checks
+    the lease first: a worker whose lease was taken over cannot persist a result
+    or complete the run. ``checkpoint`` and ``compensation`` are caller-supplied
+    redacted descriptors (step ids, counters, reversible-action metadata) and
+    must never carry a secret; ``error`` is an already-redacted message.
     """
     attempt = db.get(ExecutionAttempt, attempt_id)
     if attempt is None:
         raise NotFoundError("Execution attempt", attempt_id)
+    if attempt.fencing_token is not None:
+        lease_service.assert_fencing_current(
+            db, destination_endpoint_id=attempt.run.destination_endpoint_id,
+            fencing_token=attempt.fencing_token,
+        )
     assert_transition(attempt.status, status)
     attempt.status = status
     attempt.checkpoint = checkpoint
