@@ -111,7 +111,7 @@ export default function ExecutionDryRunPanel({ migrationId, planRevision, onRunC
               <p className="execution-secret__effect"><b>Effetto previsto:</b> {secretGuide?.effect ?? 'Verrebbe utilizzata soltanto dal futuro writer reale sulla destinazione.'}</p>
               <p className="execution-secret__not"><b>Non è:</b> {secretGuide?.notThis ?? 'la password generale dell’account cPanel.'}</p>
             </div>
-            <label><span>{secretGuide?.title ?? 'Nuova password'}</span><input type="password" autoComplete="new-password" value={passwords[step.id] ?? ''} onChange={(event) => setPasswords((old) => ({ ...old, [step.id]: event.target.value }))} placeholder={secretGuide?.placeholder ?? 'Scegli una nuova password'} /><small>Nel dry-run viene cifrata per validare la completezza dell’input; non compare in preview o audit.</small></label>
+            <label className="execution-secret__field"><span>Inserisci qui la nuova password</span><b>{secretGuide?.title ?? 'Nuova password'}</b><input aria-label={`Nuova password per ${step.key}`} type="password" autoComplete="new-password" value={passwords[step.id] ?? ''} onChange={(event) => setPasswords((old) => ({ ...old, [step.id]: event.target.value }))} placeholder={secretGuide?.placeholder ?? 'Scegli una nuova password'} /><small>Nel dry-run viene cifrata per validare la completezza dell’input; non compare in preview o audit.</small></label>
           </div>}
         </article>
       })}</div>
