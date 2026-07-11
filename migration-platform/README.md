@@ -463,6 +463,38 @@ Come tutto il percorso reale, `acquire` fallisce chiuso quando
 0008_execution_attempts` elimina `account_execution_leases` e la colonna
 `fencing_token`.
 
+#### Gate di sicurezza pre-scrittura (`safety_gates`)
+
+`app/modules/executions/safety_gates.authorize` è l'unica pre-validazione
+**fail-closed** che il dispatch reale (A3) dovrà superare **prima di ogni fase di
+scrittura**. Non esegue e non accoda nulla: prova, da riletture fresche delle
+evidenze persistite, che una mutazione sarebbe sicura, altrimenti solleva
+`SafetyGateError` (`409`). Non introduce migrazioni: usa le tabelle esistenti.
+
+Protezione strutturale della sorgente: un writer reale accetterà soltanto un
+`WriteTarget`, e l'unico costruttore è `WriteTarget.for_endpoint`, che rifiuta
+qualsiasi endpoint con ruolo diverso da `destination`. Non esiste un percorso che
+produca un `WriteTarget` per la sorgente: read source e write destination sono
+tipi distinti e non interscambiabili, quindi la sorgente non può raggiungere un
+writer.
+
+`authorize` ricombina a ogni chiamata, con letture fresche: master switch reale
+attivo; run reale e non terminale; targeting solo-destinazione; conferma forte
+presente e non scaduta (`REAL_CONFIRMATION_TTL_SECONDS`); coerenza **e** attualità
+di piano/comparazione/snapshot (il run deve riferire l'evidenza più recente);
+leggibilità dello snapshot (solo `succeeded`, mai `partial`/`failed`/
+`unavailable`/`empty`/ambiguo); capability per categoria (un readiness report
+corrente che marca la categoria `eligible_for_real_design`); lease attivo con
+fencing token corrente. Ogni input mancante, stale o ambiguo blocca.
+
+Poiché ogni chiamata rilegge lo stato, invocare `authorize` prima di ciascuna
+fase fa sì che un drift intervenuto (nuovo snapshot, nuova comparazione, conferma
+scaduta, lease sottratto) fermi la fase successiva. La `GateDecision` restituita
+contiene solo id, nomi di categoria e fencing token: nessun segreto viene letto o
+restituito. Interruttore: `REAL_EXECUTION_MODE` (default `disabled`) — con
+l'esecuzione reale disabilitata `authorize` fallisce chiuso. Nessuna route, coda
+o writer è ancora collegato: l'integrazione nel dispatch appartiene ad A3.
+
 ## Writer domini mock-only
 
 `worker.actors.domain_writer.domain_writer_actor` prepara il flusso asincrono

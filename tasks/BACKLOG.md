@@ -25,7 +25,7 @@
 | `[x]` | `A2` | [Real execution contract](A2-real-execution-contract.md) | Critical | L | A1 |
 | `[ ]` | `A3` | [Durable real dispatch](A3-durable-real-dispatch.md) | Critical | M | A2 |
 | `[x]` | `A4` | [Account execution lease](A4-account-execution-lease.md) | Critical | M | A2 |
-| `[ ]` | `A5` | [Real execution safety gates](A5-real-safety-gates.md) | Critical | L | A2, A4 |
+| `[x]` | `A5` | [Real execution safety gates](A5-real-safety-gates.md) | Critical | L | A2, A4 |
 
 ### Wave B — Adapters and configuration writers
 

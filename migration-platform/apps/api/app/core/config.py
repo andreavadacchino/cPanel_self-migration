@@ -39,6 +39,10 @@ class Settings(BaseSettings):
     # (heartbeat) within this window or the lease becomes eligible for a fenced
     # takeover by another worker.
     execution_lease_ttl_seconds: int = 300
+    # Maximum age of a strong confirmation before a real write phase must be
+    # re-confirmed. The safety gate rejects a confirmation older than this so a
+    # long-stale authorization can never drive a mutation.
+    real_confirmation_ttl_seconds: int = 900
 
     @property
     def cors_origins_list(self) -> list[str]:
