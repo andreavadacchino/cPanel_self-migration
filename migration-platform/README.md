@@ -180,6 +180,57 @@ decidono se una create additiva è sicura, senza I/O né segreti:
   decisione opera sui record live. Le decisioni `create` portano `compensation`
   metadata redatti per una futura rimozione manuale controllata.
 
+### Boundary SSH: contratto, host-key, esecuzione comandi (B2a)
+
+`packages/adapters/adapters/ssh` sostituisce lo stub `SshClient.run` con un boundary
+tipizzato per l'**esecuzione di comandi** SSH verificata su host key. Lo streaming,
+lo stdin e il backpressure arrivano in **B2b**; qui non c'è ancora trasferimento
+file/database/posta e nessun writer reale è collegato.
+
+Proprietà di sicurezza:
+
+- **Sorgente strutturalmente read-only.** `open_source_read_session` restituisce
+  una `SshReadSession` che non espone alcuna primitiva di write/stdin;
+  `open_destination_write_session` restituisce una `SshWriteSession` distinta le cui
+  scritture (`run_write`) restano **disabilitate per default** (`allow_writes=False`)
+  e richiedono anche una destinazione verificata.
+- **Nessuna shell arbitraria.** Un comando si costruisce solo con `command(program,
+  *args)`: il programma è validato da whitelist e gli argomenti sono citati con
+  `shlex.join`, così un metacarattere (`$(...)`, `;`, `|`) viene consegnato letterale
+  e non può iniettare un secondo comando. Non esiste un entry point a stringa grezza.
+- **Host key verificata prima dell'autenticazione.** La verifica avviene sul
+  `KnownHostsStore` persistente **prima** di inviare qualsiasi credenziale: host
+  sconosciuto → rifiutato in modalità `strict` (default); `accept_new` (override
+  esplicito e **audibile**, la chiave viene registrata) accetta solo host nuovi; una
+  **host key cambiata è sempre rifiutata** in entrambe le modalità. Nessun
+  `AutoAddPolicy` silenzioso. Il fingerprint `SHA256:` è sempre nell'audit.
+- **Segreti mai esposti.** Password/chiave/passphrase hanno `repr=False`, sono
+  escluse da repr, errori (redazione via `redact`), risultati e audit; l'audit
+  registra solo il metodo di auth e il fingerprint, mai la credenziale.
+- **Output limitato.** stdout/stderr sono separati e limitati (`OutputLimits`); i
+  byte oltre il cap sono scartati (non bufferizzati) e viene segnalato `truncated`,
+  impedendo l'esaurimento di memoria.
+- **Timeout e cancellazione.** Timeout `connect`/`command`/`idle` sono passati al
+  transport; la cancellazione cooperativa (`threading.Event`) è verificata prima e
+  durante il comando e chiude il canale. `close()` è idempotente.
+- **Retry solo su connect.** Solo la fase di connect (errori transitori) viene
+  ritentata con backoff prima di qualsiasi comando; **un comando non viene mai
+  ritentato** (nessun replay di una scrittura o di uno stream parziale).
+
+Dipendenza scelta: **paramiko** (libreria SSH2 pure-Python matura e mantenuta,
+compatibile con il runtime ≥3.11). È usata solo dal backend di trasporto reale
+(`paramiko_backend.py`, importato lazy) che apre la `Transport` a basso livello per
+poter leggere e verificare la host key **prima** dell'auth; tutta la logica di
+policy/sicurezza vive in `client.py`, testato al 99% con un **fake backend
+deterministico** (`fakes.py`) — nessun test contatta un server reale.
+
+Test mirati (49, branch coverage):
+
+```bash
+cd packages/adapters && PYTHONPATH=. python -m pytest adapters/ssh/tests -q \
+  --cov=adapters/ssh --cov-report=term-missing --cov-branch
+```
+
 ### Stato di implementazione
 
 | Area | Stato |
@@ -193,6 +244,7 @@ decidono se una create additiva è sicura, senza I/O né segreti:
 | Checklist manuale | Generata e persistita dalla comparazione |
 | Esecutore dry-run | Funzionante, nessuna scrittura reale |
 | Readiness writer reali | Report persistente read-only, nessun dispatch |
+| Boundary SSH (B2a) | Esecuzione comandi verificata host-key; streaming in B2b; non collegato al dispatch |
 | Migrazione dati/configurazioni | Writer reali non abilitati |
 
 ## Copertura del preflight

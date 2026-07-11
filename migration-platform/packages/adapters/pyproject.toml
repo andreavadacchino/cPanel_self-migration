@@ -1,11 +1,14 @@
 [project]
 name = "migration-platform-adapters"
 version = "0.1.0"
-description = "External-system adapter stubs (cPanel/SSH/IMAP). No real logic in Sprint 0."
+description = "External-system adapters (cPanel HTTP client, SSH command execution)."
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27",
     "pydantic>=2.6",
+    # Mature pure-Python SSH2 library. Used only by the real (non-test) SSH
+    # transport backend; the adapter is testable without it via the fake backend.
+    "paramiko>=3.4",
 ]
 
 [build-system]
@@ -14,3 +17,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["adapters*"]
+
+[tool.coverage.run]
+branch = true
+# The paramiko transport backend performs raw network I/O and cannot run without
+# a real host; all policy/security logic it delegates to lives in client.py and is
+# fully covered by the deterministic fake backend.
+omit = ["adapters/ssh/paramiko_backend.py"]

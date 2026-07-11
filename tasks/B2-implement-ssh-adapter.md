@@ -1,13 +1,33 @@
-# Task B2: Implement SSH adapter
+# Task B2: Implement SSH adapter — SPLIT (retired)
 
 | Field | Value |
 |---|---|
-| **ID** | `B2` |
-| **Status** | `[ ]` |
+| **ID** | `B2` (ritirato) |
+| **Status** | `[/]` split — non completare con questo ID |
 | **Priority** | High |
 | **Size** | L |
 | **Dependencies** | A5 |
-| **Branch** | `feat/b2-implement-ssh-adapter` |
+| **Branch** | `feat/b2-implement-ssh-adapter` (non usare) |
+
+> **Split.** L'implementazione completa di B2 è stata misurata a **~1100 righe di
+> produzione + ~600 di test su 9+ file** (errors, contract tipizzato, command
+> builder, host-key policy, client paramiko, streaming/backpressure, fake
+> transport, ~25 test), oltre i guardrail 8 file / 500 righe e il limite di 400
+> righe per file. Come previsto da questo stesso task ("misura prima di
+> implementare; se necessario proponi lo split"), l'implementazione è stata
+> fermata e B2 suddiviso in:
+>
+> - [`B2a` — SSH contract, host-key security, command execution](B2a-ssh-command-execution.md) (dep: A5)
+> - [`B2b` — SSH streaming, cancellation, backpressure](B2b-ssh-streaming-backpressure.md) (dep: B2a)
+>
+> B2a è il minimo boundary coerente e testabile per l'esecuzione comandi
+> verificata host-key (una divisione più fine produrrebbe PR intermedie non
+> testabili). Le dipendenze downstream su trasferimento contenuti (C1/C2/C3)
+> puntano a `B2b`; i writer basati su comandi (B5) possono partire da `B2a`. L'ID
+> `B2` è ritirato e non riutilizzato. Il testo storico sottostante resta come
+> riferimento.
+
+---
 
 **Goal:** Implement host-key-verified SSH commands and streaming with timeouts, cancellation, bounded output, and read/write target policy.
 
