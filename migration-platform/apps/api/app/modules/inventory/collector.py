@@ -59,6 +59,9 @@ def collect(client: CpanelClient) -> tuple[dict, dict]:
                 "items_count": None,
                 "message": message,
             }
+    _collect_domains_contract(client, data, coverage)
+    if coverage["domains_contract"]["status"] in {"partial", "ambiguous", "unavailable", "failed"}:
+        warnings += 1
     _collect_mysql_grants(client, data, coverage)
     _assess_mysql_grant_contract(data, coverage)
     _collect_database_contract(client, data, coverage)
@@ -508,6 +511,53 @@ def _domains(value: object) -> list[str]:
         if isinstance(items, list):
             found.update(str(item) for item in items if item)
     return sorted(found)
+
+
+def _collect_domains_contract(client: CpanelClient, data: dict, coverage: dict) -> None:
+    """Persist the rich, fail-closed domains contract (task B3c-i).
+
+    Enumeration stays ``DomainInfo::list_domains`` (already in ``data['domains']``);
+    the account-level detail is a single SafeRead of ``DomainInfo::domains_data``
+    via the B3a adapter (source read-only, no re-parsing here). Reconciliation
+    lives in the pure ``domain_contract`` module. A failed/malformed detail read
+    is recorded as ``failed`` — never an empty domain set — and does not touch
+    readiness, gate, planner, or writer.
+    """
+    from adapters.cpanel.domains import read_domains
+
+    from app.modules.inventory import domain_contract
+
+    enumeration = data.get("domains")
+    enumerated = domain_contract.enumerated_types(enumeration)
+    account = getattr(getattr(client, "credentials", None), "username", None)
+    # A malformed list_domains payload (present but not the expected dict) must not
+    # masquerade as an empty account: treat the enumeration as unreadable.
+    enumeration_readable = (
+        coverage.get("domains", {}).get("status") in {"succeeded", "empty"}
+        and (enumeration is None or isinstance(enumeration, dict))
+    )
+    detail = None
+    read_error = None
+    if enumeration_readable:
+        try:
+            detail = read_domains(client)  # B3a SafeRead of DomainInfo::domains_data
+        except Exception as exc:  # malformed/partial payload or transport error
+            read_error = type(exc).__name__
+    envelope = domain_contract.reconcile(
+        enumerated, detail, account=account,
+        enumeration_readable=enumeration_readable, read_error=read_error,
+        enumeration_issues=domain_contract.enumeration_issues(enumeration))
+    # Persist under a dedicated key (NOT ``domains_data``, which the writer's
+    # ``_source_domain_records`` parses in the raw cPanel shape); B3c-ii bridges it.
+    data[domain_contract.SNAPSHOT_KEY] = envelope
+    counted = envelope["status"] in {domain_contract.SUCCEEDED, domain_contract.PARTIAL, domain_contract.AMBIGUOUS}
+    coverage["domains_contract"] = {
+        "status": envelope["status"],
+        "method": domain_contract.METHOD,
+        "read_only_verified": True,
+        "items_count": len(envelope["records"]) if counted else None,
+        "message": envelope["message"],
+    }
 
 
 def _dns_zones(value: object) -> list[str]:

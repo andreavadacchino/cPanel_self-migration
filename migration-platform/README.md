@@ -204,7 +204,8 @@ messaggio ed evidenza che la lettura è read-only.
 | Categoria | Lettura |
 |-----------|---------|
 | Account | `Variables::get_user_information` |
-| Domini | `DomainInfo::list_domains` |
+| Domini | `DomainInfo::list_domains` (enumerazione) |
+| Contratto domini | `DomainInfo::domains_data` (dettaglio ricco) → `domains_contract` |
 | Caselle email | `Email::list_pops_with_disk` |
 | Database | `Mysql::list_databases` |
 | Utenti MySQL | `Mysql::list_users` |
@@ -225,6 +226,73 @@ messaggio ed evidenza che la lettura è read-only.
 Gli esiti possibili sono `succeeded`, `empty`, `partial`, `unsupported`,
 `unavailable`, `failed` e `unverified`. Una chiamata fallita non produce mai un
 conteggio zero. Tutte le categorie elencate nella tabella hanno un collector.
+
+### Contratto domini ricco (`domains_data`, task B3c-i)
+
+Il writer reale (B3b-ii) ha bisogno di record domini tipizzati (tipo, docroot,
+internal label), non della sola lista nomi di `list_domains`. Il collector legge
+quindi il dettaglio account-level `DomainInfo::domains_data` **in sola lettura**
+(SafeRead, adapter B3a) e persiste nello snapshot un envelope versionato sotto la
+chiave dedicata `data["domains_contract"]` (**non** `data["domains_data"]`, che il
+writer `_source_domain_records` interpreta ancora nella shape grezza cPanel:
+occuparla con l'envelope lo farebbe misparsare a elenco vuoto — il bridge al
+writer è compito di B3c-ii), riconciliato contro l'enumerazione `list_domains`,
+senza mai inventare valori:
+
+```jsonc
+{
+  "version": 1,
+  "status": "succeeded",              // vedi stati sotto
+  "method": "UAPI DomainInfo::domains_data",
+  "account": "<account cPanel>",
+  "records": [{
+    "normalized": "app.example.test", // IDNA/case-folded, null se non parseabile
+    "raw": "app.example.test",        // spelling grezzo dal payload
+    "type": "subdomain",              // main|addon|subdomain|alias, null se ignoto
+    "docroot": "/home/acct/app",      // null se non verificabile
+    "internal_label": "app",          // null se non verificabile
+    "parent": "example.test",         // dominio proprietario proper-suffix, o null
+    "account": "<account cPanel>",
+    "method": "UAPI DomainInfo::domains_data",
+    "complete": true,                 // false se mancano campi richiesti
+    "issues": []                      // es. missing_docroot, type_conflict, ...
+  }],
+  "reconciliation": {                 // list_domains vs domains_data
+    "enumerated": 4, "detailed": 4,
+    "missing_detail": [], "unexpected_detail": [],
+    "duplicates": [], "type_conflicts": []
+  }
+}
+```
+
+Stato del contratto (`coverage["domains_contract"]`):
+
+- **`succeeded`** — ogni dominio enumerato ha un dettaglio completo e coerente
+  (zero record = account senza domini, *non* un errore);
+- **`partial`** — un dominio è enumerato senza dettaglio, oppure un record manca
+  di un campo richiesto (docroot/label/parent) e non è eleggibile;
+- **`ambiguous`** — un dettaglio non enumerato, un duplicato o un tipo
+  conflittuale richiede revisione;
+- **`failed`** — la lettura `domains_data` è fallita o malformata: **mai** un
+  elenco vuoto assunto;
+- **`unavailable`** — l'enumerazione stessa non è leggibile.
+
+Un campo non verificabile resta `null` con un `issue` esplicito; una failure non
+diventa mai «nessun dominio». Il contratto distingue in modo affidabile «account
+senza domini» (`succeeded`+0) da «non siamo riusciti a leggere i domini»
+(`failed`/`unavailable`).
+
+**Compatibilità snapshot legacy:** uno snapshot precedente privo dell'envelope è
+classificato `legacy` da `domain_contract.read_contract`, mai promosso
+implicitamente a `succeeded` né letto come elenco vuoto; l'envelope è versionato
+(`version`), quindi una versione/stato sconosciuti sono trattati come `failed`.
+
+> B3c-i **produce e persiste** soltanto questa evidenza: non modifica readiness,
+> safety gate o writer, e la categoria `domains` resta non eleggibile alla
+> scrittura reale. La limitazione residua (a) di B3b-ii (writer che si ferma per
+> assenza dell'envelope ricco) sarà chiusa da **B3c-ii**, quando la readiness
+> renderà `domains` eleggibile solo su contratto `succeeded` coerente su entrambi
+> gli endpoint. La limitazione crash/recovery di B3b-ii resta assegnata a **C4**.
 Una singola installazione può comunque restituire `unsupported` o `unavailable`
 per feature disabilitate, privilegi mancanti o API non offerte dal server.
 Una categoria `unsupported` su entrambi gli endpoint è considerata non

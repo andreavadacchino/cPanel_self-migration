@@ -34,16 +34,21 @@
 | `[x]` | `B3a` | [Domain adapter and safety rules](B3a-domain-adapter-rules.md) | High | M | B1 |
 | `[x]` | `B3b-i` | [Real domain write phase engine](B3b-i-domain-phase-engine.md) | High | M | B3a |
 | `[x]` | `B3b-ii` | [Domain phase dispatch wiring](B3b-ii-domain-phase-dispatch.md) | High | M | B3b-i |
-| `[ ]` | `B4` | [Real email configuration writers](B4-email-config-writers.md) | High | L | B1, B3b-ii |
-| `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2, B3b-ii |
-| `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3b-ii |
-| `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3b-ii |
+| `[/]` | `B3c` | [Rich domain inventory contract](B3c-rich-domain-inventory.md) (split → B3c-i/B3c-ii) | High | L | B3b-ii |
+| `[x]` | `B3c-i` | [Domain inventory contract (collector)](B3c-i-domain-inventory-contract.md) | High | M | B3b-ii |
+| `[ ]` | `B3c-ii` | [Rich domain readiness integration](B3c-ii-domain-readiness-integration.md) | High | M | B3c-i |
+| `[ ]` | `B4` | [Real email configuration writers](B4-email-config-writers.md) | High | L | B1, B3c-ii |
+| `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2, B3c-ii |
+| `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
+| `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
 
 > `B3` è stato suddiviso in `B3a`/`B3b` (superamento previsto dei guardrail 8 file / 500 righe); vedi [B3-real-domain-writer.md](B3-real-domain-writer.md). A sua volta `B3b`, misurato a ~660 righe, è stato suddiviso in `B3b-i` (motore di fase, irraggiungibile dal runtime) e `B3b-ii` (wiring dispatch/actor); vedi [B3b-real-domain-writer-dispatch.md](B3b-real-domain-writer-dispatch.md). Gli ID `B3` e `B3b` sono ritirati e non riutilizzati.
 
+> `B3c` (Rich domain inventory contract), misurato a ~580 righe / 8–9 file, è stato suddiviso in `B3c-i` (contratto domini nel collector: produce e persiste l'envelope ricco `domains_data` fail-closed) e `B3c-ii` (integrazione readiness/gate + prova end-to-end che B3b-ii consuma i record ricchi); vedi [B3c-rich-domain-inventory.md](B3c-rich-domain-inventory.md). L'ID `B3c` è ritirato e non riutilizzato per implementazione. **B3c-ii chiude la limitazione residua (a) di B3b-ii** (inventario privo dell'envelope ricco → passi dominio manual/pending); la limitazione crash/recovery di B3b-ii resta assegnata a **C4**. Le categorie downstream (`B4`/`B5`/`B6`/`B7`/`C1`) dipendono ora da `B3c-ii`.
+
 ### Wave C — Content transfer
 
-| `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2, B3b-ii |
+| `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2, B3c-ii |
 | `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2, B6 |
 | `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2, B4 |
 | `[ ]` | `C4` | [Transfer checkpoint resume](C4-transfer-checkpoint-resume.md) | High | L | C1, C2, C3 |
@@ -70,18 +75,18 @@ graph LR
   A2-->A4-->A5
   A5-->B1
   A5-->B2
-  B1-->B3a-->B3b-i-->B3b-ii
+  B1-->B3a-->B3b-i-->B3b-ii-->B3c-i-->B3c-ii
   B1-->B4
-  B3b-ii-->B4
+  B3c-ii-->B4
   B1-->B5
   B2-->B5
-  B3b-ii-->B5
+  B3c-ii-->B5
   B1-->B6
-  B3b-ii-->B6
+  B3c-ii-->B6
   B1-->B7
-  B3b-ii-->B7
+  B3c-ii-->B7
   B2-->C1
-  B3b-ii-->C1
+  B3c-ii-->C1
   B2-->C2
   B6-->C2
   B2-->C3
