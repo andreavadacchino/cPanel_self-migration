@@ -31,6 +31,7 @@ def setup_readiness(db: Session, *, source_overrides: dict | None = None) -> tup
         {"id": "dns_records:www", "category": "dns_records", "mode": "approval", "depends_on_categories": ["domains"]},
         {"id": "email_autoresponders:a@example.test", "category": "email_autoresponders", "mode": "manual", "depends_on_categories": []},
         {"id": "php_settings:example.test", "category": "php_settings", "mode": "manual", "depends_on_categories": ["domains"]},
+        {"id": "dns_contract:contract", "category": "dns_contract", "mode": "excluded", "depends_on_categories": []},
     ]
     plan = MigrationPlan(migration_id=migration.id, comparison_report_id=comparison.id, status="draft", summary={}, steps=steps)
     db.add(plan); db.commit()
@@ -51,6 +52,7 @@ def test_report_covers_all_writers_steps_operator_gaps_and_redacts(client: TestC
     assert any(gap["code"] == "approval_required" for gap in steps["dns_records:www"]["gaps"])
     assert any(gap["code"] == "dependencies" for gap in steps["mysql_users:user"]["gaps"])
     assert steps["php_settings:example.test"]["status"] == "not_ready"
+    assert "dns_contract:contract" not in steps
     assert any(gap["code"] == "no_writer_contract" for gap in steps["php_settings:example.test"]["gaps"])
     assert "SECRET" not in response.text
     loaded = client.get(f"/api/migrations/{migration_id}/writer-readiness")

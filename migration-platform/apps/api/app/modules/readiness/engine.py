@@ -5,6 +5,11 @@ WRITER_CATEGORIES = (
     "ftp_accounts", "mailing_lists", "dns_records", "email_autoresponders",
 )
 READABLE = {"succeeded", "empty"}
+EVIDENCE_CATEGORIES = {
+    "database_contract", "mysql_grant_contract", "mysql_grants",
+    "ftp_contract", "mailing_list_contract", "forwarder_contract",
+    "autoresponder_contract", "dns_contract",
+}
 PRIORITY = {
     "not_ready": 0, "needs_inventory": 1, "needs_contract_test": 2,
     "needs_operator_input": 3, "eligible_for_real_design": 4,
@@ -112,6 +117,7 @@ def build_report(plan_steps: list[dict], source_data: dict | None, destination_d
     unsupported_categories = sorted({
         str(step.get("category")) for step in plan_steps
         if step.get("category") not in WRITER_CATEGORIES
+        and step.get("category") not in EVIDENCE_CATEGORIES
     })
     for category in unsupported_categories:
         category_steps = [step for step in plan_steps if step.get("category") == category]

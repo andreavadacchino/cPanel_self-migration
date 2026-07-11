@@ -57,7 +57,8 @@ Fallimenti parziali non diventano una matrice vuota.
 - privilegi appartenenti all'insieme account-level supportato.
 
 `mysql_grants` e `mysql_grant_contract` sono evidenze, quindi il planner li
-marca `excluded` e non crea operazioni duplicate.
+marca `excluded` e non crea operazioni duplicate. Le categorie evidence
+`excluded` non entrano inoltre nel conteggio readiness delle categorie writer.
 
 ### FTP
 
