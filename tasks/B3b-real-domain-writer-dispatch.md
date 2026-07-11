@@ -1,13 +1,27 @@
-# Task B3b: Real domain writer phase and dispatch wiring
+# Task B3b: Real domain writer phase and dispatch wiring — SPLIT (retired)
 
 | Field | Value |
 |---|---|
-| **ID** | `B3b` |
-| **Status** | `[ ]` |
+| **ID** | `B3b` (ritirato) |
+| **Status** | `[/]` split — non completare con questo ID |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B3a |
-| **Branch** | `feat/b3b-real-domain-writer-dispatch` |
+| **Branch** | `feat/b3b-real-domain-writer-dispatch` (non usare) |
+
+> **Split.** L'implementazione completa di B3b è stata misurata a **~660 righe**
+> (produzione ~384: `real_domain_writer.py` 209 + wiring `dispatch.py`/`config.py`
+> ~175; più ~250 di test e ~30 di doc), oltre il guardrail di 500 righe. Come
+> imposto dal task, l'implementazione è stata fermata e B3b suddiviso in:
+>
+> - [`B3b-i` — Real domain write phase engine](B3b-i-domain-phase-engine.md) (dep: B3a)
+> - [`B3b-ii` — Domain phase dispatch wiring](B3b-ii-domain-phase-dispatch.md) (dep: B3b-i)
+>
+> Le dipendenze downstream che puntavano a `B3b` ora puntano a `B3b-ii` (il wiring
+> che abilita il writer reale end-to-end): B4, B5, B6, B7 e C1. L'ID `B3b` è
+> ritirato e non riutilizzato. Il testo storico sottostante resta come riferimento.
+
+---
 
 **Origin:** second half of the split of the original `B3` (see
 [B3-real-domain-writer.md](B3-real-domain-writer.md)). B3b consumes the typed
