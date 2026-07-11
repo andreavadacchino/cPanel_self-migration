@@ -746,7 +746,7 @@ sempre essere riletti dalle API prima dell'uso):
 - tutti i flag writer sono `disabled`;
 - execution run non dry-run nel database: 0.
 
-La baseline di test corrente è 117 test API e 15 test worker. La build frontend,
+La baseline di test corrente è 117 test API e 17 test worker. La build frontend,
 `docker compose config -q`, health API e stack Docker risultano verdi.
 
 ## Limitazioni e prossimi incrementi
@@ -768,27 +768,63 @@ La baseline di test corrente è 117 test API e 15 test worker. La build frontend
 
 ## Sviluppo locale (senza Docker)
 
-### API
+### Ambiente Python riproducibile (workflow unico)
+
+Un **solo virtualenv nella root** di `migration-platform/` con tutti i pacchetti
+installati editable. È il workflow di riferimento sia in locale sia in CI; le
+immagini Docker installano gli stessi pacchetti (vedi `apps/*/Dockerfile`), così
+i due percorsi restano allineati. Serve Python **3.11+**.
+
+```bash
+cd migration-platform
+make setup            # crea .venv e installa domain, adapters, api, worker (con extra test)
+source .venv/bin/activate
+```
+
+Equivalente senza `make`:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -U pip
+pip install -e packages/domain -e packages/adapters \
+    -e "apps/api[test]" -e "apps/worker[test]"
+```
+
+Il worker dipende da `dramatiq`; il comando sopra lo installa insieme al
+pacchetto API di cui gli actor hanno bisogno. Senza questo passo i test del
+worker falliscono in fase di collection con `ModuleNotFoundError: dramatiq`.
+
+Gate host-side (con la venv attiva, dopo `make setup`):
+
+```bash
+make test             # api-test + worker-test + web-build in ordine di dipendenza
+# oppure singolarmente:
+make api-test         # 117 test, SQLite in-memory, nessun Postgres
+make worker-test      # 17 test, StubBroker, nessun Redis
+make web-build
+```
+
+### API (dev server)
 
 ```bash
 cd apps/api
-python -m venv .venv && source .venv/bin/activate
-pip install -e ../../packages/domain -e ../../packages/adapters -e .
-# test (usano SQLite in-memory, non serve Postgres):
-python -m pytest
-# dev server (richiede DATABASE_URL o usa il default SQLite):
-alembic upgrade head
+# venv già attiva da `make setup`
+alembic upgrade head          # usa DATABASE_URL o il default SQLite
 uvicorn app.main:app --reload
 ```
 
-### Worker
+### Worker (esecuzione reale)
 
 ```bash
 cd apps/worker
-pip install -e ../../packages/domain -e ../../packages/adapters -e ../api -e .
-DRAMATIQ_TESTING=1 python -m pytest      # test senza Redis
-dramatiq worker.main                     # richiede Redis attivo
+# venv già attiva da `make setup`; i writer reali restano disabilitati
+dramatiq worker.main          # richiede Redis attivo
 ```
+
+I test del worker restano ermetici: `conftest.py` forza `DRAMATIQ_TESTING=1`
+prima di importare qualsiasi modulo `worker.*`, quindi usano sempre lo
+`StubBroker` e non aprono connessioni a Redis. Nessun writer reale viene
+attivato dai test.
 
 ### Web
 

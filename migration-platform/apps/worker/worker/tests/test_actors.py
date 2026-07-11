@@ -5,6 +5,32 @@ from __future__ import annotations
 import dramatiq
 
 
+def test_broker_is_stub_in_test_environment() -> None:
+    """Worker tests must stay hermetic: no live Redis is ever required.
+
+    The conftest sets ``DRAMATIQ_TESTING=1`` before any worker module import,
+    so the module-level broker must be a StubBroker. This guards the
+    reproducible test workflow (``make setup`` / README) against an accidental
+    RedisBroker default that would tie collection to a running Redis.
+    """
+    from dramatiq.brokers.stub import StubBroker
+
+    from worker.broker import broker
+
+    assert isinstance(broker, StubBroker)
+
+
+def test_build_broker_selects_stub_under_testing_flag(monkeypatch) -> None:
+    """``DRAMATIQ_TESTING=1`` deterministically selects the StubBroker."""
+    from dramatiq.brokers.stub import StubBroker
+
+    from worker import broker as broker_module
+
+    monkeypatch.setenv("DRAMATIQ_TESTING", "1")
+    built = broker_module._build_broker()
+    assert isinstance(built, StubBroker)
+
+
 def test_health_actor_is_importable_and_registered() -> None:
     from worker.actors.health import health_check_actor
 

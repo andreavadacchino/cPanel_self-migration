@@ -9,9 +9,15 @@ dependencies = [
     "sqlalchemy>=2.0",
 ]
 
+# The worker actors import the API package (`app.*`) lazily inside their
+# execute bodies, so `pip install -e apps/worker[test]` alone lets the tests
+# collect and pass. A full local run that also exercises actor bodies requires
+# the sibling packages installed editable — see `make setup` and the README
+# "Sviluppo locale" section for the single reproducible workflow.
 [project.optional-dependencies]
 test = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
 ]
 
 [build-system]
