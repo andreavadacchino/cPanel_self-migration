@@ -59,6 +59,11 @@ def collect(client: CpanelClient) -> tuple[dict, dict]:
                 "items_count": None,
                 "message": message,
             }
+    _collect_mysql_grants(client, data, coverage)
+    _assess_mysql_grant_contract(data, coverage)
+    _collect_database_contract(client, data, coverage)
+    _assess_ftp_writer_metadata(data, coverage)
+    _assess_mailing_list_privacy(client, data, coverage)
     _collect_dns(client, data, coverage)
     if coverage["dns_records"]["status"] in {"partial", "unavailable"}:
         warnings += 1
@@ -87,6 +92,183 @@ def collect(client: CpanelClient) -> tuple[dict, dict]:
         "warnings_count": warnings,
     }
     return data, summary
+
+
+def _named_items(value: object, *keys: str) -> list[str]:
+    items = value if isinstance(value, list) else []
+    result: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            result.append(item)
+        elif isinstance(item, dict):
+            name = next((item.get(key) for key in keys if item.get(key)), None)
+            if name:
+                result.append(str(name))
+    return sorted(set(result))
+
+
+def _collect_mysql_grants(client: CpanelClient, data: dict, coverage: dict) -> None:
+    databases = _named_items(data.get("databases"), "database", "name")
+    users = _named_items(data.get("mysql_users"), "user", "name", "username")
+    if coverage.get("databases", {}).get("status") not in {"succeeded", "empty"} or coverage.get("mysql_users", {}).get("status") not in {"succeeded", "empty"}:
+        data["mysql_grants"] = []
+        coverage["mysql_grants"] = {"status": "unavailable", "method": "UAPI Mysql::get_privileges_on_database (per user/database)", "read_only_verified": True, "items_count": None, "message": "Database o utenti MySQL non leggibili."}
+        return
+    grants: list[dict] = []
+    failures: list[str] = []
+    checked = 0
+    for database in databases:
+        for user in users:
+            try:
+                raw = _items(client.execute("Mysql", "get_privileges_on_database", {"database": database, "user": user}))
+                privileges = _privilege_names(raw)
+                checked += 1
+                if privileges:
+                    grants.append({"database": database, "user": user, "privileges": privileges})
+            except Exception:
+                failures.append(f"{user}@{database}")
+    data["mysql_grants"] = grants
+    status = "partial" if failures and checked else "unavailable" if failures else "empty" if not grants else "succeeded"
+    coverage["mysql_grants"] = {
+        "status": status, "method": "UAPI Mysql::get_privileges_on_database (per user/database)",
+        "read_only_verified": True, "items_count": len(grants) if status != "unavailable" else None,
+        "message": f"{len(failures)} coppie non verificabili." if failures else None,
+        "pairs_checked": checked, "pairs_total": len(databases) * len(users),
+    }
+
+
+MYSQL_PRIVILEGES = {
+    "ALL PRIVILEGES", "ALTER", "ALTER ROUTINE", "CREATE", "CREATE ROUTINE",
+    "CREATE TEMPORARY TABLES", "CREATE VIEW", "DELETE", "DROP", "EVENT",
+    "EXECUTE", "INDEX", "INSERT", "LOCK TABLES", "REFERENCES", "SELECT",
+    "SHOW VIEW", "TRIGGER", "UPDATE",
+}
+
+
+def _assess_mysql_grant_contract(data: dict, coverage: dict) -> None:
+    grant_coverage = coverage.get("mysql_grants", {})
+    grants = data.get("mysql_grants", []) if isinstance(data.get("mysql_grants"), list) else []
+    complete = grant_coverage.get("status") in {"succeeded", "empty"} and grant_coverage.get("pairs_checked") == grant_coverage.get("pairs_total")
+    invalid = sorted({privilege for grant in grants if isinstance(grant, dict) for privilege in grant.get("privileges", []) if privilege not in MYSQL_PRIVILEGES})
+    status = "succeeded" if complete and not invalid else "failed" if invalid else "unavailable"
+    data["mysql_grant_contract"] = {"pairs_checked": grant_coverage.get("pairs_checked", 0), "pairs_total": grant_coverage.get("pairs_total", 0), "grants_count": len(grants), "invalid_privileges": invalid}
+    coverage["mysql_grant_contract"] = {"status": status, "method": "UAPI Mysql::get_privileges_on_database contract validation", "read_only_verified": True, "items_count": 1 if status == "succeeded" else None, "message": "Privilegi non supportati dal contratto." if invalid else None}
+
+
+def _collect_database_contract(client: CpanelClient, data: dict, coverage: dict) -> None:
+    if coverage.get("account", {}).get("status") not in {"succeeded", "empty"} or coverage.get("databases", {}).get("status") not in {"succeeded", "empty"}:
+        coverage["database_contract"] = {"status": "unavailable", "method": "UAPI Mysql::get_restrictions + inventory quota", "read_only_verified": True, "items_count": None, "message": "Account o database non leggibili."}
+        return
+    try:
+        restrictions = _items(client.execute("Mysql", "get_restrictions"))
+        if not isinstance(restrictions, dict) or not restrictions:
+            raise ValueError("restrizioni MySQL assenti")
+        account = data.get("account") if isinstance(data.get("account"), dict) else {}
+        maximum = account.get("maximum_databases")
+        current = len(data.get("databases", [])) if isinstance(data.get("databases"), list) else 0
+        quota_known = maximum not in {None, ""}
+        data["database_contract"] = {"restrictions": restrictions, "quota": {"maximum": maximum, "current": current, "known": quota_known}}
+        coverage["database_contract"] = {"status": "succeeded" if quota_known else "partial", "method": "UAPI Mysql::get_restrictions + Variables::get_user_information", "read_only_verified": True, "items_count": 1, "message": None if quota_known else "Limite database non disponibile."}
+    except Exception as exc:
+        data["database_contract"] = {}
+        coverage["database_contract"] = {"status": "unavailable", "method": "UAPI Mysql::get_restrictions + Variables::get_user_information", "read_only_verified": True, "items_count": None, "message": str(exc)}
+
+
+def _privilege_names(value: object) -> list[str]:
+    if isinstance(value, dict):
+        value = value.get("privileges", value)
+    if isinstance(value, str):
+        return sorted({part.strip().upper() for part in value.split(",") if part.strip()})
+    if isinstance(value, list):
+        names = []
+        for item in value:
+            if isinstance(item, str):
+                names.append(item)
+            elif isinstance(item, dict):
+                name = item.get("privilege") or item.get("name")
+                if name:
+                    names.append(str(name))
+        return sorted({name.strip().upper() for name in names if name.strip()})
+    return []
+
+
+def _assess_ftp_writer_metadata(data: dict, coverage: dict) -> None:
+    if coverage.get("ftp_accounts", {}).get("status") not in {"succeeded", "empty"}:
+        return
+    items = data.get("ftp_accounts") if isinstance(data.get("ftp_accounts"), list) else []
+    subaccounts = [item for item in items if isinstance(item, dict) and (item.get("accttype") == "sub" or item.get("type") == "sub")]
+    incomplete = 0
+    for item in subaccounts:
+        quota = item.get("diskquota", item.get("quota"))
+        homedir = item.get("homedir", item.get("dir"))
+        item["_writer_metadata_status"] = "succeeded" if quota is not None and homedir else "failed"
+        incomplete += item["_writer_metadata_status"] == "failed"
+    if incomplete:
+        coverage["ftp_accounts"]["status"] = "partial"
+        coverage["ftp_accounts"]["message"] = f"Quota/home mancanti per {incomplete} account FTP migrabili."
+
+
+def _mailing_list_key(item: dict) -> str:
+    value = item.get("list") or item.get("listname") or item.get("email") or ""
+    if "@" not in str(value) and item.get("domain"):
+        value = f"{value}@{item['domain']}"
+    return str(value).lower()
+
+
+def _privacy_value(item: dict) -> int | None:
+    value = item.get("private")
+    if value in {0, False, "0"}:
+        return 0
+    if value in {1, True, "1"}:
+        return 1
+    listtype = item.get("listtype")
+    if listtype in {"private", "public"}:
+        return 1 if listtype == "private" else 0
+    archive_private = item.get("archive_private")
+    advertised = item.get("advertised")
+    subscribe_policy = item.get("subscribe_policy")
+    explicit = {0, 1, False, True, "0", "1"}
+    if archive_private in explicit and advertised in explicit and str(subscribe_policy) in {"1", "2", "3"}:
+        archive_is_private = str(int(archive_private)) == "1"
+        is_advertised = str(int(advertised)) == "1"
+        approval_required = str(subscribe_policy) in {"2", "3"}
+        return int(archive_is_private and not is_advertised and approval_required)
+    return None
+
+
+def _assess_mailing_list_privacy(client: CpanelClient, data: dict, coverage: dict) -> None:
+    if coverage.get("mailing_lists", {}).get("status") not in {"succeeded", "empty"}:
+        return
+    items = data.get("mailing_lists") if isinstance(data.get("mailing_lists"), list) else []
+    fallback: dict[str, int] = {}
+    if any(isinstance(item, dict) and _privacy_value(item) is None for item in items):
+        try:
+            payload = client.api2("Email", "listlists")
+            legacy_items = payload.get("cpanelresult", {}).get("data") or []
+            fallback = {
+                _mailing_list_key(item): value
+                for item in legacy_items if isinstance(item, dict)
+                if (value := _privacy_value(item)) is not None
+            }
+        except Exception:
+            fallback = {}
+    incomplete = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        value = _privacy_value(item)
+        source = "uapi"
+        if value is None:
+            value = fallback.get(_mailing_list_key(item))
+            source = "api2" if value is not None else "unavailable"
+        if value is not None:
+            item["private"] = value
+        item["_privacy_status"] = "succeeded" if value is not None else "failed"
+        item["_privacy_source"] = source
+        incomplete += item["_privacy_status"] == "failed"
+    if incomplete:
+        coverage["mailing_lists"]["status"] = "partial"
+        coverage["mailing_lists"]["message"] = f"Privacy non verificata per {incomplete} mailing list."
 
 
 def _collect_autoresponders(client: CpanelClient, data: dict, coverage: dict) -> None:
@@ -192,6 +374,25 @@ def _domains(value: object) -> list[str]:
     return sorted(found)
 
 
+def _dns_zones(value: object) -> list[str]:
+    """Return domains that can own a cPanel DNS zone.
+
+    Subdomains are resources, but normally live inside their parent domain's
+    zone. Querying each one as an autonomous zone creates false partial reads.
+    """
+    if not isinstance(value, dict):
+        return []
+    found: set[str] = set()
+    main = value.get("main_domain")
+    if isinstance(main, str) and main:
+        found.add(main)
+    for field in ("addon_domains", "parked_domains"):
+        items = value.get(field, [])
+        if isinstance(items, list):
+            found.update(str(item) for item in items if item)
+    return sorted(found)
+
+
 def _count(category: str, value: object) -> int:
     if category == "account":
         return 1 if value else 0
@@ -201,7 +402,7 @@ def _count(category: str, value: object) -> int:
 
 
 def _collect_dns(client: CpanelClient, data: dict, coverage: dict) -> None:
-    zones = _domains(data.get("domains"))
+    zones = _dns_zones(data.get("domains"))
     records: list[dict] = []
     failures: list[str] = []
     for zone in zones:

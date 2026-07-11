@@ -27,6 +27,7 @@ from app.modules.inventory import models as _inventory_models  # noqa: F401
 from app.modules.comparison import models as _comparison_models  # noqa: F401
 from app.modules.plans import models as _plan_models  # noqa: F401
 from app.modules.executions import models as _execution_models  # noqa: F401
+from app.modules.readiness import models as _readiness_models  # noqa: F401
 from app.modules.migrations import models as _migrations_models  # noqa: F401
 
 

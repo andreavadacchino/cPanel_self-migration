@@ -44,7 +44,7 @@ configurata. Non mostrarne il valore.
 - Redis: localhost:6379
 
 Docker è attivo. All'avvio l'API esegue `alembic upgrade head`. Alembic è a
-`0006_execution_runs`.
+`0007_writer_readiness`.
 
 ## Funzionalità disponibili
 
@@ -65,11 +65,16 @@ Docker è attivo. All'avvio l'API esegue `alembic upgrade head`. Alembic è a
 - Categorie: account, domini, email, database/utenti MySQL, DNS, SSL,
   forwarder, autoresponder, FTP, redirect, filtri, mailing list, PHP,
   PostgreSQL, subaccount e cron.
-- DNS è per zona, decodifica Base64 ed esclude SOA/NS/DCV/servizi cPanel.
+- DNS è per zona proprietaria (main/addon/alias, non ogni sottodominio), decodifica Base64 ed esclude SOA/NS/DCV/servizi cPanel.
 - Autoresponder: `list_auto_responders` per dominio e
   `get_auto_responder` per indirizzo. Vengono raccolti corpo, from, subject,
   interval, is_html, charset, start e stop. Ogni elemento ha
   `_detail_status=succeeded|failed`; fallimenti di dettaglio producono `partial`.
+- La matrice `mysql_grants` legge `Mysql::get_privileges_on_database` per ogni
+  coppia utente/database e conserva privilegi e coverage separata.
+- FTP marca quota/home per gli account migrabili; mailing list marca `private`
+  verificato solo quando esplicitamente disponibile da UAPI o dal fallback
+  read-only API 2 `Email::listlists`, altrimenti resta `partial`.
 
 ### Comparazione, checklist e planner
 
@@ -90,6 +95,19 @@ Docker è attivo. All'avvio l'API esegue `alembic upgrade head`. Alembic è a
   test read-only destinazione.
 - Blocchi per comparazioni/snapshot superati, password mancanti e dipendenze.
 - Nessuna scrittura reale; il run dry-run registra `write_performed=false`.
+
+### Writer readiness report read-only
+
+- Tabella `writer_readiness_reports` legata a piano, comparazione e snapshot esatti.
+- Stati `not_ready`, `needs_inventory`, `needs_contract_test`, `needs_operator_input`, `eligible_for_real_design`.
+- API `POST/GET /api/migrations/{id}/writer-readiness`; POST richiede `plan_id` e rifiuta evidenze obsolete.
+- Copertura delle nove categorie writer e di ogni passo, con blocker globali e gap specifici.
+- UI non operativa, nessun dispatch e contenuti sensibili esclusi.
+- Primo contract test read-only: `database_contract` in ogni snapshot combina
+  `Mysql::get_restrictions`, quota `maximum_databases` e conteggio corrente;
+  readiness promuove database solo con evidenza riuscita su entrambi i lati.
+- `mysql_grant_contract` verifica completezza delle coppie e insieme dei
+  privilegi; database e utenti MySQL sono oggi `eligible_for_real_design`.
 
 ### Writer mock-only già preparati
 
@@ -127,10 +145,20 @@ Flag, tutti `disabled` in `.env.example` e Docker:
 Ultima fotografia nota:
 
 - migrazione `1`;
-- job preflight `9`, succeeded;
-- snapshot `17/18`;
-- comparazione `11`;
-- piano `5`;
+- job preflight `17`, succeeded;
+- snapshot `33/34`;
+- comparazione `18`;
+- piano `12`;
+- readiness report `9`;
+- MySQL grants sorgente: 3 associazioni, 6/6 coppie verificate;
+- FTP writer metadata completo; mailing list sorgente `succeeded`, `private`
+  ricavato da campi privacy espliciti con provenienza registrata;
+- DNS sorgente/destinazione `succeeded`; i sottodomini non vengono più trattati come zone autonome;
+- readiness `needs_inventory=0`; FTP e mailing list sono `needs_contract_test`.
+- database è `eligible_for_real_design`: contract read-only riuscito su entrambi
+  i lati; sorgente quota 6/2 usati, destinazione quota illimitata/1 usato.
+- utenti MySQL sono `eligible_for_real_design`: 6/6 coppie sorgente e 1/1
+  destinazione verificate, nessun privilegio fuori contratto.
 - 3 autoresponder sorgente con dettaglio riuscito, 0 destinazione;
 - i 3 autoresponder sono `missing_on_destination` e ancora `manual`;
 - execution run non dry-run: 0;
@@ -164,7 +192,10 @@ dagli eventi immutabili. Sono stati chiusi i finding su flag `real`, ramo
 `ConflictError` downstream, ordine dei guard, categoria preview, guard simmetrico
 di `execute_dry_run` e limite del fresh-read autoresponder reale.
 
-### Obiettivo
+### Contratto storico readiness (già completato)
+
+I requisiti seguenti descrivono il report già implementato e devono restare
+come riferimento di regressione, non come backlog ancora aperto.
 
 Un singolo execution run mock non dry-run deve poter coordinare i passi
 selezionati nell'ordine corretto, fermarsi in sicurezza al primo blocco,
@@ -265,10 +296,18 @@ eventi come checkpoint. Definire un contratto coerente per l'intera esecuzione:
 - Non introdurre rollback distruttivi; registrare invece una futura attività
   manuale/compensazione.
 
+## Incremento completato: writer readiness report read-only
+
+Il readiness report descritto sotto è stato implementato. Resta documentato
+come contratto verificato e non deve essere reinterpretato come lavoro ancora
+da svolgere. Nessun flag writer è stato abilitato e non esiste dispatch reale.
+
 ## Prossimo incremento richiesto
 
-Implementare un **writer readiness report read-only**, senza writer reali e
-senza dispatch operativo.
+Completare i contract test read-only rimanenti, in ordine: FTP, mailing list,
+forwarder/autoresponder e DNS. Persistire le evidenze negli snapshot o in un
+modello esplicito, escluderle dai passi operativi e aggiornare readiness. Non
+implementare writer reali né dispatch operativo senza nuova autorizzazione.
 
 ### Obiettivo
 
@@ -332,8 +371,8 @@ docker compose exec -T api sh -lc \
   'cd /srv/apps/worker && DRAMATIQ_TESTING=1 python -m pytest worker/tests/test_actors.py'
 ```
 
-Baseline nota: 105 test API, 15 test worker, frontend build verde, Alembic
-`0006_execution_runs`, stack Docker operativo.
+Baseline nota: 115 test API, 15 test worker, frontend build verde, Alembic
+`0007_writer_readiness`, stack Docker operativo.
 
 Al termine riferire con precisione file modificati, test eseguiti, limitazioni
 rimaste e confermare che non è stata effettuata alcuna scrittura cPanel reale.

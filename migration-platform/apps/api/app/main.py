@@ -15,6 +15,7 @@ from app.modules.preflight.router import router as preflight_router
 from app.modules.comparison.router import router as comparison_router
 from app.modules.plans.router import router as plans_router
 from app.modules.executions.router import router as executions_router
+from app.modules.readiness.router import router as readiness_router
 
 
 def create_app() -> FastAPI:
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(comparison_router)
     app.include_router(plans_router)
     app.include_router(executions_router)
+    app.include_router(readiness_router)
 
     return app
 

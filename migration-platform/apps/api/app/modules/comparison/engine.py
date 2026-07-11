@@ -64,6 +64,8 @@ def _normalize(category: str, value: object) -> list[object]:
         return [{"name": f"{item.get('_account')}:{item.get('filtername') or item.get('name')}", "account": item.get("_account"), "rules": item.get("rules"), "actions": item.get("actions"), "enabled": item.get("enabled", 1)} for item in items if isinstance(item, dict)]
     if category == "mailing_lists":
         return [{"name": item.get("list") or item.get("listname") or item.get("email"), "domain": item.get("domain"), "private": item.get("private")} for item in items if isinstance(item, dict)]
+    if category == "mysql_grants":
+        return [{"name": f"{item.get('user')}@{item.get('database')}", "user": item.get("user"), "database": item.get("database"), "privileges": sorted(item.get("privileges") or [])} for item in items if isinstance(item, dict)]
     if category == "redirects":
         return [{"name": item.get("sourceurl") or item.get("source") or item.get("domain"), "destination": item.get("destination"), "type": item.get("type"), "wildcard": item.get("wildcard")} for item in items if isinstance(item, dict)]
     if category == "php_settings":
@@ -75,7 +77,7 @@ def _normalize(category: str, value: object) -> list[object]:
     if category == "cron_jobs":
         return [{"name": f"{item.get('minute')} {item.get('hour')} {item.get('day')} {item.get('month')} {item.get('weekday')}|{item.get('command')}", "minute": item.get("minute"), "hour": item.get("hour"), "day": item.get("day"), "month": item.get("month"), "weekday": item.get("weekday"), "command": item.get("command")} for item in items if isinstance(item, dict)]
     if category == "ftp_accounts":
-        return [{"login": item.get("login"), "type": "sub"} for item in items if isinstance(item, dict) and (item.get("accttype") == "sub" or item.get("type") == "sub")]
+        return [{"login": item.get("login"), "type": "sub", "quota": item.get("diskquota", item.get("quota")), "homedir": item.get("homedir", item.get("dir")), "writer_metadata_status": item.get("_writer_metadata_status")} for item in items if isinstance(item, dict) and (item.get("accttype") == "sub" or item.get("type") == "sub")]
     if category == "ssl":
         by_domain: dict[str, dict] = {}
         for item in items:
@@ -150,7 +152,8 @@ def _key(item: object, index: int) -> str:
 def _index(category: str, value: object) -> dict[str, str]:
     result = {}
     for index, item in enumerate(_normalize(category, value)):
-        result[_key(item, index)] = _fingerprint(item)
+        key = str(item.get("name")).lower() if category == "mysql_grants" and isinstance(item, dict) else _key(item, index)
+        result[key] = _fingerprint(item)
     return result
 
 

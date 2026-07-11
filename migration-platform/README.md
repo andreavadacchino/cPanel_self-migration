@@ -2,9 +2,9 @@
 
 Piattaforma di migrazione cPanel **greenfield, API-first, operator-first**.
 
-> **Stato: vertical slice fino all'esecutore dry-run.** Endpoint, inventari,
-> comparazione, checklist, planner e simulazione persistente sono operativi. I
-> writer reali restano deliberatamente disabilitati.
+> **Stato: vertical slice fino al readiness report dei writer.** Endpoint,
+> inventari, comparazione, checklist, planner, simulazione persistente e analisi
+> read-only dei gap sono operativi. I writer reali restano deliberatamente disabilitati.
 
 ## Struttura
 
@@ -67,6 +67,8 @@ All'avvio l'API esegue `alembic upgrade head` e poi serve le route.
 | POST   | `/api/manual-tasks/{id}/verify` | verifica su nuove evidenze    |
 | POST   | `/api/migrations/{id}/plan` | genera il piano senza scritture   |
 | GET    | `/api/migrations/{id}/plan` | legge l'ultimo piano              |
+| POST   | `/api/migrations/{id}/writer-readiness?plan_id={plan_id}` | genera readiness read-only |
+| GET    | `/api/migrations/{id}/writer-readiness` | legge l'ultimo readiness report |
 | POST   | `/api/migrations/{id}/executions` | crea preview dry-run selettiva |
 | GET    | `/api/migrations/{id}/executions/latest` | ultimo execution run |
 | GET    | `/api/executions/{id}` | dettaglio e audit del run |
@@ -111,6 +113,7 @@ restituiscono HTTP 200 e `status: 1` senza il wrapper.
 | Comparazione | Funzionante sulle categorie coperte |
 | Checklist manuale | Generata e persistita dalla comparazione |
 | Esecutore dry-run | Funzionante, nessuna scrittura reale |
+| Readiness writer reali | Report persistente read-only, nessun dispatch |
 | Migrazione dati/configurazioni | Writer reali non abilitati |
 
 ## Copertura del preflight
@@ -126,6 +129,7 @@ messaggio ed evidenza che la lettura è read-only.
 | Caselle email | `Email::list_pops_with_disk` |
 | Database | `Mysql::list_databases` |
 | Utenti MySQL | `Mysql::list_users` |
+| Grant MySQL | `Mysql::get_privileges_on_database` per coppia utente/database |
 | DNS | `DNS::parse_zone` |
 | Certificati | `SSL::list_certs` |
 | Forwarder | `Email::list_forwarders` |
@@ -147,8 +151,30 @@ per feature disabilitate, privilegi mancanti o API non offerte dal server.
 Una categoria `unsupported` su entrambi gli endpoint è considerata non
 applicabile: resta visibile nella copertura ma non genera un'attività manuale.
 
-DNS viene interrogato separatamente per ogni dominio tramite il parametro
-obbligatorio `zone`; un errore su una zona produce `partial` se le altre sono
+Per la progettazione dei writer, il preflight conserva inoltre la matrice
+MySQL utente→database→privilegi con coverage autonoma `mysql_grants`. La lettura
+è effettuata per ogni coppia inventariata; errori parziali non diventano mai una
+matrice vuota verificata. Gli account FTP migrabili sono marcati completi solo
+quando `list_ftp_with_disk` fornisce quota e home directory. Per le mailing list
+il campo `private` viene considerato verificato soltanto se restituito dal server
+o derivabile dall'esplicito `listtype`. Se UAPI non lo espone, il collector usa
+il fallback read-only API 2 `Email::listlists` e registra `_privacy_source=api2`;
+il valore è derivato dai campi espliciti `archive_private`, `advertised` e
+`subscribe_policy` secondo la semantica Mailman documentata, non da euristiche;
+se nessuna lettura fornisce un valore esplicito, la coverage resta `partial`.
+
+Il contract test read-only dei database è conservato nello snapshot come
+`database_contract`: combina `Mysql::get_restrictions`, limite
+`maximum_databases` e conteggio corrente. Solo coverage `succeeded` permette al
+readiness report di classificare `databases` come `eligible_for_real_design`.
+`mysql_grant_contract` verifica inoltre che tutte le coppie previste siano state
+lette e che ogni privilegio appartenga all'insieme supportato dall'API. Solo un
+esito riuscito su entrambi gli endpoint rende `mysql_users` eleggibile al design reale.
+
+DNS viene interrogato separatamente per ogni zona proprietaria (dominio
+principale, addon e alias) tramite il parametro obbligatorio `zone`; i
+sottodomini restano record della zona genitore e non sono interrogati come zone
+autonome. Un errore su una zona produce `partial` se le altre sono
 state lette, non cancella i record già acquisiti.
 Le righe Base64 di `parse_zone` vengono normalizzate; commenti, direttive, SOA e
 NS sono esclusi dal confronto perché dipendono dal server DNS autorevole.
@@ -174,7 +200,7 @@ anche nel container worker.
 
 ## Modello dati persistente
 
-Le migrazioni Alembic correnti arrivano a `0006_execution_runs`:
+Le migrazioni Alembic correnti arrivano a `0007_writer_readiness`:
 
 | Tabelle | Scopo |
 |---------|-------|
@@ -187,6 +213,7 @@ Le migrazioni Alembic correnti arrivano a `0006_execution_runs`:
 | `migration_plans` | classificazione e dipendenze dei passi |
 | `execution_runs` | selezione, piano/report/snapshot, stato e segreti cifrati |
 | `execution_events` | preview, risultato e verifica per passo |
+| `writer_readiness_reports` | gap immutabili legati a piano, comparazione e snapshot esatti |
 
 PostgreSQL è la fonte di verità; Redis trasporta soltanto messaggi. Gli snapshot
 non vengono aggiornati in-place. Un nuovo preflight crea nuove righe e rende
@@ -258,6 +285,44 @@ copia e rigenerato con AutoSSL dopo domini/DNS. Gli autoresponder restano manual
 finché il relativo writer e i guardrail anti-upsert non saranno implementati.
 
 ### Inventario autoresponder dettagliato
+
+## Writer readiness report
+
+Il contratto completo, gli stati e lo schema delle evidenze sono documentati in
+[`docs/READINESS_CONTRACTS.md`](docs/READINESS_CONTRACTS.md).
+
+Il readiness report è esclusivamente read-only. Copre tutte le categorie dei
+writer mock e ogni passo del piano; le categorie senza writer sono dichiarate
+esplicitamente `not_ready`. Blocker globali e gap specifici restano separati.
+Gli stati sono `not_ready`, `needs_inventory`, `needs_contract_test`,
+`needs_operator_input` ed `eligible_for_real_design`.
+
+La generazione accetta soltanto l'ultimo piano costruito sull'ultima
+comparazione e sugli ultimi snapshot sorgente/destinazione; evidenze superate
+producono HTTP 409. Sono elaborati soltanto coverage, modalità e dipendenze. Il
+report non legge né restituisce token, password, ciphertext o body/subject/from
+degli autoresponder. La UI non offre dispatch e ricorda che il contratto di
+esecuzione reale non esiste ancora.
+
+### Evidenze read-only per il design reale
+
+Le evidenze di contratto vivono negli snapshot immutabili, non in stato globale
+o nei risultati dei writer. La comparazione può mostrarne le differenze, mentre
+il planner le marca `excluded`: sono prerequisiti del passo operativo, non
+risorse da migrare.
+
+| Evidenza | Letture | Condizione `succeeded` | Effetto readiness |
+|----------|---------|------------------------|------------------|
+| `database_contract` | `Mysql::get_restrictions`, account e database inventory | restrizioni presenti e quota nota su entrambi i lati | `databases` → `eligible_for_real_design` |
+| `mysql_grant_contract` | `Mysql::get_privileges_on_database` per ogni coppia | tutte le coppie lette e privilegi nel set supportato | `mysql_users` → `eligible_for_real_design` |
+| FTP metadata | `Ftp::list_ftp_with_disk` | quota e home presenti per ogni account migrabile | resta `needs_contract_test` |
+| Mailing-list privacy | UAPI `list_lists`, fallback API 2 `listlists` | privacy derivata solo da campi espliciti | resta `needs_contract_test` |
+| DNS coverage | `DNS::parse_zone` per main/addon/alias | tutte le zone proprietarie lette | collisioni/fresh read ancora `not_ready` |
+
+`eligible_for_real_design` non abilita un writer e non equivale a `verified`:
+significa soltanto che inventario e contratto read-only sono sufficienti per
+progettare il futuro percorso reale. Rimangono necessari autorizzazione
+separata, pre-write re-check, conferma forte e verifica post-write fresca.
 
 Il collector elenca gli autoresponder separatamente per ogni dominio e usa
 `Email::get_auto_responder` per recuperare corpo, mittente, oggetto, intervallo,
@@ -644,17 +709,22 @@ Fotografia al termine dell'ultimo incremento (gli ID sono storici e devono
 sempre essere riletti dalle API prima dell'uso):
 
 - migrazione `1`;
-- ultimo preflight read-only: job `9`, `succeeded`;
-- snapshot sorgente/destinazione: `17` / `18`;
-- comparazione corrente: `11`;
-- piano corrente: `5`;
+- ultimo preflight read-only: job `17`, `succeeded`;
+- snapshot sorgente/destinazione: `33` / `34`;
+- comparazione corrente: `18`;
+- piano corrente: `12`;
+- readiness report corrente: `9`;
+- readiness: `needs_inventory=0`, `eligible_for_real_design=2` (database e utenti MySQL);
+- matrice grant: sorgente 6/6 coppie e 3 grant, destinazione 1/1 e 1 grant;
+- FTP quota/home completo; mailing-list privacy verificata da campi espliciti;
+- DNS `succeeded` su entrambi i lati, senza interrogare i sottodomini come zone;
 - autoresponder sorgente: 3, tutti con dettaglio riuscito;
 - autoresponder destinazione: 0;
 - tutti e tre risultano `missing_on_destination` e restano `manual`;
 - tutti i flag writer sono `disabled`;
 - execution run non dry-run nel database: 0.
 
-La baseline di test corrente è 105 test API e 15 test worker. La build frontend,
+La baseline di test corrente è 115 test API e 15 test worker. La build frontend,
 `docker compose config -q`, health API e stack Docker risultano verdi.
 
 ## Limitazioni e prossimi incrementi
@@ -662,14 +732,15 @@ La baseline di test corrente è 105 test API e 15 test worker. La build frontend
 - Nessun writer reale o dispatch operativo è disponibile.
 - Il writer autoresponder è disponibile solo in modalità mock e protegge
   dall'upsert; il fresh check reale UAPI non è ancora implementato.
-- La mappatura utente MySQL→database→privilegi non è ancora inventariata.
-- FTP non ha ancora quota e home directory sufficienti per una scrittura reale.
-- Mailing list può avere `private` non configurato.
+- Database e utenti MySQL sono eleggibili soltanto per il design reale; non
+  esiste ancora un execution contract né un writer reale autorizzato.
+- FTP e mailing list richiedono ancora contract test completi del futuro writer.
+- Forwarder e autoresponder richiedono fresh read reale anti-upsert.
+- DNS richiede rilevazione collisioni e verifica fresca della zona pre-write.
 - PHP resta manuale perché il writer documentato richiede privilegi WHM.
 - SSL non copia mai chiavi private e dovrà essere rigenerato tramite AutoSSL.
-- Il prossimo incremento è l'orchestrazione mock end-to-end, con execution
-  non dry-run separata, pre-write re-check, post-write preflight e rollback/manual
-  task prima di valutare qualsiasi abilitazione reale.
+- I prossimi incrementi sono i contract test read-only per FTP, mailing list,
+  forwarder/autoresponder e DNS. Nessuno di essi autorizza scritture reali.
 
 ## Sviluppo locale (senza Docker)
 

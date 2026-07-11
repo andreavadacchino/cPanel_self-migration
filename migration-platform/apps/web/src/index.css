@@ -1685,3 +1685,11 @@ select {
     transition-duration: 0.01ms !important;
   }
 }
+.compact-list {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.compact-list li + li { margin-top: .35rem; }
+.readiness-steps { margin-top: 1rem; }
+.readiness-steps summary { cursor: pointer; font-weight: 650; margin-bottom: 1rem; }

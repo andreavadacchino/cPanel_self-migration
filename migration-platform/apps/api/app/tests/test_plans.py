@@ -15,6 +15,8 @@ def test_plan_classifies_and_deduplicates_ftp_subaccount() -> None:
         entry("subaccounts", "account_logs", state="different", severity="warning"),
         entry("cron_jobs", "* * * * *|echo ok"),
         entry("php_settings", "demo.example.test"),
+        entry("mysql_grants", "user@database", state="different", severity="warning"),
+        entry("database_contract", "contract", state="different", severity="warning"),
     ])
     by_id = {step["id"]: step for step in steps}
     assert by_id["domains:demo.example.test"]["mode"] == "automatic"
@@ -25,4 +27,6 @@ def test_plan_classifies_and_deduplicates_ftp_subaccount() -> None:
     assert by_id["cron_jobs:* * * * *|echo ok"]["mode"] == "approval"
     assert by_id["php_settings:demo.example.test"]["mode"] == "manual"
     assert by_id["php_settings:demo.example.test"]["depends_on_categories"] == ["domains"]
-    assert summary["excluded"] == 3
+    assert by_id["mysql_grants:user@database"]["mode"] == "excluded"
+    assert by_id["database_contract:contract"]["mode"] == "excluded"
+    assert summary["excluded"] == 5

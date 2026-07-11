@@ -19,7 +19,11 @@ def build_steps(entries: list[dict]) -> tuple[list[dict], dict]:
     steps: list[dict] = []
     for entry in actionable:
         category, key = entry["category"], entry["key"]
-        if category == "subaccounts" and (key.split("@", 1)[0] in ftp_names or key.split("@", 1)[0] in email_names or key.endswith("_logs")):
+        if category in {"database_contract", "mysql_grant_contract"}:
+            mode, reason = "excluded", "Evidenza di quota/restrizioni per il passo database; non è una risorsa autonoma da accodare."
+        elif category == "mysql_grants":
+            mode, reason = "excluded", "Evidenza di supporto per il passo utente MySQL; non è una risorsa autonoma da accodare."
+        elif category == "subaccounts" and (key.split("@", 1)[0] in ftp_names or key.split("@", 1)[0] in email_names or key.endswith("_logs")):
             mode, reason = "excluded", "Identità già rappresentata da email/FTP oppure account di servizio cPanel."
         elif category in AUTO:
             mode, reason = "automatic", "Supportato da API account-level e verificabile con un nuovo preflight."

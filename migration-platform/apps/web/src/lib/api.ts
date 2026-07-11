@@ -253,6 +253,39 @@ export interface MigrationPlan {
   updated_at: string
 }
 
+export type WriterReadinessStatus = 'not_ready' | 'needs_inventory' | 'needs_contract_test' | 'needs_operator_input' | 'eligible_for_real_design'
+export interface ReadinessGap { code: string; message: string }
+export interface WriterReadinessCategory {
+  category: string
+  status: WriterReadinessStatus
+  source_coverage: CoverageStatus
+  destination_coverage: CoverageStatus
+  step_count: number
+  gaps: ReadinessGap[]
+}
+export interface WriterReadinessStep {
+  step_id: string
+  category: string
+  mode: MigrationPlanStep['mode']
+  status: WriterReadinessStatus
+  depends_on_categories: string[]
+  gaps: ReadinessGap[]
+}
+export interface WriterReadinessReport {
+  id: number
+  migration_id: number
+  plan_id: number
+  comparison_report_id: number
+  source_snapshot_id: number
+  destination_snapshot_id: number
+  status: WriterReadinessStatus
+  summary: Record<string, number>
+  global_blockers: ReadinessGap[]
+  categories: WriterReadinessCategory[]
+  steps: WriterReadinessStep[]
+  created_at: string
+}
+
 export type ExecutionStatus = 'previewed' | 'awaiting_confirmation' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 export interface ExecutionPreviewItem {
@@ -486,6 +519,15 @@ export async function fetchMigrationPlan(migrationId: number): Promise<Migration
   } catch {
     return null
   }
+}
+
+export function generateWriterReadiness(migrationId: number, planId: number): Promise<WriterReadinessReport> {
+  return request<WriterReadinessReport>(`/api/migrations/${migrationId}/writer-readiness?plan_id=${planId}`, { method: 'POST' })
+}
+
+export async function fetchWriterReadiness(migrationId: number): Promise<WriterReadinessReport | null> {
+  try { return await request<WriterReadinessReport>(`/api/migrations/${migrationId}/writer-readiness`) }
+  catch { return null }
 }
 
 export function createExecutionPreview(migrationId: number, payload: { plan_id: number; selected_step_ids: string[]; passwords: Record<string, string>; requested_by?: string }): Promise<ExecutionRun> {

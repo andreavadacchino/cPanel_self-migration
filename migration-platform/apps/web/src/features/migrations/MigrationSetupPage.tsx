@@ -22,6 +22,7 @@ import ComparisonPanel from './ComparisonPanel'
 import ManualTasksPanel from './ManualTasksPanel'
 import MigrationPlanPanel from './MigrationPlanPanel'
 import ExecutionDryRunPanel from './ExecutionDryRunPanel'
+import WriterReadinessPanel from './WriterReadinessPanel'
 
 function isTerminal(job: Job | null): boolean {
   return job != null && (job.status === 'succeeded' || job.status === 'failed')
@@ -301,6 +302,7 @@ export default function MigrationSetupPage() {
       />
       <ManualTasksPanel migrationId={migrationId} />
       <MigrationPlanPanel migrationId={migrationId} onPlanChanged={() => setPlanRevision((value) => value + 1)} />
+      <WriterReadinessPanel migrationId={migrationId} planRevision={planRevision} />
       <ExecutionDryRunPanel migrationId={migrationId} planRevision={planRevision} />
     </>
   )
