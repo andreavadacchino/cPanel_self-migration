@@ -145,16 +145,17 @@ Flag, tutti `disabled` in `.env.example` e Docker:
 Ultima fotografia nota:
 
 - migrazione `1`;
-- job preflight `17`, succeeded;
-- snapshot `33/34`;
-- comparazione `18`;
-- piano `12`;
-- readiness report `9`;
+- job preflight `20`, succeeded;
+- snapshot `39/40`;
+- comparazione `19`;
+- piano `13`;
+- readiness report `11`;
 - MySQL grants sorgente: 3 associazioni, 6/6 coppie verificate;
 - FTP writer metadata completo; mailing list sorgente `succeeded`, `private`
   ricavato da campi privacy espliciti con provenienza registrata;
 - DNS sorgente/destinazione `succeeded`; i sottodomini non vengono più trattati come zone autonome;
-- readiness `needs_inventory=0`; FTP e mailing list sono `needs_contract_test`.
+- readiness categorie operative: `needs_inventory=0`, `needs_contract_test=0`,
+  `eligible_for_real_design=7`;
 - database è `eligible_for_real_design`: contract read-only riuscito su entrambi
   i lati; sorgente quota 6/2 usati, destinazione quota illimitata/1 usato.
 - utenti MySQL sono `eligible_for_real_design`: 6/6 coppie sorgente e 1/1

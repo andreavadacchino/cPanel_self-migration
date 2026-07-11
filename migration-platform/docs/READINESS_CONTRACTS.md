@@ -119,15 +119,17 @@ messaggi di errore o negli eventi aggregati.
 
 ## Stato pilota verificato
 
-- job preflight `17`;
-- snapshot `33/34`;
-- comparazione `18`;
-- piano `12`;
-- readiness `9`;
-- `needs_inventory=0`;
-- database e utenti MySQL `eligible_for_real_design`;
-- FTP e mailing list `needs_contract_test`;
-- DNS `not_ready` per collisioni/fresh verification;
+- job preflight `20`, `succeeded`;
+- snapshot `39/40`;
+- comparazione `19`;
+- piano `13`;
+- readiness `11`;
+- categorie operative: `needs_inventory=0`, `needs_contract_test=0`,
+  `eligible_for_real_design=7`;
+- database, utenti MySQL, forwarder, FTP, mailing list, DNS e autoresponder
+  risultano eleggibili al solo design reale;
+- 12 passi DNS richiedono approval; 4 non sono puramente additivi e restano
+  `not_ready`;
 - tutti i writer e `MOCK_ORCHESTRATOR_MODE` disabilitati.
 
 Gli ID e gli stati sono storici: i nuovi contract richiedono un nuovo preflight,

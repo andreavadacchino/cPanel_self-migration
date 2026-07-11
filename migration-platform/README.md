@@ -729,12 +729,14 @@ Fotografia al termine dell'ultimo incremento (gli ID sono storici e devono
 sempre essere riletti dalle API prima dell'uso):
 
 - migrazione `1`;
-- ultimo preflight read-only: job `17`, `succeeded`;
-- snapshot sorgente/destinazione: `33` / `34`;
-- comparazione corrente: `18`;
-- piano corrente: `12`;
-- readiness report corrente: `9`;
-- readiness: `needs_inventory=0`, `eligible_for_real_design=2` (database e utenti MySQL);
+- ultimo preflight read-only: job `20`, `succeeded`;
+- snapshot sorgente/destinazione: `39` / `40`;
+- comparazione corrente: `19`;
+- piano corrente: `13`;
+- readiness report corrente: `11`;
+- readiness categorie operative: `needs_inventory=0`, `needs_contract_test=0`,
+  `eligible_for_real_design=7` (database, utenti MySQL, forwarder, FTP,
+  mailing list, DNS e autoresponder);
 - matrice grant: sorgente 6/6 coppie e 3 grant, destinazione 1/1 e 1 grant;
 - FTP quota/home completo; mailing-list privacy verificata da campi espliciti;
 - DNS `succeeded` su entrambi i lati, senza interrogare i sottodomini come zone;
