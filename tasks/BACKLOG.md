@@ -29,7 +29,7 @@
 
 ### Wave B — Adapters and configuration writers
 
-| `[ ]` | `B1` | [Harden cPanel adapter](B1-harden-cpanel-adapter.md) | High | L | A5 |
+| `[x]` | `B1` | [Harden cPanel adapter](B1-harden-cpanel-adapter.md) | High | L | A5 |
 | `[ ]` | `B2` | [Implement SSH adapter](B2-implement-ssh-adapter.md) | High | L | A5 |
 | `[ ]` | `B3` | [Real domain writer](B3-real-domain-writer.md) | High | M | B1 |
 | `[ ]` | `B4` | [Real email configuration writers](B4-email-config-writers.md) | High | L | B1, B3 |

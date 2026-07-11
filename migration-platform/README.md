@@ -102,6 +102,56 @@ la forma moderna con `status`/`data` al livello principale e la forma legacy
 incapsulata in `result`. Questo evita falsi errori di autenticazione su server che
 restituiscono HTTP 200 e `status: 1` senza il wrapper.
 
+### Boundary cPanel hardenato (`packages/adapters/adapters/cpanel`)
+
+Il client cPanel è un *boundary* tipizzato con transport HTTP condiviso, timeout
+espliciti, retry sicuro e redazione dei segreti. Superficie pubblica:
+
+- `CpanelClient.read(SafeRead)` — lettura read-only, ritentabile su errori
+  transitori. `write(DestinationWrite)` — scrittura sulla destinazione,
+  **disabilitata per default** e mai ritentata se non idempotente.
+- `safe_read(module, function, params, api_version="uapi"|"api2")` e
+  `destination_write(..., idempotent=False)` costruiscono operazioni validate.
+  Reads e writes sono tipi distinti: un writer non può usare per errore una
+  primitiva di lettura come scrittura o viceversa.
+- Le convenience `execute` / `api2` / `ping` restano invariate per i collector.
+- Ogni chiamata restituisce un `CpanelResult` con `payload` + `CpanelCallAudit`
+  redatto (`as_evidence()` è JSON-safe e privo di segreti).
+
+**Timeout** — `CpanelTimeouts(connect, read, write, pool)`, default
+`10/30/30/10s`. Un `timeout_seconds` legacy viene distribuito su tutte le fasi.
+
+**Retry** — `RetryPolicy(max_attempts=3, base_delay=0.2, max_delay=5.0,
+multiplier=2.0, jitter_ratio=0.25, retry_idempotent_writes=False)`. Backoff
+esponenziale con jitter deterministico applicato **solo ai safe read** e ai casi
+transitori dimostrabili (timeout, connessione/TLS, HTTP 429/5xx). Le scritture
+non idempotenti non vengono mai ritentate; una scrittura idempotente è ritentata
+solo se `retry_idempotent_writes=True`. `read`/`write` accettano un
+`threading.Event` di `cancel` verificato prima di ogni tentativo e del backoff.
+
+**Gerarchia di errori (senza segreti)** — `CpanelAuthError` (401/403),
+`CpanelUnsupportedError` (funzione non supportata), `CpanelRateLimitError`
+(429/503, transitorio), `CpanelConnectionError` (timeout/connessione/TLS),
+`CpanelInvalidResponseError` (JSON malformato o schema inatteso, **fail-closed**),
+`CpanelApplicationError` (rifiuto applicativo con HTTP 200),
+`CpanelConflictError` (risorsa già esistente), `CpanelCancelledError`,
+`CpanelWriteDisabledError`.
+
+**Segreti e TLS** — il token non compare mai in `repr`, log, eccezioni o audit
+(`Field(repr=False)` sulle credenziali; ogni messaggio passa dalla redazione, che
+rilegge il token corrente così una rotazione resta coperta). TLS è verificato per
+default; disabilitarlo richiede `verify_tls=False` con `tls_override_reason`
+esplicito, registrato nell'audit senza esporre segreti. Modulo/funzione sono
+validati (`^[A-Za-z0-9_]+$`) e l'`host` delle credenziali è validato (niente
+userinfo `@`, spazi, CRLF o schema) come difesa in profondità contro l'invio
+dell'header `Authorization` a un host non previsto. Le **letture** viaggiano in
+query string (nessun segreto); le **scritture** usano POST con i parametri nel
+body, così un valore sensibile (es. password di una nuova casella) non finisce
+mai nell'URL di access-log o proxy intermedi. Le risposte ambigue — JSON non
+oggetto, `status` mancante, envelope API2 privo di `error`/`event`/`data` —
+falliscono **fail-closed** con `CpanelInvalidResponseError`, mai come successo
+vuoto.
+
 ### Stato di implementazione
 
 | Area | Stato |
