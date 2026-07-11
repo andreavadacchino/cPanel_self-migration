@@ -31,15 +31,18 @@
 
 | `[x]` | `B1` | [Harden cPanel adapter](B1-harden-cpanel-adapter.md) | High | L | A5 |
 | `[ ]` | `B2` | [Implement SSH adapter](B2-implement-ssh-adapter.md) | High | L | A5 |
-| `[ ]` | `B3` | [Real domain writer](B3-real-domain-writer.md) | High | M | B1 |
-| `[ ]` | `B4` | [Real email configuration writers](B4-email-config-writers.md) | High | L | B1, B3 |
-| `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2, B3 |
-| `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3 |
-| `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3 |
+| `[x]` | `B3a` | [Domain adapter and safety rules](B3a-domain-adapter-rules.md) | High | M | B1 |
+| `[ ]` | `B3b` | [Real domain writer phase and dispatch wiring](B3b-real-domain-writer-dispatch.md) | High | M | B3a |
+| `[ ]` | `B4` | [Real email configuration writers](B4-email-config-writers.md) | High | L | B1, B3b |
+| `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2, B3b |
+| `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3b |
+| `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3b |
+
+> `B3` è stato suddiviso in `B3a`/`B3b` (superamento previsto dei guardrail 8 file / 500 righe). L'ID `B3` è ritirato e non riutilizzato; vedi [B3-real-domain-writer.md](B3-real-domain-writer.md) per la nota di split.
 
 ### Wave C — Content transfer
 
-| `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2, B3 |
+| `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2, B3b |
 | `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2, B6 |
 | `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2, B4 |
 | `[ ]` | `C4` | [Transfer checkpoint resume](C4-transfer-checkpoint-resume.md) | High | L | C1, C2, C3 |
@@ -66,16 +69,18 @@ graph LR
   A2-->A4-->A5
   A5-->B1
   A5-->B2
-  B1-->B3
+  B1-->B3a-->B3b
   B1-->B4
-  B3-->B4
+  B3b-->B4
   B1-->B5
   B2-->B5
+  B3b-->B5
   B1-->B6
+  B3b-->B6
   B1-->B7
-  B3-->B7
+  B3b-->B7
   B2-->C1
-  B3-->C1
+  B3b-->C1
   B2-->C2
   B6-->C2
   B2-->C3

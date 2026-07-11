@@ -1,13 +1,28 @@
-# Task B3: Real domain writer
+# Task B3: Real domain writer — SPLIT (retired)
 
 | Field | Value |
 |---|---|
-| **ID** | `B3` |
-| **Status** | `[ ]` |
+| **ID** | `B3` (ritirato) |
+| **Status** | `[/]` split — non completare con questo ID |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B1 |
-| **Branch** | `feat/b3-real-domain-writer` |
+| **Branch** | `feat/b3-real-domain-writer` (non usare) |
+
+> **Split.** L'implementazione completa di B3 come specificata (20 requisiti + 26
+> test: operazioni adapter, regole di dominio pure, fase writer reale e wiring
+> dispatch) supera in modo netto i guardrail di 8 file / 500 righe per PR. Come
+> imposto dalla regola 2 del `TASK_EXECUTION_PROMPT.md`, B3 è stato suddiviso in
+> due sotto-task documentati e tracciabili:
+>
+> - [`B3a` — Domain adapter and safety rules](B3a-domain-adapter-rules.md) (dep: B1)
+> - [`B3b` — Real domain writer phase and dispatch wiring](B3b-real-domain-writer-dispatch.md) (dep: B3a)
+>
+> Le dipendenze downstream che puntavano a `B3` ora puntano a `B3b` (il writer
+> reale effettivo): B4, B5, B6, B7 e C1. L'ID `B3` è ritirato e non riutilizzato.
+> Il testo storico sottostante è conservato solo come riferimento.
+
+---
 
 **Goal:** Implement additive domain creation via a typed adapter with collision detection, fresh-read, post-write verification, and compensation metadata.
 

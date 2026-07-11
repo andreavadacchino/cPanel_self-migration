@@ -152,6 +152,34 @@ oggetto, `status` mancante, envelope API2 privo di `error`/`event`/`data` —
 falliscono **fail-closed** con `CpanelInvalidResponseError`, mai come successo
 vuoto.
 
+### Operazioni domini e regole di sicurezza (B3a)
+
+`packages/adapters/adapters/cpanel/domains.py` aggiunge operazioni tipizzate per i
+domini sopra il boundary B1: `read_domains` / `read_single_domain` (via `SafeRead`,
+parsing di `DomainInfo::domains_data` in `DomainRecord` con tipo, docroot e
+internal label, **fail-closed** su payload malformato) e `build_create`, che
+produce una `DestinationWrite` **non idempotente** per addon/subdomain/alias. Un
+tipo non creabile account-level (es. dominio principale) solleva: va classificato
+come attività manuale, senza fallback WHM. Reads e creates sono tipi distinti, e
+le create restano **irraggiungibili dal runtime** finché B3b non le collega dietro
+il doppio gate `DOMAIN_WRITER_MODE` + `REAL_EXECUTION_MODE` (entrambi disabilitati
+per default).
+
+`apps/api/app/modules/executions/domain_rules.py` contiene le regole pure che
+decidono se una create additiva è sicura, senza I/O né segreti:
+
+- `normalize_domain` — folding di case, trailing dot e IDNA, con rifiuto di label
+  vuoti/troppo lunghi e caratteri che potrebbero uscire dall'host previsto;
+- `validate_docroot` — blocca traversal (`..`), home estranee, `~`, backslash,
+  byte di controllo e path che normalizzano fuori dalla home dell'account;
+- `decide_additive` — su una **lettura live** (fresh read) restituisce
+  `create` / `already_present` / `blocked` / `unsupported`: un dominio equivalente
+  è un no-op verificato; uno con tipo/owner/label/docroot diverso è bloccato
+  (nessun overwrite implicito); collisioni di internal label o overlap di docroot
+  bloccano; una collisione comparsa dopo lo snapshot è rilevata perché la
+  decisione opera sui record live. Le decisioni `create` portano `compensation`
+  metadata redatti per una futura rimozione manuale controllata.
+
 ### Stato di implementazione
 
 | Area | Stato |
