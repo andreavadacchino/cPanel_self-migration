@@ -1,11 +1,77 @@
 from __future__ import annotations
 
+import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.errors import ConflictError
 from app.db.base import Base
+
+
+class ExecutionStatus(str, enum.Enum):
+    """Legal states shared by an execution run and each real attempt.
+
+    Dry-run preview/simulation uses the non-terminal states up to ``succeeded``;
+    ``compensating``/``compensated`` are the representable rollback contract that
+    the future real path (D3) will drive. Values are plain strings so existing
+    persisted rows and the string ``status`` columns stay compatible.
+    """
+
+    previewed = "previewed"
+    awaiting_confirmation = "awaiting_confirmation"
+    queued = "queued"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
+    cancelled = "cancelled"
+    compensating = "compensating"
+    compensated = "compensated"
+
+
+# A state with no outgoing edge is terminal; any transition out of it is illegal.
+LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
+    ExecutionStatus.previewed.value: frozenset(
+        {ExecutionStatus.awaiting_confirmation.value, ExecutionStatus.cancelled.value}
+    ),
+    ExecutionStatus.awaiting_confirmation.value: frozenset(
+        {ExecutionStatus.queued.value, ExecutionStatus.cancelled.value}
+    ),
+    ExecutionStatus.queued.value: frozenset(
+        {ExecutionStatus.running.value, ExecutionStatus.cancelled.value}
+    ),
+    ExecutionStatus.running.value: frozenset(
+        {
+            ExecutionStatus.succeeded.value,
+            ExecutionStatus.failed.value,
+            ExecutionStatus.cancelled.value,
+            ExecutionStatus.compensating.value,
+        }
+    ),
+    ExecutionStatus.failed.value: frozenset({ExecutionStatus.compensating.value}),
+    ExecutionStatus.compensating.value: frozenset(
+        {ExecutionStatus.compensated.value, ExecutionStatus.failed.value}
+    ),
+    ExecutionStatus.succeeded.value: frozenset(),
+    ExecutionStatus.cancelled.value: frozenset(),
+    ExecutionStatus.compensated.value: frozenset(),
+}
+
+TERMINAL_STATUSES: frozenset[str] = frozenset(
+    status for status, targets in LEGAL_TRANSITIONS.items() if not targets
+)
+
+
+def assert_transition(current: str, target: str) -> None:
+    """Fail closed on any transition the state machine does not permit.
+
+    Raising ``ConflictError`` keeps illegal transitions a 409 at the API layer
+    and an explicit invariant everywhere else; a terminal or unknown state has
+    no legal successor, so a crash that left a stale target never advances.
+    """
+    if target not in LEGAL_TRANSITIONS.get(current, frozenset()):
+        raise ConflictError(f"Transizione di stato non ammessa: {current} -> {target}")
 
 
 class ExecutionRun(Base):
@@ -34,6 +100,42 @@ class ExecutionRun(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     events: Mapped[list["ExecutionEvent"]] = relationship(back_populates="run", cascade="all, delete-orphan", order_by="ExecutionEvent.id")
+    attempts: Mapped[list["ExecutionAttempt"]] = relationship(back_populates="run", cascade="all, delete-orphan", order_by="ExecutionAttempt.attempt_number")
+
+
+class ExecutionAttempt(Base):
+    """One durable real-execution attempt of a run.
+
+    Attempts make crash/retry state representable: a new attempt is a fresh row
+    with a monotonically increasing ``attempt_number`` (unique per run, so a
+    retry is idempotent), while ``checkpoint`` records the last durable progress
+    so a resumed run does not repeat completed work. ``lease_key`` is the
+    representable reference to the per-account lease that task A4 will own;
+    ``compensation`` is the recorded rollback metadata task D3 will consume.
+
+    None of these columns may ever hold a secret: checkpoints store step ids and
+    counters, compensation stores reversible-action descriptors, and ``error``
+    holds an already-redacted human message.
+    """
+
+    __tablename__ = "execution_attempts"
+    __table_args__ = (
+        UniqueConstraint("execution_run_id", "attempt_number", name="uq_execution_attempt_number"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    execution_run_id: Mapped[int] = mapped_column(ForeignKey("execution_runs.id", ondelete="CASCADE"), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default=ExecutionStatus.queued.value, nullable=False)
+    lease_key: Mapped[str | None] = mapped_column(String(255))
+    checkpoint: Mapped[dict | None] = mapped_column(JSON)
+    compensation: Mapped[dict | None] = mapped_column(JSON)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    run: Mapped[ExecutionRun] = relationship(back_populates="attempts")
 
 
 class ExecutionEvent(Base):

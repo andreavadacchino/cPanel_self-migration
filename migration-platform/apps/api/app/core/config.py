@@ -30,10 +30,19 @@ class Settings(BaseSettings):
     autoresponder_writer_mode: str = "disabled"
     # Orchestratore mock end-to-end: coordina i writer mock in un solo run.
     mock_orchestrator_mode: str = "disabled"
+    # Master switch for the real (non-dry-run) execution contract. Only
+    # "disabled" and "enabled" are accepted; it defaults to disabled so no real
+    # attempt, lease, or destination mutation can be opened without an explicit,
+    # audited opt-in for an authorized environment.
+    real_execution_mode: str = "disabled"
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def real_execution_enabled(self) -> bool:
+        return self.real_execution_mode == "enabled"
 
 
 @lru_cache

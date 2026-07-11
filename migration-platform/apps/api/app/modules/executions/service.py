@@ -5,12 +5,20 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.credentials import encrypt_secret
 from app.core.errors import ConflictError, NotFoundError
 from app.modules.comparison.models import ComparisonReport
 from app.modules.endpoints import service as endpoint_service
 from app.modules.endpoints.models import Endpoint
-from app.modules.executions.models import ExecutionEvent, ExecutionRun
+from app.modules.executions.models import (
+    TERMINAL_STATUSES,
+    ExecutionAttempt,
+    ExecutionEvent,
+    ExecutionRun,
+    ExecutionStatus,
+    assert_transition,
+)
 from app.modules.executions.schemas import ExecutionCreate
 from app.modules.inventory.models import InventorySnapshot
 from app.modules.plans.models import MigrationPlan
@@ -147,6 +155,7 @@ def confirm(db: Session, run_id: int, plan_id: int, phrase: str) -> dict:
     if checked["connection_status"] != "connected":
         raise ConflictError("L'endpoint destinazione non è più valido")
     now = datetime.now(timezone.utc)
+    assert_transition(run.status, ExecutionStatus.queued.value)
     run.status = "queued"; run.confirmed_at = now; run.destination_validated_at = now
     _event(run, "confirmation", "Conferma forte accettata e destinazione validata in lettura.")
     db.commit(); db.refresh(run)
@@ -159,10 +168,12 @@ def execute_dry_run(db: Session, run_id: int) -> dict:
         raise ConflictError("Questo run non è un dry-run: la simulazione non è applicabile")
     if run.status != "queued":
         raise ConflictError("Solo un dry-run confermato e in coda può essere eseguito")
+    assert_transition(run.status, ExecutionStatus.running.value)
     run.status = "running"; run.started_at = datetime.now(timezone.utc)
     _event(run, "execution", "Dry-run avviato; i writer reali sono disabilitati.")
     for item in run.preview:
         _event(run, "step", "Chiamata simulata, nessuna scrittura eseguita.", step_id=item["step_id"], planned_call=item["call"], result={"status": "simulated", "write_performed": False}, verification={"status": "not_applicable", "reason": "dry-run"})
+    assert_transition(run.status, ExecutionStatus.succeeded.value)
     run.status = "succeeded"; run.finished_at = datetime.now(timezone.utc)
     _event(run, "completed", "Dry-run completato senza scritture.")
     db.commit(); db.refresh(run)
@@ -171,9 +182,62 @@ def execute_dry_run(db: Session, run_id: int) -> dict:
 
 def cancel(db: Session, run_id: int) -> dict:
     run = get(db, run_id)
-    if run.status in {"succeeded", "failed", "cancelled"}:
+    if run.status in TERMINAL_STATUSES:
         raise ConflictError("Il run è già in uno stato terminale")
+    assert_transition(run.status, ExecutionStatus.cancelled.value)
     run.status = "cancelled"; run.finished_at = datetime.now(timezone.utc)
     _event(run, "cancelled", "Dry-run annullato dall'operatore.")
     db.commit(); db.refresh(run)
     return _read(run)
+
+
+def open_attempt(db: Session, run_id: int) -> ExecutionAttempt:
+    """Open the next real execution attempt for a confirmed, non-dry-run run.
+
+    Fail-closed: this is the smallest real-path production entry point and it
+    refuses unless real execution is explicitly enabled for an authorized
+    environment. The attempt number is monotonic and unique per run, so a retry
+    is a fresh attempt row and a duplicate open is rejected by the constraint
+    rather than silently starting a second concurrent attempt (the per-account
+    lease in task A4 owns true concurrency control).
+    """
+    if not settings.real_execution_enabled:
+        raise ConflictError("L'esecuzione reale è disabilitata")
+    run = get(db, run_id)
+    if run.dry_run:
+        raise ConflictError("Un dry-run non apre tentativi reali")
+    if run.status in TERMINAL_STATUSES:
+        raise ConflictError("Il run è in uno stato terminale")
+    next_number = max((a.attempt_number for a in run.attempts), default=0) + 1
+    attempt = ExecutionAttempt(
+        execution_run_id=run.id, attempt_number=next_number,
+        status=ExecutionStatus.running.value, started_at=datetime.now(timezone.utc),
+    )
+    run.attempts.append(attempt)
+    db.commit(); db.refresh(attempt)
+    return attempt
+
+
+def finalize_attempt(
+    db: Session, attempt_id: int, *, status: str,
+    checkpoint: dict | None = None, compensation: dict | None = None, error: str | None = None,
+) -> ExecutionAttempt:
+    """Record a legal terminal (or compensating) outcome for a real attempt.
+
+    ``assert_transition`` rejects any status the attempt state machine forbids.
+    ``checkpoint`` and ``compensation`` are caller-supplied redacted descriptors
+    (step ids, counters, reversible-action metadata) and must never carry a
+    secret; ``error`` is an already-redacted message.
+    """
+    attempt = db.get(ExecutionAttempt, attempt_id)
+    if attempt is None:
+        raise NotFoundError("Execution attempt", attempt_id)
+    assert_transition(attempt.status, status)
+    attempt.status = status
+    attempt.checkpoint = checkpoint
+    attempt.compensation = compensation
+    attempt.error = error
+    if status in TERMINAL_STATUSES:
+        attempt.finished_at = datetime.now(timezone.utc)
+    db.commit(); db.refresh(attempt)
+    return attempt

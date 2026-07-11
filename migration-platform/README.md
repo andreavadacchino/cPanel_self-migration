@@ -231,6 +231,7 @@ Le migrazioni Alembic correnti arrivano a `0007_writer_readiness`:
 | `migration_plans` | classificazione e dipendenze dei passi |
 | `execution_runs` | selezione, piano/report/snapshot, stato e segreti cifrati |
 | `execution_events` | preview, risultato e verifica per passo |
+| `execution_attempts` | tentativi reali con numero monotòno, checkpoint, compensazione e stato |
 | `writer_readiness_reports` | gap immutabili legati a piano, comparazione e snapshot esatti |
 
 PostgreSQL è la fonte di verità; Redis trasporta soltanto messaggi. Gli snapshot
@@ -366,9 +367,13 @@ eventi espongono soltanto gli ID coperti e il valore `[REDACTED]`, mai il segret
 o il ciphertext.
 
 Stati supportati: `previewed`, `awaiting_confirmation`, `queued`, `running`,
-`succeeded`, `failed`, `cancelled`. La creazione completa subito la preview e
-porta normalmente il run in `awaiting_confirmation`; `previewed` resta lo stato
-iniziale del modello per future generazioni asincrone.
+`succeeded`, `failed`, `cancelled`, più `compensating`/`compensated` per la
+compensazione reale. Le transizioni sono governate da una macchina a stati
+tipizzata (`LEGAL_TRANSITIONS`/`assert_transition`): ogni cambio di stato,
+compreso l'annullamento, verifica la legalità e fallisce chiuso (`409`) su una
+transizione non ammessa o da uno stato terminale/sconosciuto. La creazione
+completa subito la preview e porta normalmente il run in `awaiting_confirmation`;
+`previewed` resta lo stato iniziale del modello per future generazioni asincrone.
 
 La preview accetta soltanto passi `automatic`, `approval` o `secret_required` e
 blocca ID estranei, dipendenze di categoria non selezionate, password mancanti,
@@ -402,6 +407,33 @@ Procedura operativa:
 Limiti correnti: nessuna chiamata writer reale, nessun rollback reale e nessun
 nuovo preflight post-operazione, perché il dry-run non modifica lo stato remoto.
 L'esecuzione è sincrona e breve; PostgreSQL resta comunque la fonte di verità.
+
+### Contratto di esecuzione reale (disabilitato per default)
+
+La migrazione Alembic `0008_execution_attempts` aggiunge `execution_attempts`: il
+contratto durevole che rende rappresentabili crash, retry, checkpoint e
+compensazione **prima** di implementare l'esecuzione reale (task A3–A5, D3).
+
+- **Tentativi.** Ogni tentativo reale è una riga con `attempt_number` monotòno e
+  univoco per run (`uq_execution_attempt_number`): un retry è un tentativo nuovo,
+  mai una sovrascrittura, e un doppio avvio è respinto dal vincolo anziché aprire
+  due tentativi concorrenti. Il controllo di concorrenza vero appartiene al lease
+  per-account (A4); qui `lease_key` è solo il riferimento rappresentabile.
+- **Checkpoint e compensazione.** `checkpoint` registra l'ultimo progresso
+  durevole (ID di passo e contatori) per riprendere senza ripetere lavoro;
+  `compensation` conserva i descrittori dell'azione reversibile che D3 eseguirà.
+  Nessuna di queste colonne — né `error` né `lease_key` — può contenere segreti:
+  contengono soltanto identificatori e messaggi già redatti.
+- **Riferimenti di evidenza immutabili.** Il tentativo eredita dal run gli ID di
+  piano, comparazione e snapshot sorgente/destinazione: l'evidenza vive negli
+  snapshot immutabili, mai in uno stato globale mutabile.
+
+Interruttore generale: `REAL_EXECUTION_MODE` (default `disabled`; accetta solo
+`disabled`/`enabled`). Con l'esecuzione reale disabilitata, `open_attempt`
+fallisce chiuso e nessun tentativo, lease o mutazione della destinazione può
+essere aperto. Un dry-run non apre mai tentativi. Rollback: `alembic downgrade
+0007_writer_readiness` elimina `execution_attempts` senza toccare le altre
+tabelle.
 
 ## Writer domini mock-only
 
