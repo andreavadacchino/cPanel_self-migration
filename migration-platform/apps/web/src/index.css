@@ -1753,6 +1753,12 @@ select {
 }
 .migration-step--active .migration-step__index { background: #d9ff63; border-color: #d9ff63; color: #17251f; }
 .migration-step--complete .migration-step__index { background: #dff3e8; border-color: #74a88a; color: #236342; }
+.migration-step--action:not(.migration-step--active) { background: #fff7df; color: #6d4c16; }
+.migration-step--action:not(.migration-step--active) .migration-step__index { background: #f4cb5d; border-color: #f4cb5d; color: #4d350b; }
+.migration-step--stale:not(.migration-step--active) { background: #fff0eb; color: #803b2e; }
+.migration-step--stale:not(.migration-step--active) .migration-step__index { background: #d97862; border-color: #d97862; color: #fff; }
+.migration-step--running:not(.migration-step--active) .migration-step__index { border-style: dashed; animation: flow-spin 3s linear infinite; }
+@keyframes flow-spin { to { transform: rotate(360deg); } }
 .migration-step__copy { display: grid; min-width: 0; }
 .migration-step__copy strong { font-size: .84rem; line-height: 1.25; }
 .migration-step__copy small { margin-top: 3px; overflow: hidden; font-size: .68rem; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; opacity: .72; }
@@ -1776,6 +1782,25 @@ select {
 .safety-chip { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #b8d8c5; border-radius: 999px; background: #edf8f1; color: #245a3b; font-size: .72rem; font-weight: 700; }
 .safety-chip span { width: 7px; height: 7px; border-radius: 50%; background: #3d9963; box-shadow: 0 0 0 4px rgba(61,153,99,.12); }
 .stage-workspace > .panel, .stage-workspace > .setup-grid + .panel, .stage-workspace > .panel + .panel { margin-top: 16px; }
+.director-panel__action-row { display: flex; align-items: center; gap: 14px; margin-top: 17px; }
+.director-panel__action-row small { color: rgba(255,255,255,.58); font-size: .7rem; }
+.btn--operator { min-height: 42px; padding-inline: 17px; border: 0; font-weight: 800; }
+.btn--operator span { margin-left: 8px; }
+.btn--operator-primary { background: #d9ff63; color: #17251f; }
+.btn--operator-warning { background: #f2c75d; color: #38280b; }
+.btn--operator-danger { background: #e37c68; color: #fff; }
+.preflight__actions { display: grid; justify-items: end; gap: 9px; min-width: min(100%, 290px); }
+.rerun-guidance { display: grid; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface-soft); text-align: left; }
+.rerun-guidance strong { font-size: .72rem; }
+.rerun-guidance span { margin-top: 3px; color: var(--text-muted); font-size: .68rem; }
+.rerun-guidance--ok { border-color: #b8d8c5; background: #edf8f1; }
+.rerun-guidance--warn { border-color: #e7d7a7; background: #fff8e5; }
+.rerun-guidance--danger { border-color: #e1b8ae; background: #fff2ee; }
+.secondary-actions { position: relative; width: 100%; text-align: right; }
+.secondary-actions summary { color: var(--text-muted); cursor: pointer; font-size: .72rem; font-weight: 700; list-style: none; }
+.secondary-actions summary::-webkit-details-marker { display: none; }
+.secondary-actions[open] { padding: 10px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
+.secondary-actions p { margin: 7px 0 0; color: var(--text-muted); font-size: .66rem; }
 
 .readiness-overview { display: grid; grid-template-columns: minmax(230px, .72fr) 1.28fr; gap: 14px; margin: 18px 0; }
 .readiness-overview__score { padding: 22px; border-radius: 17px; background: #17251f; color: #fff; }
@@ -1827,9 +1852,12 @@ select {
   .stage-workspace__head { align-items: flex-start; flex-direction: column; }
   .readiness-overview, .readiness-groups { grid-template-columns: 1fr; }
   .readiness-overview__metrics { grid-template-columns: repeat(2, 1fr); }
+  .director-panel__action-row { align-items: flex-start; flex-direction: column; }
+  .preflight__actions { justify-items: stretch; width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .stage-workspace { animation: none; }
   .migration-step { transition: none; }
+  .migration-step--running:not(.migration-step--active) .migration-step__index { animation: none; }
 }

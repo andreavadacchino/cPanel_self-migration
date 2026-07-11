@@ -24,10 +24,12 @@ export default function ComparisonPanel({
   migrationId,
   canGenerate,
   blockedReason,
+  onReportChanged,
 }: {
   migrationId: number
   canGenerate: boolean
   blockedReason: string
+  onReportChanged?: (report: ComparisonReport) => void
 }) {
   const [report, setReport] = useState<ComparisonReport | null>(null)
   const [loading, setLoading] = useState(false)
@@ -49,7 +51,9 @@ export default function ComparisonPanel({
     setLoading(true)
     setError(null)
     try {
-      setReport(await generateComparison(migrationId))
+      const generated = await generateComparison(migrationId)
+      setReport(generated)
+      onReportChanged?.(generated)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Errore sconosciuto')
     } finally {
@@ -76,7 +80,7 @@ export default function ComparisonPanel({
           onClick={handleGenerate}
           disabled={loading || !canGenerate}
         >
-          {loading ? 'Generazione…' : 'Genera comparativa'}
+          {loading ? 'Generazione…' : report ? 'Aggiorna comparazione' : 'Genera comparazione'}
         </button>
       </div>
 

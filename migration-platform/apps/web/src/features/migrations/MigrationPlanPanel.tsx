@@ -27,7 +27,7 @@ export default function MigrationPlanPanel({ migrationId, onPlanChanged }: { mig
   return <section className="panel">
     <div className="panel__head">
       <div><div className="panel__title">Piano di migrazione</div><p className="hint">Classifica le differenze senza eseguire scritture.</p></div>
-      <button className="btn btn--primary" onClick={() => void generate()} disabled={loading}>{loading ? 'Generazione…' : 'Genera piano'}</button>
+      <button className="btn btn--primary" onClick={() => void generate()} disabled={loading}>{loading ? 'Generazione…' : plan ? 'Aggiorna piano' : 'Genera piano'}</button>
     </div>
     {error && <div className="state-msg state-msg--error">{error}</div>}
     {plan && <>

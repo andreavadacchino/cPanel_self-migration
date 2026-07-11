@@ -237,6 +237,7 @@ export interface MigrationPlanStep {
   mode: 'automatic' | 'approval' | 'secret_required' | 'manual' | 'excluded'
   reason: string
   state: string
+  comparison_state?: ComparisonEntryState
   severity: Severity
   depends_on_categories: string[]
 }

@@ -24,7 +24,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   php_settings: 'Configurazione PHP', ssl: 'Certificati SSL', subaccounts: 'Subaccount',
 }
 
-export default function WriterReadinessPanel({ migrationId, planRevision }: { migrationId: number; planRevision: number }) {
+export default function WriterReadinessPanel({ migrationId, planRevision, onReportChanged }: { migrationId: number; planRevision: number; onReportChanged?: (report: WriterReadinessReport) => void }) {
   const [plan, setPlan] = useState<MigrationPlan | null>(null)
   const [report, setReport] = useState<WriterReadinessReport | null>(null)
   const [loading, setLoading] = useState(false)
@@ -38,7 +38,7 @@ export default function WriterReadinessPanel({ migrationId, planRevision }: { mi
   async function generate() {
     if (!plan) return
     setLoading(true); setError(null)
-    try { setReport(await generateWriterReadiness(migrationId, plan.id)) }
+    try { const generated = await generateWriterReadiness(migrationId, plan.id); setReport(generated); onReportChanged?.(generated) }
     catch (err) { setError(err instanceof Error ? err.message : 'Errore readiness') }
     finally { setLoading(false) }
   }
@@ -59,7 +59,7 @@ export default function WriterReadinessPanel({ migrationId, planRevision }: { mi
         <p className="hint">Report read-only dei gap. Non abilita writer e non accoda esecuzioni.</p>
       </div>
       <button className="btn btn--primary" disabled={!plan || loading} onClick={() => void generate()}>
-        {loading ? 'Analisi…' : 'Genera readiness'}
+        {loading ? 'Analisi…' : report ? 'Aggiorna readiness' : 'Genera readiness'}
       </button>
     </div>
     {error && <div className="state-msg state-msg--error">{error}</div>}

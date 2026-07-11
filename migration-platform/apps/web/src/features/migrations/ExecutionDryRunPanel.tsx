@@ -9,7 +9,7 @@ const STATUS: Record<string, string> = {
   running: 'Simulazione in corso', succeeded: 'Simulazione completata', failed: 'Fallito', cancelled: 'Annullato',
 }
 
-export default function ExecutionDryRunPanel({ migrationId, planRevision }: { migrationId: number; planRevision?: number }) {
+export default function ExecutionDryRunPanel({ migrationId, planRevision, onRunChanged }: { migrationId: number; planRevision?: number; onRunChanged?: (run: ExecutionRun) => void }) {
   const [plan, setPlan] = useState<MigrationPlan | null>(null)
   const [run, setRun] = useState<ExecutionRun | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -28,7 +28,7 @@ export default function ExecutionDryRunPanel({ migrationId, planRevision }: { mi
   function toggle(id: string) { setSelected((current) => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next }) }
   async function action(work: () => Promise<ExecutionRun>) {
     setBusy(true); setError(null)
-    try { setRun(await work()) } catch (err) { setError(err instanceof Error ? err.message : 'Errore dry-run') }
+    try { const nextRun = await work(); setRun(nextRun); onRunChanged?.(nextRun) } catch (err) { setError(err instanceof Error ? err.message : 'Errore dry-run') }
     finally { setBusy(false) }
   }
 
