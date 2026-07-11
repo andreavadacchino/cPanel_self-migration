@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **ID** | `B3c-ii` |
-| **Status** | `[ ]` |
+| **Status** | `[x]` |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B3c-i |
@@ -60,23 +60,80 @@ assenza dell'envelope.
 
 **Testing Requirements:**
 
-- [ ] Comparison/planner conservano i campi richiesti dal contratto.
-- [ ] Readiness eleggibile soltanto su contratto completo su entrambi gli endpoint.
-- [ ] Readiness NON eleggibile su partial/failed/legacy.
-- [ ] Safety gate blocca un contratto partial (fail-closed).
-- [ ] Serializzazione e rilettura dello snapshot conservano il contratto.
-- [ ] B3b-ii riceve record ricchi: un passo valido non è più `manual` per assenza
+- [x] Comparison/planner conservano i campi richiesti dal contratto (record proiettati
+      da `project_records` con tipo/docroot/internal_label; nessuna modifica al planner).
+- [x] Readiness eleggibile soltanto su contratto completo su entrambi gli endpoint.
+- [x] Readiness NON eleggibile su partial/failed/legacy.
+- [x] Safety gate blocca un contratto partial (fail-closed) — readiness non-eligible
+      → gate rifiuta il dispatch.
+- [x] Serializzazione e rilettura dello snapshot conservano il contratto.
+- [x] B3b-ii riceve record ricchi: un passo valido non è più `manual` per assenza
       dell'envelope (end-to-end, gateway fake, nessun server reale).
-- [ ] Nessun secret leak; nessuna regressione readiness/comparison/gate/dispatch.
+- [x] Nessun secret leak; nessuna regressione readiness/comparison/gate/dispatch.
 
 **Acceptance Criteria:**
 
-- [ ] `domains` eleggibile solo su contratto completo e coerente; partial/legacy
+- [x] `domains` eleggibile solo su contratto completo e coerente; partial/legacy
       fail-closed.
-- [ ] B3b-ii consuma i record persistiti completi senza adattamenti permissivi;
+- [x] B3b-ii consuma i record persistiti completi senza adattamenti permissivi;
       un passo valido esegue create/already_present invece di `manual`.
-- [ ] Limitazione (a) di B3b-ii chiusa e documentata; recovery resta assegnata a C4.
-- [ ] Nessuna regressione test/coverage/Compose/web.
+- [x] Limitazione (a) di B3b-ii chiusa e documentata; recovery resta assegnata a C4.
+- [x] Nessuna regressione test/coverage/Compose/web.
+
+## Completion Record
+
+- **Data:** 2026-07-12
+- **Riepilogo:** Seconda metà dello split di B3c. Integra il contratto ricco B3c-i
+  nella readiness/gate e collega il writer B3b-ii, chiudendo la limitazione (a).
+  Nuovo validator puro `domain_contract.verify_contract` che **non si fida della
+  stringa `status`**: per un envelope dichiarato `succeeded` ricostruisce i record
+  (`_rebuild_records`) e ri-esegue `reconcile` contro l'enumerazione `list_domains`
+  persistita, restando eleggibile solo se la re-derivazione indipendente dà
+  `succeeded`; `ContractEvaluation` + gap reason stabili e redatti (`absent`,
+  `unsupported_version`, `read_failed`, `partial`, `ambiguous`, `unavailable`,
+  `incomplete_record`, `incoherent`) + `project_records`. La readiness rende
+  `domains` `eligible_for_real_design` solo con contratto valido su **entrambi**
+  gli endpoint (gap code `domains_contract_<source|destination>_<reason>`);
+  `domains_contract` aggiunto a `EVIDENCE_CATEGORIES`. Il bridge writer
+  `_source_domain_records` legge **esclusivamente** `data["domains_contract"]` via
+  `verify_contract`/`project_records` (mai `domains_data`/`list_domains`/euristiche)
+  e ri-valida a runtime (TOCTOU): contratto invalido → `ConflictError` esplicito
+  fail-closed, mai `[]`. Il safety gate resta invariato e riusa il risultato
+  readiness evidence-bound (nessuna validazione duplicata). Nessuna modifica a
+  planner/comparison (il writer legge la sorgente d'evidenza direttamente).
+- **File principali:** `inventory/domain_contract.py` (+`verify_contract`,
+  `project_records`, `_rebuild_records`, `ContractEvaluation`, gap reasons),
+  `readiness/engine.py` (`_domains_gaps` + `domains_contract` in EVIDENCE),
+  `executions/dispatch.py` (`_source_domain_records` bridge fail-closed),
+  test `test_real_dispatch.py` / `test_writer_readiness.py` /
+  `test_domain_inventory_contract.py`; docs `README.md`, `B3b-ii`, `B3c-ii`,
+  `BACKLOG.md`. 6 file code/test (~477 righe, di cui ~326 test mandati) + docs.
+- **Test e comandi (tutti PASS):** API **333 passed**; coverage
+  `domain_contract.py` **100%**, `readiness/engine.py` 99%, `dispatch.py` 98%;
+  adapter **81**; worker **18** (venv con dramatiq 2.2.0); `npm run build` OK;
+  `docker compose config -q` OK. Coperti tutti gli scenari obbligatori: source+dest
+  succeeded→eligible, source/dest partial, ambiguous/failed/unavailable, assente,
+  legacy, versione sconosciuta, succeeded-ma-malformato, succeeded-ma-coverage-
+  incoerente, record incompleto addon/subdomain, issue bloccante in succeeded,
+  readiness obsoleto, bridge legge `domains_contract`, nessun fallback a
+  `domains_data`, invalid→errore esplicito (non lista vuota), valido→DomainRecord
+  completi, passo `missing_on_destination` valido non più `manual`, actor reale con
+  fake gateway, contratto invalidato dopo dispatch blocca prima della write,
+  partial/legacy non raggiunge DestinationWrite, gate blocca readiness non-eligible,
+  nessun secret leak, mock/dry-run/collector senza regressioni.
+- **Review:** review adversariale autonoma sui rischi richiesti (trust della sola
+  stringa `status`, fallback silenziosi, snapshot legacy promossi, schema version
+  non verificata, mismatch coverage/payload, TOCTOU readiness↔worker, perdita
+  tipo/docroot/label, falso empty/eligible). Un difetto trovato e corretto in fase
+  di test: `_rebuild_records` rifiutava la `tuple` di record → `project_records`
+  restituiva `[]` silenzioso (falso empty); corretto ad accettare list/tuple e
+  coperto. Nessun rilievo residuo.
+- **Documentazione:** `README.md` — nuova sezione «Readiness e bridge del contratto
+  domini (B3c-ii)», nota B3c-i→B3c-ii aggiornata, sezione worker B3b-ii aggiornata
+  (bridge fail-closed, limitazione (a) chiusa); `B3b-ii` limitazione (a) marcata
+  CHIUSA; recovery `running` documentata come assegnata a **C4**.
+- **Limitazioni residue → C4:** recovery dei tentativi `running` dopo crash del
+  worker durante la fase (reconciliation esterna), invariata rispetto a B3b-ii.
 
 **Verification Commands:**
 

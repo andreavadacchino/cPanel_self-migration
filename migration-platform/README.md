@@ -287,12 +287,42 @@ classificato `legacy` da `domain_contract.read_contract`, mai promosso
 implicitamente a `succeeded` né letto come elenco vuoto; l'envelope è versionato
 (`version`), quindi una versione/stato sconosciuti sono trattati come `failed`.
 
-> B3c-i **produce e persiste** soltanto questa evidenza: non modifica readiness,
-> safety gate o writer, e la categoria `domains` resta non eleggibile alla
-> scrittura reale. La limitazione residua (a) di B3b-ii (writer che si ferma per
-> assenza dell'envelope ricco) sarà chiusa da **B3c-ii**, quando la readiness
-> renderà `domains` eleggibile solo su contratto `succeeded` coerente su entrambi
-> gli endpoint. La limitazione crash/recovery di B3b-ii resta assegnata a **C4**.
+> B3c-i **produce e persiste** soltanto questa evidenza. L'integrazione
+> readiness/gate e il bridge sul writer sono di **B3c-ii** (vedi «Readiness e
+> bridge del contratto domini» qui sotto), che **chiude la limitazione residua
+> (a)** di B3b-ii. La limitazione crash/recovery di B3b-ii resta assegnata a **C4**.
+
+#### Readiness e bridge del contratto domini (task B3c-ii)
+
+La categoria `domains` diventa `eligible_for_real_design` **solo** quando il
+contratto ricco è `succeeded` e coerente su **entrambi** gli endpoint. La
+readiness **non si fida della sola stringa `status`**: per un envelope dichiarato
+`succeeded`, `domain_contract.verify_contract` ricostruisce i record e ri-esegue
+`reconcile` contro l'enumerazione `list_domains` persistita, e resta eleggibile
+solo se anche la re-derivazione indipendente dà `succeeded`. Ogni motivo di
+non-eleggibilità produce un gap code stabile e redatto
+`domains_contract_<source|destination>_<reason>`, dove `reason` distingue:
+`absent` (contratto assente/legacy), `unsupported_version`, `read_failed`,
+`partial`, `ambiguous`, `unavailable`, `incomplete_record` (succeeded dichiarato
+ma un record incompleto) e `incoherent` (succeeded dichiarato ma incoerente con
+l'enumerazione). Il safety gate non duplica la validazione: rifiuta la fase
+riferendosi al risultato readiness evidence-bound (report ancorato a
+plan/comparison/snapshot correnti), quindi un contratto legacy/partial/invalido
+non raggiunge mai una scrittura.
+
+**Bridge writer.** `dispatch._source_domain_records` legge **esclusivamente**
+`data["domains_contract"]` tramite `verify_contract`/`project_records` — mai
+`data["domains_data"]`, `list_domains` o ricostruzioni euristiche. Solo un
+contratto ancora `succeeded` e coerente fornisce record; qualsiasi altro stato
+solleva un esito esplicito fail-closed (mai un `[]` silenzioso), così il worker
+si ferma **prima** di ogni scrittura. Se il contratto degrada tra readiness e
+worker (TOCTOU), la ri-validazione al momento dell'esecuzione lo blocca. Con un
+contratto valido, un dominio sorgente mancante sulla destinazione raggiunge
+l'engine additivo B3b-i come `RequestedDomain` completo (tipo, docroot ribasato,
+internal label) ed esegue `create`/`already_present` — **non più `manual` per
+assenza dell'envelope**. La limitazione residua (a) di B3b-ii è quindi chiusa e
+verificata dai test end-to-end (`test_real_dispatch.py`); la crash/recovery dei
+tentativi `running` resta assegnata a **C4**.
 Una singola installazione può comunque restituire `unsupported` o `unavailable`
 per feature disabilitate, privilegi mancanti o API non offerte dal server.
 Una categoria `unsupported` su entrambi gli endpoint è considerata non
@@ -699,11 +729,18 @@ B3b-i (`real_domain_writer.py`) al percorso reale. Con il gate spento la categor
   e `authorize` + `finalize_attempt` (che riverifica il fencing) prima di persistere
   esito/checkpoint/compensation. Un worker fenced-out dopo la write non registra
   successo.
-- **Evidenza sorgente fail-closed**: il motore richiede record ricchi (tipo +
-  docroot), cioè un envelope `DomainInfo::domains_data`. L'inventario attuale
-  raccoglie solo la lista nomi di `list_domains`, quindi di norma l'envelope è
-  assente: ogni passo diventa **manuale/pending** e il run si ferma in `halted`,
-  mai una write fabbricata (arricchire l'inventario è lavoro separato).
+- **Evidenza sorgente fail-closed (bridge B3c-ii)**: il motore richiede record
+  ricchi (tipo + docroot). `_source_domain_records` legge **esclusivamente** il
+  contratto `data["domains_contract"]` (B3c-i) tramite
+  `domain_contract.verify_contract`/`project_records`, ri-validandolo al momento
+  dell'esecuzione — mai `domains_data`/`list_domains`/euristiche. Un contratto
+  `succeeded` e coerente fornisce record completi; qualsiasi altro stato solleva un
+  esito esplicito fail-closed (mai `[]` silenzioso) e il worker si ferma prima di
+  ogni write. Un passo il cui dominio non è nel contratto o è un dominio main resta
+  **manual/pending** (→ `halted`), mai una write fabbricata. La limitazione (a)
+  «inventario privo dell'envelope → passi domini manual/pending» è **chiusa**: con
+  un contratto valido un dominio mancante sulla destinazione esegue
+  `create`/`already_present` (vedi «Readiness e bridge del contratto domini»).
 - **Stato terminale**: solo domini idonei tutti verificati (incluso
   `already_present` senza write) → `succeeded`; passo `blocked`/create non
   verificata → `failed`; passo manuale o categoria non implementata presente nel

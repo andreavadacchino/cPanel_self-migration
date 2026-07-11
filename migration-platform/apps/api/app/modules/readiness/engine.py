@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.modules.inventory import domain_contract
+
 WRITER_CATEGORIES = (
     "domains", "databases", "mysql_users", "email_forwarders", "cron_jobs",
     "ftp_accounts", "mailing_lists", "dns_records", "email_autoresponders",
@@ -8,7 +10,7 @@ READABLE = {"succeeded", "empty"}
 EVIDENCE_CATEGORIES = {
     "database_contract", "mysql_grant_contract", "mysql_grants",
     "ftp_contract", "mailing_list_contract", "forwarder_contract",
-    "autoresponder_contract", "dns_contract",
+    "autoresponder_contract", "dns_contract", "domains_contract",
 }
 PRIORITY = {
     "not_ready": 0, "needs_inventory": 1, "needs_contract_test": 2,
@@ -33,8 +35,25 @@ def _coverage(snapshot_data: dict | None, category: str) -> str:
     return value.get("status", "unverified") if isinstance(value, dict) else "unverified"
 
 
+def _domains_gaps(source_data: dict | None, destination_data: dict | None) -> list[tuple[str, str, str]]:
+    """Eligible only when the rich contract is *re-validated* ``succeeded`` on both
+    endpoints. Never trusts the ``status`` string: :func:`verify_contract`
+    re-reconciles a claimed ``succeeded`` envelope against its enumeration, so a
+    legacy/partial/malformed/incoherent contract stays fail-closed with a distinct,
+    side-tagged gap code (``domains_contract_<source|destination>_<reason>``)."""
+    source_eval = domain_contract.verify_contract(source_data or {})
+    destination_eval = domain_contract.verify_contract(destination_data or {})
+    if source_eval.eligible and destination_eval.eligible:
+        return [("eligible_for_real_design", "domains_contract_verified",
+                 "Contratto domini ricco succeeded e ricoerenziato su entrambi gli endpoint: record completi, riconciliati con l'enumerazione, nessuna issue bloccante.")]
+    side, evaluation = ("source", source_eval) if not source_eval.eligible else ("destination", destination_eval)
+    return [("not_ready", f"domains_contract_{side}_{evaluation.reason}", evaluation.message)]
+
+
 def _category_gaps(category: str, source_data: dict | None, destination_data: dict | None = None) -> list[tuple[str, str, str]]:
     data = source_data or {}
+    if category == "domains":
+        return _domains_gaps(source_data, destination_data)
     if category == "email_forwarders" and _coverage(data, "forwarder_contract") == "succeeded" and _coverage(destination_data or {}, "forwarder_contract") == "succeeded":
         return [("eligible_for_real_design", "forwarder_contract_verified", "La fresh read per coppia completa è supportata da evidenze read-only correnti su entrambi gli endpoint.")]
     if category == "email_autoresponders" and _coverage(data, "autoresponder_contract") == "succeeded" and _coverage(destination_data or {}, "autoresponder_contract") == "succeeded":

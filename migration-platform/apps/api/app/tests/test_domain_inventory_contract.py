@@ -310,12 +310,99 @@ def test_collector_does_not_leak_secret() -> None:
     assert "tok-SECRET" not in json.dumps(data)
 
 
-def test_b3ci_does_not_make_domains_eligible() -> None:
-    # A succeeded rich contract must NOT (yet) make the writer category eligible:
-    # readiness is unchanged in B3c-i and stays not_ready.
+def test_b3cii_collected_succeeded_contract_makes_domains_eligible() -> None:
+    # B3c-ii integration: a real collector-produced succeeded contract on both
+    # endpoints re-validates and makes the writer category eligible.
     client = DomainsClient()
     data, _ = collect(client)  # type: ignore[arg-type]
     assert data["coverage"]["domains_contract"]["status"] == dc.SUCCEEDED
     categories, _, _, _ = build_report([], data, data)
     domains = next(item for item in categories if item["category"] == "domains")
-    assert domains["status"] == "not_ready"
+    assert domains["status"] == "eligible_for_real_design"
+    assert any(gap["code"] == "domains_contract_verified" for gap in domains["gaps"])
+
+
+# =============================================================================
+# B3c-ii — verify_contract: fail-closed readiness evaluation of a persisted
+# envelope. Never trusts the ``status`` string alone.
+# =============================================================================
+
+_LD = {"main_domain": "example.test", "addon_domains": ["demo.example.test"], "sub_domains": [], "parked_domains": []}
+_DET = [DomainRecord("example.test", DomainType.main, "/home/u/public_html"),
+        DomainRecord("demo.example.test", DomainType.addon, "/home/u/demo")]
+
+
+def _snap(detail=_DET, list_domains=_LD) -> dict:
+    env = dc.reconcile(dc.enumerated_types(list_domains), detail,
+                       enumeration_issues=dc.enumeration_issues(list_domains))
+    return {"domains": list_domains, dc.SNAPSHOT_KEY: env}
+
+
+def test_verify_contract_eligible_on_succeeded_coherent() -> None:
+    ev = dc.verify_contract(_snap())
+    assert ev.eligible and ev.reason is None
+    names = {r.name for r in dc.project_records(ev.records)}
+    assert names == {"example.test", "demo.example.test"}
+
+
+def test_verify_contract_absent_is_legacy() -> None:
+    assert dc.verify_contract({"domains": _LD}).reason == dc.EVAL_ABSENT
+    assert dc.verify_contract("not-a-dict").reason == dc.EVAL_ABSENT
+
+
+def test_verify_contract_partial_and_ambiguous_and_unavailable_and_failed() -> None:
+    assert dc.verify_contract(_snap(detail=[])).reason == dc.EVAL_PARTIAL
+    ghost = _DET + [DomainRecord("ghost.example.test", DomainType.addon, "/home/u/ghost")]
+    assert dc.verify_contract(_snap(detail=ghost)).reason == dc.EVAL_AMBIGUOUS
+    unavailable = {"domains": _LD, dc.SNAPSHOT_KEY: dc.reconcile(dc.enumerated_types(_LD), None, enumeration_readable=False)}
+    assert dc.verify_contract(unavailable).reason == dc.EVAL_UNAVAILABLE
+    failed = {"domains": _LD, dc.SNAPSHOT_KEY: dc.reconcile(dc.enumerated_types(_LD), None, read_error="X")}
+    assert dc.verify_contract(failed).reason == dc.EVAL_READ_FAILED
+
+
+def test_verify_contract_unsupported_version() -> None:
+    snap = {"domains": _LD, dc.SNAPSHOT_KEY: {"version": 99, "status": "succeeded", "records": []}}
+    assert dc.verify_contract(snap).reason == dc.EVAL_UNSUPPORTED_VERSION
+
+
+def test_verify_contract_corrupt_records_read_failed() -> None:
+    snap = {"domains": _LD, dc.SNAPSHOT_KEY: {"version": 1, "status": "succeeded", "records": "corrupt"}}
+    assert dc.verify_contract(snap).reason == dc.EVAL_READ_FAILED
+
+
+def _tampered(records: list) -> dict:
+    return {"domains": _LD, dc.SNAPSHOT_KEY: {"version": 1, "status": "succeeded", "records": records}}
+
+
+def test_verify_contract_false_succeeded_incomplete_record() -> None:
+    # Claims succeeded but the addon is missing its required docroot -> recomputed
+    # partial -> incomplete_record (not trusted).
+    ev = dc.verify_contract(_tampered([
+        {"raw": "example.test", "type": "main", "docroot": "/home/u/public_html", "internal_label": None},
+        {"raw": "demo.example.test", "type": "addon", "docroot": None, "internal_label": None}]))
+    assert ev.reason == dc.EVAL_INCOMPLETE_RECORD
+
+
+def test_verify_contract_false_succeeded_unexpected_record_incoherent() -> None:
+    # A record not in the enumeration -> recomputed ambiguous -> incoherent.
+    ev = dc.verify_contract(_tampered([
+        {"raw": "example.test", "type": "main", "docroot": "/home/u/public_html", "internal_label": None},
+        {"raw": "demo.example.test", "type": "addon", "docroot": "/home/u/demo", "internal_label": None},
+        {"raw": "ghost.example.test", "type": "addon", "docroot": "/home/u/ghost", "internal_label": None}]))
+    assert ev.reason == dc.EVAL_INCOHERENT
+
+
+@pytest.mark.parametrize("records", [
+    ["not-a-dict"],
+    [{"raw": "", "type": "addon", "docroot": "/x"}],
+    [{"raw": "demo.example.test", "type": "bogus-type", "docroot": "/x"}],
+    [{"raw": "demo.example.test", "type": "addon", "docroot": 123}],
+    [{"raw": "demo.example.test", "type": "addon", "docroot": "/x", "internal_label": 5}],
+])
+def test_verify_contract_malformed_record_shapes_incoherent(records: list) -> None:
+    assert dc.verify_contract(_tampered(records)).reason == dc.EVAL_INCOHERENT
+
+
+def test_project_records_malformed_returns_empty() -> None:
+    assert dc.project_records("nope") == []
+    assert dc.project_records([{"raw": "demo.example.test", "type": "bad"}]) == []

@@ -131,10 +131,12 @@ cd ../.. && docker compose config -q
   evidenza sorgente fail-closed, stato terminale, commit atomico, limitazione di
   recovery), nota writer mock e tabella flag; `.env.example` (valori ammessi di
   `DOMAIN_WRITER_MODE`).
-- **Limitazioni residue:** (a) l'inventario attuale raccoglie solo la lista nomi di
-  `list_domains`, non l'envelope ricco `domains_data`; finché non è arricchito, ogni
-  passo dominio reale resta manuale/pending e il run si ferma in `halted` (mai una
-  write) — arricchimento = task separato. (b) Recovery ereditata da A3: un crash del
+- **Limitazioni residue:** (a) **CHIUSA da B3c-ii** — il bridge writer
+  `_source_domain_records` legge ora il contratto ricco `data["domains_contract"]`
+  (B3c-i) via `domain_contract.verify_contract`/`project_records` e la readiness
+  rende `domains` eleggibile solo su contratto `succeeded` coerente su entrambi gli
+  endpoint; con un contratto valido un dominio mancante sulla destinazione esegue
+  `create`/`already_present` invece di `manual`. (b) Recovery ereditata da A3: un crash del
   worker durante la fase lascia un tentativo `running` non riaccodabile (reconciliation
   esterna fuori scope); mitigata dalla rilettura fresca (un tentativo ripreso
   classifica il dominio già creato come `already_present`, mai duplicato).

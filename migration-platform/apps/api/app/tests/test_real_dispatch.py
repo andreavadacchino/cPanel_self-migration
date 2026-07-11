@@ -287,9 +287,29 @@ def test_worker_start_rejects_unknown_attempt(real_enabled, db_session) -> None:
 
 from adapters.cpanel.domains import DomainRecord, DomainType  # noqa: E402
 from adapters.cpanel.errors import CpanelError  # noqa: E402
+from app.modules.inventory import domain_contract  # noqa: E402
 
 # An addon domain matching STEP, with a docroot inside the /home/u account home.
 ADDON = DomainRecord(name="demo.example.test", type=DomainType.addon, docroot="/home/u/demo")
+
+# The list_domains enumeration + detail that reconcile into a ``succeeded`` rich
+# contract covering the main domain and the STEP addon.
+_LIST_DOMAINS = {"main_domain": "example.test", "addon_domains": ["demo.example.test"],
+                 "sub_domains": [], "parked_domains": []}
+_DETAIL = [DomainRecord(name="example.test", type=DomainType.main, docroot="/home/u/public_html"),
+           DomainRecord(name="demo.example.test", type=DomainType.addon, docroot="/home/u/demo")]
+
+
+def _domains_contract(list_domains=_LIST_DOMAINS, detail=_DETAIL) -> dict:
+    """Build a real (re-validatable) rich contract envelope from list+detail."""
+    return domain_contract.reconcile(
+        domain_contract.enumerated_types(list_domains), detail,
+        enumeration_issues=domain_contract.enumeration_issues(list_domains))
+
+
+def _source_snapshot_data(list_domains=_LIST_DOMAINS, detail=_DETAIL) -> dict:
+    return {"domains": list_domains,
+            domain_contract.SNAPSHOT_KEY: _domains_contract(list_domains, detail)}
 
 
 @pytest.fixture
@@ -329,9 +349,9 @@ class FakeGateway:
 
 
 def _with_domains_source(db: Session, env: SimpleNamespace) -> None:
-    """Give the source snapshot the rich domains_data envelope for the addon."""
-    env.src.data = {"domains_data": {"addon_domains": [
-        {"domain": "demo.example.test", "documentroot": "/home/u/demo"}]}}
+    """Give the source snapshot the rich, re-validatable domains_contract envelope
+    (B3c-i shape) covering the STEP addon — the only evidence the bridge reads."""
+    env.src.data = _source_snapshot_data()
     db.commit()
 
 
@@ -473,13 +493,105 @@ def test_post_write_mismatch_fails(domains_enabled, db_session, monkeypatch) -> 
 # --- 8/11. Manual/unsupported and only-unimplemented -> halted (no false success)
 
 def test_manual_domain_step_halts_not_succeeds(domains_enabled, db_session, monkeypatch) -> None:
-    env = _setup(db_session)  # no domains_data -> unresolved -> manual/pending
+    # A VALID succeeded contract whose STEP domain is the main domain: the writer
+    # cannot create a main domain account-level, so it resolves to a manual/pending
+    # step and the run halts — never a fabricated write, never a false success.
+    env = _setup(db_session)
+    main_only = {"main_domain": "demo.example.test", "addon_domains": [], "sub_domains": [], "parked_domains": []}
+    env.src.data = _source_snapshot_data(
+        main_only, [DomainRecord(name="demo.example.test", type=DomainType.main, docroot="/home/u/public_html")])
+    db_session.commit()
     gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
     attempt_id = _dispatch(db_session, env, monkeypatch)
     run = worker_start(db_session, env.run.id, attempt_id)
     assert run.status == ExecutionStatus.halted.value
     assert gw.creates == []
     assert db_session.get(ExecutionAttempt, attempt_id).checkpoint["manual_pending"] is True
+
+
+# =============================================================================
+# B3c-ii — the bridge reads ``domains_contract`` (never ``domains_data``), and an
+# invalid contract fails closed before any destination write.
+# =============================================================================
+
+def test_bridge_reads_domains_contract_not_raw_domains_data(domains_enabled, db_session, monkeypatch) -> None:
+    """With BOTH a raw ``domains_data`` block (conflicting docroot) and the rich
+    ``domains_contract``, the writer resolves the create from the contract only."""
+    env = _setup(db_session)
+    data = _source_snapshot_data()
+    data["domains_data"] = {"addon_domains": [
+        {"domain": "demo.example.test", "documentroot": "/home/u/WRONG"}]}
+    env.src.data = data; db_session.commit()
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.succeeded.value
+    assert gw.creates == [("demo.example.test", "/home/u/demo")]  # contract docroot, not domains_data
+
+
+def test_no_fallback_to_domains_data_when_contract_absent(domains_enabled, db_session, monkeypatch) -> None:
+    """Only the legacy raw ``domains_data`` is present (no contract): fail closed,
+    no heuristic fallback, no write — an explicit stop, never a silent ``[]``."""
+    env = _setup(db_session)
+    env.src.data = {"domains_data": {"addon_domains": [
+        {"domain": "demo.example.test", "documentroot": "/home/u/demo"}]}}
+    db_session.commit()
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    with pytest.raises(ConflictError):
+        worker_start(db_session, env.run.id, attempt_id)
+    assert gw.creates == []
+    db_session.refresh(env.run)
+    assert env.run.status == ExecutionStatus.running.value  # explicit fail-closed stop
+
+
+@pytest.mark.parametrize("bad_data", [
+    pytest.param({"domains": _LIST_DOMAINS}, id="legacy_no_envelope"),
+    pytest.param(lambda: {"domains": _LIST_DOMAINS, domain_contract.SNAPSHOT_KEY: _domains_contract(_LIST_DOMAINS, [])}, id="partial"),
+    pytest.param({"domains": _LIST_DOMAINS, domain_contract.SNAPSHOT_KEY: {"version": 1, "status": "succeeded", "records": "corrupt"}}, id="malformed_records"),
+    pytest.param({"domains": _LIST_DOMAINS, domain_contract.SNAPSHOT_KEY: {"version": 99, "status": "succeeded", "records": []}}, id="unknown_version"),
+])
+def test_invalid_contract_never_reaches_destination_write(domains_enabled, db_session, monkeypatch, bad_data) -> None:
+    env = _setup(db_session)
+    env.src.data = bad_data() if callable(bad_data) else bad_data
+    db_session.commit()
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    with pytest.raises(ConflictError):
+        worker_start(db_session, env.run.id, attempt_id)
+    assert gw.creates == []  # never a DestinationWrite
+    db_session.refresh(env.run)
+    assert env.run.status == ExecutionStatus.running.value
+
+
+def test_gate_blocks_dispatch_when_readiness_domains_not_eligible(domains_enabled, db_session, monkeypatch) -> None:
+    """The safety gate reuses the evidence-bound readiness result: a domains
+    category not marked eligible (as a partial/legacy contract would yield) blocks
+    the dispatch before any attempt/enqueue — no duplicated validation."""
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    _readiness(db_session, env.migration.id).categories = [{"category": "domains", "status": "not_ready"}]
+    db_session.commit()
+    monkeypatch.setattr(dispatch_module, "_enqueue", lambda *_: None)
+    with pytest.raises(ConflictError):
+        dispatch(db_session, env.run.id)
+    assert _attempts(db_session, env.run.id) == []
+
+
+def test_contract_invalidated_after_dispatch_blocks_before_write(domains_enabled, db_session, monkeypatch) -> None:
+    """TOCTOU: a valid contract at dispatch that degrades to partial before the
+    worker starts must stop the phase before any write (the gate passes on the
+    unchanged snapshot id/status, but the writer re-validates the envelope)."""
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    # The persisted envelope degrades to partial in place (same snapshot id/status).
+    env.src.data = {"domains": _LIST_DOMAINS, domain_contract.SNAPSHOT_KEY: _domains_contract(_LIST_DOMAINS, [])}
+    db_session.commit()
+    with pytest.raises(ConflictError):
+        worker_start(db_session, env.run.id, attempt_id)
+    assert gw.creates == []
+    db_session.refresh(env.run)
+    assert env.run.status == ExecutionStatus.running.value
 
 
 def test_only_unimplemented_category_halts(domains_enabled, db_session, monkeypatch) -> None:

@@ -18,6 +18,8 @@ records and lists are sorted for deterministic round-trip serialization.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from adapters.cpanel.domains import DomainRecord, DomainType
 from app.modules.executions.domain_rules import DomainRuleError, normalize_domain
 
@@ -253,8 +255,132 @@ def read_contract(snapshot_data: object) -> dict:
     return {"status": status, "version": SCHEMA_VERSION, "records": records}
 
 
+# --- B3c-ii readiness evaluation ---------------------------------------------
+#
+# Whether a *persisted* contract may authorize a real domain design. This never
+# trusts the stored ``status`` string: for a claimed ``succeeded`` envelope it
+# re-derives the verdict from the primary evidence (``list_domains`` + the record
+# detail) via :func:`reconcile`, so a tampered/malformed envelope that lies about
+# being clean is rejected. Stable, redacted reason codes distinguish every
+# not-eligible cause for a stable readiness gap code.
+
+EVAL_ABSENT = "absent"
+EVAL_UNSUPPORTED_VERSION = "unsupported_version"
+EVAL_READ_FAILED = "read_failed"
+EVAL_PARTIAL = "partial"
+EVAL_AMBIGUOUS = "ambiguous"
+EVAL_UNAVAILABLE = "unavailable"
+EVAL_INCOMPLETE_RECORD = "incomplete_record"
+EVAL_INCOHERENT = "incoherent"
+
+_EVAL_MESSAGES = {
+    EVAL_ABSENT: "Contratto domini assente o snapshot legacy: nessuna evidenza ricca da autorizzare.",
+    EVAL_UNSUPPORTED_VERSION: "Schema del contratto domini non supportato: evidenza non interpretabile.",
+    EVAL_READ_FAILED: "Lettura del contratto domini fallita o corrotta: evidenza rifiutata.",
+    EVAL_PARTIAL: "Contratto domini parziale: dettaglio mancante o record non verificabile.",
+    EVAL_AMBIGUOUS: "Contratto domini ambiguo: duplicati, tipo conflittuale o dettaglio non enumerato.",
+    EVAL_UNAVAILABLE: "Enumerazione domini non leggibile: contratto non disponibile.",
+    EVAL_INCOMPLETE_RECORD: "Contratto dichiarato succeeded ma un record è incompleto o non riconciliato.",
+    EVAL_INCOHERENT: "Contratto dichiarato succeeded ma incoerente con l'enumerazione: evidenza rifiutata.",
+}
+
+
+@dataclass(frozen=True)
+class ContractEvaluation:
+    """Fail-closed verdict on a persisted domain contract. No secret."""
+
+    eligible: bool
+    reason: str | None = None
+    message: str | None = None
+    records: tuple[dict, ...] = field(default_factory=tuple)
+
+
+def _not_eligible(reason: str) -> ContractEvaluation:
+    return ContractEvaluation(False, reason, _EVAL_MESSAGES[reason])
+
+
+def _rebuild_records(records: object) -> list[DomainRecord] | None:
+    """Reconstruct :class:`DomainRecord` detail from persisted envelope records.
+
+    Returns ``None`` on any shape surprise so a malformed ``succeeded`` payload
+    fails closed instead of yielding a partial-but-plausible detail set.
+    """
+    if not isinstance(records, (list, tuple)):
+        return None
+    rebuilt: list[DomainRecord] = []
+    for item in records:
+        if not isinstance(item, dict):
+            return None
+        raw = item.get("raw")
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            kind = DomainType(item.get("type"))
+        except ValueError:
+            return None
+        docroot = item.get("docroot")
+        label = item.get("internal_label")
+        if (docroot is not None and not isinstance(docroot, str)) or (
+                label is not None and not isinstance(label, str)):
+            return None
+        rebuilt.append(DomainRecord(name=raw, type=kind, docroot=docroot, internal_label=label))
+    return rebuilt
+
+
+def verify_contract(snapshot_data: object) -> ContractEvaluation:
+    """Decide, fail-closed, whether a snapshot's domain contract is trustworthy.
+
+    Never trusts ``status`` alone: a claimed ``succeeded`` envelope is re-reconciled
+    against the ``list_domains`` enumeration and only stays eligible if the
+    independent re-derivation also yields ``succeeded``. Legacy/absent, unsupported
+    schema, failed read, partial/ambiguous/unavailable, an incomplete record, or
+    any incoherence maps to a distinct redacted reason.
+    """
+    result = read_contract(snapshot_data)
+    status = result["status"]
+    if status == LEGACY:
+        return _not_eligible(EVAL_ABSENT)
+    if status == FAILED:
+        raw = snapshot_data.get(SNAPSHOT_KEY) if isinstance(snapshot_data, dict) else None
+        if isinstance(raw, dict) and raw.get("version") not in (None, SCHEMA_VERSION):
+            return _not_eligible(EVAL_UNSUPPORTED_VERSION)
+        return _not_eligible(EVAL_READ_FAILED)
+    if status == PARTIAL:
+        return _not_eligible(EVAL_PARTIAL)
+    if status == AMBIGUOUS:
+        return _not_eligible(EVAL_AMBIGUOUS)
+    if status == UNAVAILABLE:
+        return _not_eligible(EVAL_UNAVAILABLE)
+    # ``succeeded`` per read_contract: re-derive from primary evidence.
+    assert isinstance(snapshot_data, dict)
+    rebuilt = _rebuild_records(result["records"])
+    if rebuilt is None:
+        return _not_eligible(EVAL_INCOHERENT)
+    enumeration = snapshot_data.get("domains")
+    recomputed = reconcile(
+        enumerated_types(enumeration), rebuilt,
+        enumeration_issues=enumeration_issues(enumeration))
+    if recomputed["status"] == SUCCEEDED:
+        return ContractEvaluation(True, None, None, tuple(result["records"]))
+    if recomputed["status"] == PARTIAL:
+        return _not_eligible(EVAL_INCOMPLETE_RECORD)
+    return _not_eligible(EVAL_INCOHERENT)
+
+
+def project_records(records: object) -> list[DomainRecord]:
+    """Project verified envelope records into writer-ready :class:`DomainRecord`.
+
+    Preserves raw spelling, type, docroot, and internal label. Only meaningful
+    for records already accepted by :func:`verify_contract`; a shape surprise
+    yields ``[]`` (the caller must have gated on ``eligible`` first)."""
+    return _rebuild_records(records) or []
+
+
 __all__ = [
     "SCHEMA_VERSION", "METHOD", "SNAPSHOT_KEY",
     "SUCCEEDED", "PARTIAL", "AMBIGUOUS", "FAILED", "UNAVAILABLE", "LEGACY",
     "enumerated_types", "enumeration_issues", "reconcile", "read_contract",
+    "ContractEvaluation", "verify_contract", "project_records",
+    "EVAL_ABSENT", "EVAL_UNSUPPORTED_VERSION", "EVAL_READ_FAILED", "EVAL_PARTIAL",
+    "EVAL_AMBIGUOUS", "EVAL_UNAVAILABLE", "EVAL_INCOMPLETE_RECORD", "EVAL_INCOHERENT",
 ]

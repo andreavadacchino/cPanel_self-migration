@@ -235,18 +235,24 @@ def _endpoint_home(db: Session, endpoint_id: int) -> str:
 
 
 def _source_domain_records(db: Session, run: ExecutionRun):
-    """Parse the source snapshot's rich domain evidence (fail-closed).
+    """Project the source snapshot's rich domain contract, fail-closed (B3c-ii).
 
-    The engine needs typed records (type + docroot), i.e. a ``DomainInfo``
-    ``domains_data`` envelope. The current inventory collector stores only the
-    ``list_domains`` name list, so this block is normally absent: that yields no
-    records, every step resolves to a manual task, and the run halts — never a
-    fabricated write. Tests supply the envelope to exercise the create path."""
-    from adapters.cpanel.domains import parse_domains_data
+    Reads exclusively the B3c-i envelope under ``data["domains_contract"]`` via the
+    contract reader/validator — never ``domains_data``, ``list_domains``, or a
+    heuristic reconstruction — and re-validates it at execution time. Only a
+    contract that is still ``succeeded`` and coherent (re-derived, not string-
+    trusted) yields records; any other state raises so the worker stops *before*
+    any destination write instead of silently returning ``[]``. Readiness already
+    gates the dispatch, so reaching this with an invalid contract means the
+    evidence drifted between readiness and execution (TOCTOU) — fail closed."""
+    from app.modules.inventory import domain_contract
 
     snapshot = db.get(InventorySnapshot, run.source_snapshot_id)
-    block = (snapshot.data or {}).get("domains_data") if snapshot is not None else None
-    return parse_domains_data(block) if isinstance(block, dict) else []
+    evaluation = domain_contract.verify_contract((snapshot.data or {}) if snapshot is not None else {})
+    if not evaluation.eligible:
+        raise ConflictError(
+            f"Contratto domini sorgente non valido ({evaluation.reason}): nessuna scrittura")
+    return domain_contract.project_records(evaluation.records)
 
 
 def _run_domain_phase(
