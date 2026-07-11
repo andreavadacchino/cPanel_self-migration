@@ -374,7 +374,7 @@ export default function MigrationSetupPage() {
 
         {activeStage === 'plan' && <MigrationPlanPanel migrationId={migrationId} onPlanChanged={(nextPlan) => { setPlan(nextPlan); setPlanRevision((value) => value + 1) }} />}
         {activeStage === 'readiness' && <WriterReadinessPanel migrationId={migrationId} planRevision={planRevision} onReportChanged={setReadiness} />}
-        {activeStage === 'execution' && <ExecutionDryRunPanel migrationId={migrationId} planRevision={planRevision} onRunChanged={setExecution} />}
+        {activeStage === 'execution' && <ExecutionDryRunPanel migrationId={migrationId} planRevision={planRevision} onRunChanged={setExecution} onBackToReadiness={() => setActiveStage('readiness')} />}
       </section>
     </>
   )
