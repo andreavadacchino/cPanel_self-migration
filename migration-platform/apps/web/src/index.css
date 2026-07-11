@@ -1742,10 +1742,17 @@ select {
 .execution-step-card__top em { padding: 4px 7px; border-radius: 999px; background: var(--surface-soft); color: var(--text-muted); font-size: .62rem; font-style: normal; font-weight: 700; white-space: nowrap; }
 .execution-step-card__body > small { margin-top: 4px; overflow: hidden; color: var(--text-muted); font: .63rem/1.3 ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .execution-dependency { margin-top: 6px; color: #83651f; font-size: .65rem; }
-.execution-secret { display: grid; grid-template-columns: minmax(220px, 380px) 1fr; gap: 15px; align-items: end; padding: 12px 14px; border-top: 1px solid var(--border); background: #f8fbf9; }
-.execution-secret label { display: grid; gap: 5px; font-size: .68rem; font-weight: 700; }
+.execution-secret { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 18px; align-items: center; padding: 16px; border-top: 1px solid #bdd4c5; background: #f2f8f4; }
+.execution-secret__explanation { display: grid; gap: 5px; }
+.execution-secret__explanation > span { color: #557064; font: 750 .61rem/1 ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+.execution-secret__explanation > strong { color: #1e4933; font-size: .83rem; }
+.execution-secret__explanation p { max-width: 680px; margin: 0; color: #5b6962; font-size: .7rem; line-height: 1.45; }
+.execution-secret__effect { margin-top: 4px !important; }
+.execution-secret__not { color: #7a4338 !important; }
+.execution-secret label { display: grid; gap: 6px; padding: 12px; border: 1px solid #b8ccbf; border-radius: 11px; background: rgba(255,255,255,.78); font-size: .68rem; font-weight: 700; }
+.execution-secret label > span { line-height: 1.35; }
 .execution-secret input, .execution-confirm-card input { min-height: 39px; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: #fff; }
-.execution-secret small { color: var(--text-muted); font-size: .66rem; }
+.execution-secret small { color: var(--text-muted); font-size: .63rem; font-weight: 500; line-height: 1.4; }
 .execution-action-bar { position: sticky; z-index: 3; bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 16px; padding: 14px 16px; border: 1px solid #9cb7a7; border-radius: 14px; background: rgba(238,248,242,.96); box-shadow: 0 14px 36px rgba(23,37,31,.14); backdrop-filter: blur(10px); }
 .execution-action-bar > div { display: grid; gap: 3px; }
 .execution-action-bar span { color: var(--text-muted); font-size: .7rem; }

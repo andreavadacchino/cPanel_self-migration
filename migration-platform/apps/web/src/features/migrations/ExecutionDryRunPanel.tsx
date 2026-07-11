@@ -10,6 +10,29 @@ const STATUS: Record<string, string> = {
 }
 const MODE: Record<string, string> = { automatic: 'Automatica', approval: 'Con approvazione', secret_required: 'Password richiesta' }
 const TERMINAL = ['succeeded', 'failed', 'cancelled']
+const SECRET_GUIDANCE: Record<string, { title: string; description: string; effect: string; notThis: string; placeholder: string }> = {
+  mysql_users: {
+    title: 'Nuova password dell’utente MySQL sulla destinazione',
+    description: 'Scegli una password nuova per questo utente database. La password MySQL sorgente non è recuperabile da cPanel.',
+    effect: 'Nel futuro writer reale verrebbe usata per creare l’utente MySQL sulla destinazione e assegnargli i grant previsti dal piano.',
+    notThis: 'la password cPanel, dell’account email o del database.',
+    placeholder: 'Scegli la nuova password MySQL',
+  },
+  ftp_accounts: {
+    title: 'Nuova password dell’account FTP sulla destinazione',
+    description: 'Scegli una password nuova per il login FTP indicato. La password FTP sorgente non può essere letta o trasferita.',
+    effect: 'Nel futuro writer reale verrebbe impostata sul nuovo account FTP della destinazione.',
+    notThis: 'la password cPanel né quella di una casella email.',
+    placeholder: 'Scegli la nuova password FTP',
+  },
+  mailing_lists: {
+    title: 'Nuova password amministrativa della mailing list',
+    description: 'Scegli una password nuova per amministrare la mailing list sulla destinazione. Quella sorgente non è recuperabile.',
+    effect: 'Nel futuro writer reale verrebbe impostata durante la creazione della mailing list sulla destinazione.',
+    notThis: 'la password cPanel né quella di un account email personale.',
+    placeholder: 'Scegli la password della mailing list',
+  },
+}
 
 export default function ExecutionDryRunPanel({ migrationId, planRevision, onRunChanged, onBackToReadiness }: { migrationId: number; planRevision?: number; onRunChanged?: (run: ExecutionRun) => void; onBackToReadiness?: () => void }) {
   const [plan, setPlan] = useState<MigrationPlan | null>(null)
@@ -77,9 +100,19 @@ export default function ExecutionDryRunPanel({ migrationId, planRevision, onRunC
       <div className="execution-toolbar"><button className="btn" onClick={selectAll} type="button">Seleziona tutti gli idonei</button><button className="btn btn--quiet" disabled={selected.size === 0} onClick={clearSelection} type="button">Azzera selezione</button><span>{missingPasswords > 0 ? `${missingPasswords} password mancanti` : selected.size > 0 ? 'Input completi' : 'Nessuna operazione selezionata'}</span></div>
       <div className="execution-step-list">{selectable.map((step) => {
         const checked = selected.has(step.id)
+        const secretGuide = SECRET_GUIDANCE[step.category]
         return <article className={`execution-step-card ${checked ? 'is-selected' : ''}`} key={step.id}>
           <label><input type="checkbox" checked={checked} onChange={() => toggle(step.id)} /><span className="execution-step-card__check" /><span className="execution-step-card__body"><span className="execution-step-card__top"><strong>{step.title}</strong><em>{MODE[step.mode] ?? step.mode}</em></span><small>{step.category} · {step.key}</small>{step.depends_on_categories.length > 0 && <span className="execution-dependency">Dipende da: {step.depends_on_categories.join(', ')}</span>}</span></label>
-          {checked && step.mode === 'secret_required' && <div className="execution-secret"><label>Nuova password<input type="password" autoComplete="new-password" value={passwords[step.id] ?? ''} onChange={(event) => setPasswords((old) => ({ ...old, [step.id]: event.target.value }))} placeholder="Richiesta per questa simulazione" /></label><small>Viene cifrata e non compare nell’audit.</small></div>}
+          {checked && step.mode === 'secret_required' && <div className="execution-secret">
+            <div className="execution-secret__explanation">
+              <span>Credenziale da scegliere</span>
+              <strong>{secretGuide?.title ?? 'Nuova password della risorsa sulla destinazione'}</strong>
+              <p>{secretGuide?.description ?? 'La password sorgente non è recuperabile: scegli una nuova password per la risorsa di destinazione.'}</p>
+              <p className="execution-secret__effect"><b>Effetto previsto:</b> {secretGuide?.effect ?? 'Verrebbe utilizzata soltanto dal futuro writer reale sulla destinazione.'}</p>
+              <p className="execution-secret__not"><b>Non è:</b> {secretGuide?.notThis ?? 'la password generale dell’account cPanel.'}</p>
+            </div>
+            <label><span>{secretGuide?.title ?? 'Nuova password'}</span><input type="password" autoComplete="new-password" value={passwords[step.id] ?? ''} onChange={(event) => setPasswords((old) => ({ ...old, [step.id]: event.target.value }))} placeholder={secretGuide?.placeholder ?? 'Scegli una nuova password'} /><small>Nel dry-run viene cifrata per validare la completezza dell’input; non compare in preview o audit.</small></label>
+          </div>}
         </article>
       })}</div>
       <footer className="execution-action-bar"><div><strong>Pronto a creare l’anteprima?</strong><span>La prossima schermata mostrerà le chiamate simulate. Non verrà eseguita alcuna scrittura.</span></div><button className="btn btn--primary" disabled={busy || selected.size === 0 || missingPasswords > 0} onClick={() => void action(() => createExecutionPreview(migrationId, { plan_id: plan.id, selected_step_ids: [...selected], passwords }))}>{busy ? 'Preparazione…' : `Crea anteprima di ${selected.size} passi`}</button></footer>
