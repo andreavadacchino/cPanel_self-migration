@@ -1,0 +1,724 @@
+# Migration Platform — V2
+
+Piattaforma di migrazione cPanel **greenfield, API-first, operator-first**.
+
+> **Stato: vertical slice fino all'esecutore dry-run.** Endpoint, inventari,
+> comparazione, checklist, planner e simulazione persistente sono operativi. I
+> writer reali restano deliberatamente disabilitati.
+
+## Struttura
+
+```text
+migration-platform/
+  docker-compose.yml        # postgres + redis + api + worker + web
+  .env.example
+  apps/
+    api/                    # FastAPI + SQLAlchemy + Alembic
+    worker/                 # Dramatiq (broker Redis)
+    web/                    # React + Vite + TypeScript
+  packages/
+    domain/                 # modelli di dominio puri (Pydantic) — reference
+    adapters/               # client Python cPanel; boundary SSH/IMAP preparati
+```
+
+## Avvio rapido (Docker)
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Servizi esposti:
+
+| Servizio  | URL                     |
+|-----------|-------------------------|
+| API       | http://localhost:8000   |
+| API docs  | http://localhost:8000/docs |
+| Web       | http://localhost:5173   |
+| Postgres  | porta host definita da `POSTGRES_PORT` (`55432` nell'ambiente pilota) |
+| Redis     | localhost:6379          |
+
+All'avvio l'API esegue `alembic upgrade head` e poi serve le route.
+
+## Endpoint disponibili
+
+| Metodo | Path                     | Descrizione                    |
+|--------|--------------------------|--------------------------------|
+| GET    | `/health`                | liveness                       |
+| GET    | `/api/health`            | liveness (namespace API)       |
+| GET    | `/api/migrations`        | elenco migrazioni              |
+| POST   | `/api/migrations`        | crea migrazione (solo record)  |
+| GET    | `/api/migrations/{id}`   | dettaglio migrazione           |
+| GET    | `/api/jobs`              | elenco job                     |
+| GET    | `/api/migrations/{id}/endpoints` | endpoint sorgente/destinazione |
+| POST   | `/api/migrations/{id}/endpoints` | crea un endpoint               |
+| PATCH  | `/api/endpoints/{id}` | modifica un endpoint                |
+| PATCH  | `/api/endpoints/{id}/credentials` | sostituisce il token       |
+| POST   | `/api/endpoints/{id}/test-connection` | prova autenticazione UAPI |
+| DELETE | `/api/endpoints/{id}` | elimina un endpoint                 |
+| POST   | `/api/migrations/{id}/preflight` | acquisisce i due inventari  |
+| GET    | `/api/migrations/{id}/jobs/current` | ultimo job della migrazione |
+| GET    | `/api/migrations/{id}/events` | eventi persistenti del job       |
+| GET    | `/api/migrations/{id}/inventory` | ultimi snapshot per ruolo     |
+| POST   | `/api/migrations/{id}/comparison` | genera una comparazione      |
+| GET    | `/api/migrations/{id}/comparison` | ultima comparazione           |
+| GET    | `/api/migrations/{id}/manual-tasks` | checklist manuale           |
+| PATCH  | `/api/manual-tasks/{id}` | aggiorna lo stato operativo       |
+| POST   | `/api/manual-tasks/{id}/verify` | verifica su nuove evidenze    |
+| POST   | `/api/migrations/{id}/plan` | genera il piano senza scritture   |
+| GET    | `/api/migrations/{id}/plan` | legge l'ultimo piano              |
+| POST   | `/api/migrations/{id}/executions` | crea preview dry-run selettiva |
+| GET    | `/api/migrations/{id}/executions/latest` | ultimo execution run |
+| GET    | `/api/executions/{id}` | dettaglio e audit del run |
+| POST   | `/api/executions/{id}/confirm` | conferma forte e rivalida destinazione |
+| POST   | `/api/executions/{id}/run` | esegue soltanto la simulazione |
+| POST   | `/api/executions/{id}/cancel` | annulla un run non terminale |
+
+## Credenziali cPanel
+
+I token diretti vengono cifrati con Fernet prima del salvataggio e non sono mai
+restituiti dalle API. Configurare una chiave persistente prima di usarli:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Salvare il risultato in `CREDENTIAL_ENCRYPTION_KEY`. La stessa chiave deve essere
+disponibile dopo ogni riavvio: perderla rende illeggibili i token già salvati.
+
+È supportato anche `auth_type=token_ref` con riferimenti `env://NOME_VARIABILE`.
+In questo caso il segreto non viene scritto nel database.
+
+Il test connessione usa esclusivamente UAPI account-level:
+`Variables::get_user_information`. Un esito positivo certifica connessione,
+autenticazione e lettura delle informazioni account; le altre capability restano
+false finché i relativi probe del preflight non sono stati eseguiti.
+
+L'adapter supporta entrambe le forme di risposta osservate nelle versioni cPanel:
+la forma moderna con `status`/`data` al livello principale e la forma legacy
+incapsulata in `result`. Questo evita falsi errori di autenticazione su server che
+restituiscono HTTP 200 e `status: 1` senza il wrapper.
+
+### Stato di implementazione
+
+| Area | Stato |
+|------|-------|
+| CRUD endpoint | Funzionante |
+| Token cifrati / riferimenti env | Funzionante |
+| Test autenticazione cPanel UAPI | Funzionante |
+| Capability per categoria | Prima versione UAPI funzionante |
+| Inventario sorgente/destinazione | Funzionante, snapshot persistenti |
+| Comparazione | Funzionante sulle categorie coperte |
+| Checklist manuale | Generata e persistita dalla comparazione |
+| Esecutore dry-run | Funzionante, nessuna scrittura reale |
+| Migrazione dati/configurazioni | Writer reali non abilitati |
+
+## Copertura del preflight
+
+Il preflight esegue letture account-level e salva uno snapshot separato per
+sorgente e destinazione. Ogni categoria conserva metodo, esito, conteggio,
+messaggio ed evidenza che la lettura è read-only.
+
+| Categoria | Lettura |
+|-----------|---------|
+| Account | `Variables::get_user_information` |
+| Domini | `DomainInfo::list_domains` |
+| Caselle email | `Email::list_pops_with_disk` |
+| Database | `Mysql::list_databases` |
+| Utenti MySQL | `Mysql::list_users` |
+| DNS | `DNS::parse_zone` |
+| Certificati | `SSL::list_certs` |
+| Forwarder | `Email::list_forwarders` |
+| Autoresponder | `Email::list_auto_responders` per dominio + `Email::get_auto_responder` per indirizzo |
+| FTP | `Ftp::list_ftp_with_disk` |
+| Filtri email | `Email::list_filters` per account e casella |
+| Mailing list | `Email::list_lists` |
+| Redirect | `Mime::list_redirects` |
+| PHP | `LangPHP::php_get_vhost_versions` |
+| PostgreSQL | `Postgresql::list_databases` |
+| Subaccount | `UserManager::list_users` |
+| Cron | API 2 `Cron::listcron` (non esiste equivalente UAPI) |
+
+Gli esiti possibili sono `succeeded`, `empty`, `partial`, `unsupported`,
+`unavailable`, `failed` e `unverified`. Una chiamata fallita non produce mai un
+conteggio zero. Tutte le categorie elencate nella tabella hanno un collector.
+Una singola installazione può comunque restituire `unsupported` o `unavailable`
+per feature disabilitate, privilegi mancanti o API non offerte dal server.
+Una categoria `unsupported` su entrambi gli endpoint è considerata non
+applicabile: resta visibile nella copertura ma non genera un'attività manuale.
+
+DNS viene interrogato separatamente per ogni dominio tramite il parametro
+obbligatorio `zone`; un errore su una zona produce `partial` se le altre sono
+state lette, non cancella i record già acquisiti.
+Le righe Base64 di `parse_zone` vengono normalizzate; commenti, direttive, SOA e
+NS sono esclusi dal confronto perché dipendono dal server DNS autorevole.
+Sono esclusi anche i record temporanei DCV/ACME e i record di servizio cPanel
+rigenerabili. Le differenze DNS restano avvisi di cutover e non blocker della
+copia dei contenuti.
+
+## Esecuzione asincrona
+
+In ambiente Docker, `POST /preflight` crea un job `queued` in PostgreSQL e invia
+al worker Dramatiq soltanto il suo ID. Il worker rilegge endpoint e credenziali,
+porta il job a `running`, acquisisce gli snapshot e conclude con `succeeded` o
+`failed`. Redis trasporta il messaggio ma non è mai la fonte di verità.
+
+Per il debug locale senza Redis è possibile impostare `PREFLIGHT_INLINE=true`.
+I test con SQLite utilizzano automaticamente questa modalità. Non abilitarla
+nel normale ambiente batch: una chiamata HTTP resterebbe occupata per tutta la
+durata del preflight.
+
+Il worker deve ricevere la stessa `CREDENTIAL_ENCRYPTION_KEY` dell'API, altrimenti
+non può decifrare i token diretti. I riferimenti `env://` devono essere disponibili
+anche nel container worker.
+
+## Modello dati persistente
+
+Le migrazioni Alembic correnti arrivano a `0006_execution_runs`:
+
+| Tabelle | Scopo |
+|---------|-------|
+| `migrations` | contenitore della migrazione account |
+| `endpoints` | sorgente/destinazione e credenziali cifrate/riferite |
+| `jobs`, `job_events` | stato durevole del preflight asincrono |
+| `inventory_snapshots` | evidenze immutabili per endpoint e ruolo |
+| `comparison_reports` | confronto legato agli ID esatti degli snapshot |
+| `manual_tasks` | checklist storica e verifica evidence-based |
+| `migration_plans` | classificazione e dipendenze dei passi |
+| `execution_runs` | selezione, piano/report/snapshot, stato e segreti cifrati |
+| `execution_events` | preview, risultato e verifica per passo |
+
+PostgreSQL è la fonte di verità; Redis trasporta soltanto messaggi. Gli snapshot
+non vengono aggiornati in-place. Un nuovo preflight crea nuove righe e rende
+obsoleti comparazioni, piani e preview precedenti finché non vengono rigenerati.
+
+Comandi di verifica:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest
+
+cd ../worker
+DRAMATIQ_TESTING=1 python -m pytest
+
+cd ../web
+npm run build
+```
+
+## Comparazione e attività manuali
+
+La comparazione usa gli ultimi snapshot riusciti e produce, per ogni elemento:
+
+- `match`: presente e equivalente sui due account;
+- `missing_on_destination`: presente sul sorgente, assente sulla destinazione;
+- `only_on_destination`: presente soltanto sulla destinazione;
+- `different`: presente sui due lati con configurazione differente;
+- `unknown`: categoria non leggibile con affidabilità su uno dei due lati.
+
+Le categorie `unsupported`, `unavailable`, `failed` o `unverified` vengono
+saltate e producono un avviso `unknown`: non vengono mai trasformate in falsi
+elementi mancanti. Fingerprint e report sono persistenti e riferiti agli ID
+esatti dei due snapshot.
+
+Le identità sono specifiche per categoria: dominio per domini, indirizzo per
+caselle, coppia sorgente→destinazione per forwarder, login per FTP e copertura
+del nome DNS per SSL. Gli ID dei certificati, le date di rinnovo, l'uso disco e
+gli account FTP principali/log non sono trattati come risorse da migrare.
+
+Per ogni elemento mancante, differente o ignoto viene generata una
+`manual_task`. L'attività contiene categoria, chiave, istruzioni, stato operativo
+e stato di verifica. La UI consente di marcarla `pending`, `in_progress`, `done`
+o `skipped`.
+La checklist operativa mostra soltanto le attività dell'ultima comparazione; i
+report precedenti restano nel database esclusivamente come storico di audit.
+
+La verifica è evidence-based: dopo aver segnato un'attività come completata,
+l'operatore deve rieseguire preflight e comparazione. Per una risorsa la nuova
+comparazione deve risultare `match`; per un gap di copertura la categoria deve
+essere stata finalmente letta. La sola conferma manuale non produce mai lo stato
+`verified`.
+
+## Piano di migrazione
+
+Il planner converte l'ultima comparazione in passi ordinati e deduplicati:
+
+- `automatic`: writer account-level disponibile;
+- `approval`: scrittura possibile ma subordinata a conferma esplicita;
+- `secret_required`: serve una nuova password non recuperabile dal sorgente;
+- `manual`: nessun writer automatico considerato sicuro;
+- `excluded`: duplicato o risorsa deliberatamente esclusa.
+
+Il piano è read-only. Generarlo non modifica alcun cPanel. Domini precedono PHP,
+SSL e DNS; database precedono gli utenti MySQL. Un subaccount che rappresenta lo
+stesso login FTP viene escluso come duplicato.
+
+Gli utenti MySQL, FTP e mailing list richiedono nuove password. PHP resta manuale
+perché la funzione ufficiale di scrittura è WHM-level; SSL viene escluso dalla
+copia e rigenerato con AutoSSL dopo domini/DNS. Gli autoresponder restano manuali
+finché il relativo writer e i guardrail anti-upsert non saranno implementati.
+
+### Inventario autoresponder dettagliato
+
+Il collector elenca gli autoresponder separatamente per ogni dominio e usa
+`Email::get_auto_responder` per recuperare corpo, mittente, oggetto, intervallo,
+HTML, charset, inizio e fine. L'esistenza resta basata sulla lista; la sola
+risposta del dettaglio non viene usata per dedurre che la risorsa esista.
+
+Ogni elemento conserva `_detail_status=succeeded|failed`. Se una lista riesce ma
+un dettaglio fallisce, la categoria è `partial`, mantiene l'elemento sommario e
+non diventa mai `empty`. Se nessun dominio è leggibile è `unavailable`. Il
+fingerprint di comparazione include tutti i campi round-trip, quindi differenze
+di corpo o pianificazione sono visibili.
+
+## Esecutore sicuro dry-run
+
+La migrazione Alembic `0006_execution_runs` aggiunge `execution_runs` e
+`execution_events`. Ogni run è legato in modo immutabile a migrazione, piano,
+comparazione, snapshot sorgente/destinazione ed endpoint destinazione. Conserva
+selezione, timestamp, chiamate previste, risultati simulati e stato della
+verifica. Le nuove password vengono cifrate con Fernet; risposte, preview ed
+eventi espongono soltanto gli ID coperti e il valore `[REDACTED]`, mai il segreto
+o il ciphertext.
+
+Stati supportati: `previewed`, `awaiting_confirmation`, `queued`, `running`,
+`succeeded`, `failed`, `cancelled`. La creazione completa subito la preview e
+porta normalmente il run in `awaiting_confirmation`; `previewed` resta lo stato
+iniziale del modello per future generazioni asincrone.
+
+La preview accetta soltanto passi `automatic`, `approval` o `secret_required` e
+blocca ID estranei, dipendenze di categoria non selezionate, password mancanti,
+piani basati su comparazioni superate e snapshot non più correnti. Quando la UI
+genera un nuovo piano, il pannello dry-run lo ricarica automaticamente.
+La conferma richiede contemporaneamente:
+
+- frase esatta `CONFERMO DRY-RUN PIANO {id}`;
+- ID piano coincidente;
+- assenza di comparazioni più recenti;
+- ultimi snapshot coincidenti con quelli del report;
+- configurazione destinazione non modificata;
+- nuovo test UAPI read-only riuscito sulla destinazione.
+
+Solo dopo la conferma il run diventa `queued`. L'endpoint `/run` registra
+`running`, simula ogni chiamata e termina `succeeded`; ogni risultato dichiara
+`write_performed=false`. La verifica per passo è `not_applicable` in dry-run:
+non essendoci una modifica reale, non viene fabbricata evidenza di destinazione.
+Il sorgente non è mai un target. Il primo actor writer esiste soltanto per test
+mock ed è descritto sotto; non è raggiungibile dalla UI o dalle API operative.
+
+Procedura operativa:
+
+1. completare preflight, comparazione e piano;
+2. selezionare i passi e inserire le nuove password richieste;
+3. creare e ispezionare l'anteprima redatta;
+4. digitare la frase esatta e rivalidare la destinazione;
+5. avviare esplicitamente la simulazione;
+6. controllare eventi e conteggio delle chiamate simulate.
+
+Limiti correnti: nessuna chiamata writer reale, nessun rollback reale e nessun
+nuovo preflight post-operazione, perché il dry-run non modifica lo stato remoto.
+L'esecuzione è sincrona e breve; PostgreSQL resta comunque la fonte di verità.
+
+## Writer domini mock-only
+
+`worker.actors.domain_writer.domain_writer_actor` prepara il flusso asincrono
+del primo writer, ma il servizio accetta esclusivamente:
+
+- `DOMAIN_WRITER_MODE=mock`;
+- execution run non dry-run creati esclusivamente dai test;
+- endpoint con ruolo `destination` e `auth_type=mock`;
+- passi della categoria `domains`.
+
+La configurazione Docker e `.env.example` usano
+`DOMAIN_WRITER_MODE=disabled`. Il valore `real` non è implementato e viene
+rifiutato; non esiste alcuna route o controllo UI che accodi il writer. Questa
+separazione impedisce di trasformare accidentalmente un dry-run confermato in
+una scrittura.
+
+Il writer mock esegue un controllo di presenza prima della creazione, non
+cancella e non sovrascrive domini, conserva chiamata prevista, risultato e
+verifica negli `execution_events`. Un retry usa un evento già verificato come
+checkpoint e registra `already_completed` senza ripetere l'azione. La verifica
+legge lo stato del target mock. Per il futuro writer reale questa evidenza dovrà
+essere sostituita obbligatoriamente da nuovo preflight e comparazione; rollback
+e attività manuale devono essere definiti prima di esporre qualsiasi dispatch.
+
+Test mirati:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_domain_writer.py
+
+# nell'immagine Docker, che include Dramatiq
+docker compose exec api sh -lc \
+  'cd /srv/apps/worker && DRAMATIQ_TESTING=1 python -m pytest worker/tests/test_actors.py'
+```
+
+## Writer database MySQL mock-only
+
+`worker.actors.database_writer.database_writer_actor` prepara il secondo writer
+seguendo gli stessi guardrail del writer domini. È governato dal flag separato
+`DATABASE_WRITER_MODE`, che vale `disabled` sia in Docker sia nel file di
+esempio. Solo i test lo impostano temporaneamente a `mock`; `real` viene sempre
+rifiutato e non esistono route o pulsanti che possano accodarlo.
+
+Il controllo idempotente legge i database dallo snapshot destinazione usando
+`database` o `name` come identità. La chiamata prevista è
+`Mysql::create_database`; il mock restituisce `already_present` senza modifiche
+quando la risorsa esiste, oppure `created` e verifica subito il target simulato.
+Retry successivi usano l'evento verificato come checkpoint persistente. Utenti
+e privilegi sono gestiti dal writer mock separato descritto sotto, così la
+creazione del database resta un'unità idempotente indipendente.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_database_writer.py
+```
+
+## Writer utenti MySQL e privilegi mock-only
+
+`worker.actors.mysql_user_writer.mysql_user_writer_actor` prepara creazione
+utente e grant con il flag `MYSQL_USER_WRITER_MODE`, disabilitato nello stack.
+Il servizio accetta soltanto endpoint destinazione mock, run non dry-run creati
+dai test e nuove password già cifrate con Fernet. Il segreto viene decifrato
+soltanto durante la chiamata mock, eliminato subito dalla variabile locale e non
+compare in preview, eventi, risultati o verifiche.
+
+L'inventario account-level corrente non espone ancora una mappatura affidabile
+utente→database. Per questo il writer non inventa assegnazioni: richiede
+esattamente un passo database nel run e prova che quel database sia presente
+nello snapshot destinazione oppure verificato da un evento del writer database.
+Con zero o più database selezionati l'operazione viene bloccata. Nel mock il
+grant è `ALL PRIVILEGES`; prima di un writer reale l'inventario dovrà acquisire
+i privilegi sorgente e il planner dovrà produrre dipendenze per risorsa, non
+soltanto per categoria.
+
+Creazione utente e grant sono verificati sul target mock e auditati come unica
+unità operativa. Retry successivi usano il checkpoint verificato e non ripetono
+la password o il grant. Il valore `real` non è implementato, e non esistono
+route/UI per accodare questo actor.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_mysql_user_writer.py
+```
+
+## Writer forwarder mock-only
+
+`worker.actors.forwarder_writer.forwarder_writer_actor` prepara i forwarder con
+`FORWARDER_WRITER_MODE=disabled`. La risorsa è identificata dalla coppia esatta
+`sorgente -> destinazione`; una stessa sorgente verso un target diverso non è
+considerata già migrata e non viene sovrascritta o cancellata. Il parser rifiuta
+chiavi ambigue, sorgenti senza `@` e destinazioni vuote.
+
+Il mock simula `Email::add_forwarder`, verifica la coppia sul target simulato e
+registra chiamata, risultato e verifica. Retry successivi usano il checkpoint
+persistente. Non sono richieste password. Endpoint reali, run dry-run e valori
+diversi da `mock` sono bloccati; non esistono route o azioni UI di dispatch.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_forwarder_writer.py
+```
+
+## Writer cron mock-only con approvazione
+
+`worker.actors.cron_writer.cron_writer_actor` è governato da
+`CRON_WRITER_MODE=disabled`. Oltre ai guardrail comuni, richiede che il run
+contenga `confirmed_at` e che ogni passo cron sia ancora classificato
+`approval` nel piano persistente. La sola presenza del passo nella preview non
+costituisce autorizzazione.
+
+La chiave deve avere forma `minuto ora giorno mese giorno_settimana|comando`.
+Sono richiesti esattamente cinque campi di pianificazione e un comando non
+vuoto; il comando può contenere ulteriori `|`. L'identità idempotente comprende
+sia pianificazione sia comando, quindi una variazione non sovrascrive il cron
+esistente. Il mock usa la chiamata prevista API 2 `Cron::add_line`, coerente con
+l'assenza di un equivalente UAPI, e registra nell'evidenza la conferma forte.
+
+Il valore `real`, endpoint reali e run dry-run sono bloccati; nessuna route/UI
+può accodare l'actor.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_cron_writer.py
+```
+
+## Writer FTP mock-only
+
+`worker.actors.ftp_writer.ftp_writer_actor` usa `FTP_WRITER_MODE=disabled` e
+richiede una nuova password Fernet per ogni passo. Il segreto viene decifrato
+solo in memoria, eliminato subito e sostituito con `[REDACTED]` nell'audit. Sono
+accettati soltanto login `utente@dominio`; account anonimi, principali o di
+servizio come `*_logs` vengono rifiutati.
+
+Il mock simula `Ftp::add_ftp`, controlla prima la presenza del login e verifica
+il target simulato. Quota e home directory non vengono inventate: preview e
+risultato le marcano esplicitamente `NOT_CONFIGURED`/false. L'inventario dovrà
+acquisirle e il planner dovrà richiederle prima di qualsiasi writer reale.
+Retry successivi usano il checkpoint persistente; endpoint reali e dry-run sono
+bloccati e non esiste dispatch operativo.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_ftp_writer.py
+```
+
+## Writer mailing list mock-only
+
+`worker.actors.mailing_list_writer.mailing_list_writer_actor` usa
+`MAILING_LIST_WRITER_MODE=disabled` e richiede una nuova password Fernet. Le
+risposte cPanel con indirizzo completo oppure campi separati `list` + `domain`
+vengono normalizzate in `lista@dominio`.
+
+Il writer legge l'eventuale attributo `private` esclusivamente dallo snapshot
+sorgente immutabile. Se manca non inventa un valore: audit e risultato riportano
+`[NOT_CONFIGURED]`, che dovrà essere risolto prima del writer reale. Il mock
+simula `Email::add_list`, controlla presenza e verifica il target; password e
+ciphertext non compaiono negli eventi. Retry usa il checkpoint persistente.
+Endpoint reali, dry-run e dispatch operativo restano bloccati.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_mailing_list_writer.py
+```
+
+## Writer DNS mock-only additivo
+
+`worker.actors.dns_writer.dns_writer_actor` usa `DNS_WRITER_MODE=disabled` e
+richiede conferma forte, passo `approval` e zona già presente nello snapshot
+destinazione o verificata dal writer domini. È deliberatamente solo additivo:
+accetta esclusivamente elementi `missing_on_destination` dell'esatta
+comparazione del run. Stati `different`, `unknown` o `match` vengono bloccati;
+non esistono delete o overwrite impliciti.
+
+I record sorgente vengono riletti dallo snapshot immutabile, inclusa la
+decodifica Base64. Sono consentiti A, AAAA, CNAME, MX, TXT, CAA e SRV; SOA, NS,
+record cPanel e DCV restano esclusi dalla normalizzazione. Se più record
+sorgente collassano sulla stessa chiave di confronto, il writer blocca il passo
+come ambiguo per evitare omissioni. La chiamata mock prevista è
+`DNS::add_zone_record`, seguita da verifica sul target simulato e checkpoint di
+retry. Endpoint reali e dispatch operativo restano bloccati.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_dns_writer.py
+```
+
+## Writer autoresponder mock-only additivo
+
+`worker.actors.autoresponder_writer.autoresponder_writer_actor` usa
+`AUTORESPONDER_WRITER_MODE=disabled` e non è accodato da alcuna route o UI.
+`Email::add_auto_responder` è un upsert e sovrascriverebbe un autoresponder già
+presente, quindi il writer è deliberatamente additivo e difensivo. Accetta
+esclusivamente elementi `missing_on_destination` dell'esatta comparazione del
+run; `different`, `unknown`, `match` e `only_on_destination` restano manuali.
+
+Il payload completo (local part, domain, from, subject, body, interval, is_html,
+charset, start, stop) viene letto soltanto dallo snapshot sorgente immutabile.
+Se il dettaglio sorgente non è `succeeded` o manca un campo necessario
+(`from`, `subject`, `body`, `interval`) il passo è bloccato con istruzione
+manuale, senza inventare valori. Un `interval` pari a `0` è un payload valido.
+
+Prima di ogni scrittura il writer esegue un fresh mock pre-write check per
+indirizzo: se nel target è comparso — dopo lo snapshot di piano — un
+autoresponder differente, il passo è bloccato perché la scrittura lo
+sovrascriverebbe. Un autoresponder comparso ma byte-identico al payload di piano
+è trattato come `already_present` idempotente. La chiamata prevista è
+`Email::add_auto_responder`, seguita da verifica sul target mock e checkpoint di
+retry.
+
+Corpo, oggetto e mittente possono essere dati sensibili: non compaiono mai in
+chiaro né nei messaggi né nella chiamata prevista persistente. L'audit conserva
+soltanto metadati non sensibili (`interval`, `is_html`, `charset`, `start`,
+`stop`), i campi sensibili redatti come `[REDACTED]` e un `payload_fingerprint`
+deterministico che verifica l'equivalenza senza esporre il contenuto.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_autoresponder_writer.py
+```
+
+## Orchestrazione mock end-to-end
+
+`worker.actors.mock_orchestrator.mock_orchestrator_actor` coordina i writer mock
+in un unico execution run non dry-run ed è gateato da
+`MOCK_ORCHESTRATOR_MODE=disabled` (il valore `real` è rifiutato). Nessuna
+route/UI lo accoda in questo incremento.
+
+Ogni writer espone ora un contratto di fase condiviso — `validate_phase` (i
+guardrail di sicurezza) e `apply_phase` (esecuzione e verifica) — mentre lo
+`execute` standalone resta invariato e continua a essere gateato dal flag
+per-writer. L'orchestratore riusa lo stesso contratto senza forzare
+ripetutamente `run.status=queued`: lo stato terminale del run appartiene solo
+all'orchestratore, così nessuna singola fase marca il run `succeeded` mentre
+restano fasi da eseguire.
+
+I flag per-writer (`DOMAIN_WRITER_MODE`, …) gateano **solo** il percorso
+standalone: un run orchestrato è gateato da `MOCK_ORCHESTRATOR_MODE` più
+`auth_type=mock` sull'endpoint, non dai singoli flag (comportamento
+intenzionale, coperto da test di regressione). Come difesa in profondità
+l'orchestratore rifiuta però esplicitamente qualunque categoria il cui flag
+per-writer sia `real`: un writer reale non è implementato e non deve essere
+eseguito nemmeno tramite l'orchestratore.
+
+Flusso:
+
+1. **Pre-validazione** prima di qualsiasi fase — run non dry-run e in coda,
+   endpoint destinazione mock, coerenza piano/comparazione/snapshot, modalità dei
+   passi (`manual`, `excluded` e categorie sconosciute rifiutate), conferma forte
+   per i passi `approval`, password cifrate presenti e dipendenze selezionate. Un
+   errore di pre-validazione non esegue alcuna fase e non muta il run.
+2. **Ordine deterministico**: `domains` → `databases` → `mysql_users` →
+   `email_forwarders` → `cron_jobs` → `ftp_accounts` → `mailing_lists` →
+   `dns_records` → `email_autoresponders`. Le dipendenze
+   (database→utente MySQL, dominio→DNS) si propagano tramite gli eventi
+   verificati già persistiti nel run.
+3. **Arresto al primo blocco**: se una fase fallisce o richiede intervento
+   manuale (es. race anti-upsert dell'autoresponder), le categorie successive non
+   vengono eseguite, il run passa a `failed` e l'audit registra i passi riusciti
+   e quelli non eseguiti. Nessuna compensazione o cancellazione automatica.
+4. **Retry**: rieseguendo l'orchestratore i checkpoint già verificati vengono
+   saltati (`already_completed`) e l'ordine resta identico.
+5. **Verifica finale**: lo stato mock condiviso viene ricostruito
+   ESCLUSIVAMENTE dagli eventi immutabili del run (non dai risultati restituiti
+   dai writer) e riletto per confermare che ogni passo selezionato risulti
+   presente (`evidence=shared_mock_state_reread`). Gli eventi aggregati non
+   contengono segreti né contenuti sensibili degli autoresponder.
+
+Il percorso reale futuro sostituirà le fasi mock e la rilettura dello stato mock
+con scritture account-level reali seguite da un nuovo preflight e una nuova
+comparazione della destinazione.
+
+Test mirato:
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_mock_orchestrator.py
+```
+
+## Configurazione e stato dei writer
+
+Tutti i writer sono mock-only, privi di route/UI di dispatch e disabilitati per
+default. Il valore `real` non è implementato e viene rifiutato dal codice.
+
+| Writer | Variabile | Stato predefinito |
+|--------|-----------|-------------------|
+| Domini | `DOMAIN_WRITER_MODE` | `disabled` |
+| Database MySQL | `DATABASE_WRITER_MODE` | `disabled` |
+| Utenti e grant MySQL | `MYSQL_USER_WRITER_MODE` | `disabled` |
+| Forwarder | `FORWARDER_WRITER_MODE` | `disabled` |
+| Cron | `CRON_WRITER_MODE` | `disabled` |
+| FTP | `FTP_WRITER_MODE` | `disabled` |
+| Mailing list | `MAILING_LIST_WRITER_MODE` | `disabled` |
+| DNS | `DNS_WRITER_MODE` | `disabled` |
+| Autoresponder | `AUTORESPONDER_WRITER_MODE` | `disabled` |
+
+L'orchestrazione mock end-to-end è governata dal flag separato
+`MOCK_ORCHESTRATOR_MODE` (default `disabled`, `real` rifiutato), anch'esso privo
+di route/UI di dispatch.
+
+Non impostare questi flag a `mock` nello stack pilota: tale modalità è destinata
+ai test con endpoint `auth_type=mock`. L'abilitazione futura richiederà un nuovo
+contratto di execution non dry-run, conferma separata, pre-write re-check e
+preflight/comparazione post-write.
+
+## Stato verificato dell'account pilota
+
+Fotografia al termine dell'ultimo incremento (gli ID sono storici e devono
+sempre essere riletti dalle API prima dell'uso):
+
+- migrazione `1`;
+- ultimo preflight read-only: job `9`, `succeeded`;
+- snapshot sorgente/destinazione: `17` / `18`;
+- comparazione corrente: `11`;
+- piano corrente: `5`;
+- autoresponder sorgente: 3, tutti con dettaglio riuscito;
+- autoresponder destinazione: 0;
+- tutti e tre risultano `missing_on_destination` e restano `manual`;
+- tutti i flag writer sono `disabled`;
+- execution run non dry-run nel database: 0.
+
+La baseline di test corrente è 105 test API e 15 test worker. La build frontend,
+`docker compose config -q`, health API e stack Docker risultano verdi.
+
+## Limitazioni e prossimi incrementi
+
+- Nessun writer reale o dispatch operativo è disponibile.
+- Il writer autoresponder è disponibile solo in modalità mock e protegge
+  dall'upsert; il fresh check reale UAPI non è ancora implementato.
+- La mappatura utente MySQL→database→privilegi non è ancora inventariata.
+- FTP non ha ancora quota e home directory sufficienti per una scrittura reale.
+- Mailing list può avere `private` non configurato.
+- PHP resta manuale perché il writer documentato richiede privilegi WHM.
+- SSL non copia mai chiavi private e dovrà essere rigenerato tramite AutoSSL.
+- Il prossimo incremento è l'orchestrazione mock end-to-end, con execution
+  non dry-run separata, pre-write re-check, post-write preflight e rollback/manual
+  task prima di valutare qualsiasi abilitazione reale.
+
+## Sviluppo locale (senza Docker)
+
+### API
+
+```bash
+cd apps/api
+python -m venv .venv && source .venv/bin/activate
+pip install -e ../../packages/domain -e ../../packages/adapters -e .
+# test (usano SQLite in-memory, non serve Postgres):
+python -m pytest
+# dev server (richiede DATABASE_URL o usa il default SQLite):
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+### Worker
+
+```bash
+cd apps/worker
+pip install -e ../../packages/domain -e ../../packages/adapters -e ../api -e .
+DRAMATIQ_TESTING=1 python -m pytest      # test senza Redis
+dramatiq worker.main                     # richiede Redis attivo
+```
+
+### Web
+
+```bash
+cd apps/web
+npm install
+npm run dev        # http://localhost:5173
+npm run build      # gate di compilazione
+```
+
+Validazione completa dello stack:
+
+```bash
+docker compose config -q
+docker compose up -d --build
+curl --fail http://localhost:8000/health
+docker compose exec api alembic current
+docker compose ps
+```
+
+## Principio architetturale
+
+> **Tutti i job e le esecuzioni aggiornano PostgreSQL.** La coda è volatile e
+> trasporta soltanto ID. Snapshot, confronti, piani, selezioni, eventi, risultati
+> e verifiche devono restare ricostruibili dal database. La sorgente è sempre
+> read-only; la destinazione è l'unico target possibile; uno stato non leggibile
+> non equivale mai a una risorsa vuota.
+```
