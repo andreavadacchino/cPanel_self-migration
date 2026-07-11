@@ -195,6 +195,7 @@ def cancel(db: Session, run_id: int) -> dict:
 
 def open_attempt(
     db: Session, run_id: int, *, lease: AccountExecutionLease | None = None,
+    initial_status: str = ExecutionStatus.running.value,
 ) -> ExecutionAttempt:
     """Open the next real execution attempt for a confirmed, non-dry-run run.
 
@@ -204,12 +205,19 @@ def open_attempt(
     is a fresh attempt row and a duplicate open is rejected by the constraint
     rather than silently starting a second concurrent attempt.
 
+    ``initial_status`` is ``running`` for an attempt a worker opens directly, or
+    ``queued`` for a durable dispatch (task A3) that enqueues the attempt and
+    lets the worker legally transition it to ``running`` on pickup; ``started_at``
+    is stamped only once the attempt is actually running.
+
     When a destination-account ``lease`` is supplied its owner and fencing token
     are stamped on the attempt so ``finalize_attempt`` can refuse a commit from a
     holder that was fenced out (task A4).
     """
     if not settings.real_execution_enabled:
         raise ConflictError("L'esecuzione reale è disabilitata")
+    if initial_status not in {ExecutionStatus.queued.value, ExecutionStatus.running.value}:
+        raise ConflictError("Stato iniziale del tentativo non valido")
     run = get(db, run_id)
     if run.dry_run:
         raise ConflictError("Un dry-run non apre tentativi reali")
@@ -218,9 +226,10 @@ def open_attempt(
     if lease is not None and lease.destination_endpoint_id != run.destination_endpoint_id:
         raise ConflictError("Il lease non appartiene all'account di destinazione del run")
     next_number = max((a.attempt_number for a in run.attempts), default=0) + 1
+    started = datetime.now(timezone.utc) if initial_status == ExecutionStatus.running.value else None
     attempt = ExecutionAttempt(
         execution_run_id=run.id, attempt_number=next_number,
-        status=ExecutionStatus.running.value, started_at=datetime.now(timezone.utc),
+        status=initial_status, started_at=started,
         lease_key=(lease.owner if lease is not None else None),
         fencing_token=(lease.fencing_token if lease is not None else None),
     )

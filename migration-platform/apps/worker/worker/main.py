@@ -20,5 +20,6 @@ from worker.actors import mailing_list_writer  # noqa: F401  # registers actors
 from worker.actors import dns_writer  # noqa: F401  # registers actors
 from worker.actors import autoresponder_writer  # noqa: F401  # registers actors
 from worker.actors import mock_orchestrator  # noqa: F401  # registers actors
+from worker.actors import real_dispatch  # noqa: F401  # registers the real-path actor
 
-__all__ = ["broker", "health", "preflight", "domain_writer", "database_writer", "mysql_user_writer", "forwarder_writer", "cron_writer", "ftp_writer", "mailing_list_writer", "dns_writer", "autoresponder_writer", "mock_orchestrator"]
+__all__ = ["broker", "health", "preflight", "domain_writer", "database_writer", "mysql_user_writer", "forwarder_writer", "cron_writer", "ftp_writer", "mailing_list_writer", "dns_writer", "autoresponder_writer", "mock_orchestrator", "real_dispatch"]

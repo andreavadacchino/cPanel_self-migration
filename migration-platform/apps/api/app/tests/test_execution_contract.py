@@ -41,9 +41,10 @@ def test_illegal_transition_fails_closed() -> None:
 
 
 def test_terminal_states_have_no_successor() -> None:
-    assert TERMINAL_STATUSES == frozenset(
-        {ExecutionStatus.succeeded.value, ExecutionStatus.cancelled.value, ExecutionStatus.compensated.value}
-    )
+    assert TERMINAL_STATUSES == frozenset({
+        ExecutionStatus.succeeded.value, ExecutionStatus.cancelled.value,
+        ExecutionStatus.compensated.value, ExecutionStatus.halted.value,
+    })
     for terminal in TERMINAL_STATUSES:
         with pytest.raises(ConflictError):
             assert_transition(terminal, ExecutionStatus.running.value)

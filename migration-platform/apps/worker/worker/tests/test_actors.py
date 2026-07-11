@@ -134,3 +134,14 @@ def test_mock_orchestrator_actor_is_registered() -> None:
 
     assert isinstance(mock_orchestrator_actor, dramatiq.Actor)
     assert hasattr(mock_orchestrator_actor, "send")
+
+
+def test_real_dispatch_actor_is_registered_and_distinct() -> None:
+    from worker.actors.mock_orchestrator import mock_orchestrator_actor
+    from worker.actors.real_dispatch import real_execution_actor
+
+    assert isinstance(real_execution_actor, dramatiq.Actor)
+    assert hasattr(real_execution_actor, "send")
+    # The real-path actor is a separate actor from the mock orchestrator.
+    assert real_execution_actor.actor_name == "real_execution"
+    assert real_execution_actor is not mock_orchestrator_actor

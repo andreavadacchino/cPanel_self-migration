@@ -75,6 +75,7 @@ All'avvio l'API esegue `alembic upgrade head` e poi serve le route.
 | POST   | `/api/executions/{id}/confirm` | conferma forte e rivalida destinazione |
 | POST   | `/api/executions/{id}/run` | esegue soltanto la simulazione |
 | POST   | `/api/executions/{id}/cancel` | annulla un run non terminale |
+| POST   | `/api/executions/{id}/dispatch` | avvia un run reale (disabilitato di default) |
 
 ## Credenziali cPanel
 
@@ -492,8 +493,48 @@ fase fa sì che un drift intervenuto (nuovo snapshot, nuova comparazione, confer
 scaduta, lease sottratto) fermi la fase successiva. La `GateDecision` restituita
 contiene solo id, nomi di categoria e fencing token: nessun segreto viene letto o
 restituito. Interruttore: `REAL_EXECUTION_MODE` (default `disabled`) — con
-l'esecuzione reale disabilitata `authorize` fallisce chiuso. Nessuna route, coda
-o writer è ancora collegato: l'integrazione nel dispatch appartiene ad A3.
+l'esecuzione reale disabilitata `authorize` fallisce chiuso.
+
+#### Dispatch durevole reale (`dispatch`)
+
+`app/modules/executions/dispatch.py` collega il percorso reale
+**API → PostgreSQL → Dramatiq → worker**, riusando (senza duplicarli) la state
+machine/`ExecutionAttempt` (A2), il lease/fencing (A4) e `authorize` (A5).
+Nessun writer reale né chiamata cPanel/SSH/IMAP è introdotto: senza fasi reali il
+worker si ferma nello stato terminale sicuro `halted`.
+
+| Metodo | Path | Descrizione |
+|--------|------|-------------|
+| POST | `/api/executions/{run_id}/dispatch` | avvia un run reale confermato e in coda |
+
+Sequenza dell'endpoint (`dispatch`): con `REAL_EXECUTION_MODE=enabled`, per un
+run reale (non dry-run) in `queued`, acquisisce il lease dell'account, esegue
+`authorize`, crea e **committa** un tentativo `queued` (con lease/fencing token),
+e **solo dopo** invia alla coda **soltanto** `execution_run_id` e `attempt_id` —
+mai token, password, ciphertext, snapshot o payload operativi.
+
+Il worker (`worker_start`, actor `real_execution`, distinto dagli actor mock)
+rilegge tutto da PostgreSQL, riesegue `authorize` (che riverifica lease e
+fencing) e porta legalmente il run `queued → running`; prima di ogni futura fase
+di scrittura rivalida gate e fencing. Un worker con fencing obsoleto o evidenza
+diventata stale non muta nulla.
+
+Recovery e idempotenza:
+
+- **Broker failure dopo il commit**: lo stato è persistito prima dell'invio; il
+  tentativo resta `queued` e riaccodabile. Un nuovo dispatch riusa lo stesso
+  tentativo (aggiornandone il fencing token al lease corrente), mai uno nuovo.
+- **Run `queued` mai ricevuto dal worker**: stessa procedura — ripetere il
+  dispatch riaccoda il medesimo tentativo.
+- **Richieste duplicate / retry**: idempotenti (un solo tentativo attivo per run).
+- **Due enqueue concorrenti per lo stesso account**: il lease per-account (owner
+  legato al run) fa vincere un solo writer; il secondo run è respinto.
+- **Fenced-out / stale**: l'actor solleva senza aggiornare run o tentativo, che
+  restano recuperabili.
+
+Interruttore `REAL_EXECUTION_MODE` (default `disabled`): endpoint e actor
+falliscono chiusi. Nessuna route o UI può modificare il flag. A3 non aggiunge
+migrazioni (usa le tabelle esistenti; `halted` è un nuovo valore di stato).
 
 ## Writer domini mock-only
 

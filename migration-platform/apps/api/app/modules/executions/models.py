@@ -28,6 +28,9 @@ class ExecutionStatus(str, enum.Enum):
     cancelled = "cancelled"
     compensating = "compensating"
     compensated = "compensated"
+    # Explicit, safe stop when a started real run has no executable real phase
+    # (no real writer is implemented yet). Terminal, and never a mutation.
+    halted = "halted"
 
 
 # A state with no outgoing edge is terminal; any transition out of it is illegal.
@@ -47,6 +50,7 @@ LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
             ExecutionStatus.failed.value,
             ExecutionStatus.cancelled.value,
             ExecutionStatus.compensating.value,
+            ExecutionStatus.halted.value,
         }
     ),
     ExecutionStatus.failed.value: frozenset({ExecutionStatus.compensating.value}),
@@ -56,6 +60,7 @@ LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
     ExecutionStatus.succeeded.value: frozenset(),
     ExecutionStatus.cancelled.value: frozenset(),
     ExecutionStatus.compensated.value: frozenset(),
+    ExecutionStatus.halted.value: frozenset(),
 }
 
 TERMINAL_STATUSES: frozenset[str] = frozenset(

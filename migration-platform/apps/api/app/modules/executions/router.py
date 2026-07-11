@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.modules.executions import dispatch as dispatch_service
 from app.modules.executions import service
 from app.modules.executions.schemas import ExecutionConfirm, ExecutionCreate, ExecutionRunRead
 
@@ -36,3 +37,10 @@ def run(run_id: int, db: Session = Depends(get_db)) -> dict:
 @router.post("/api/executions/{run_id}/cancel", response_model=ExecutionRunRead)
 def cancel(run_id: int, db: Session = Depends(get_db)) -> dict:
     return service.cancel(db, run_id)
+
+
+@router.post("/api/executions/{run_id}/dispatch", response_model=None)
+def dispatch(run_id: int, db: Session = Depends(get_db)) -> dict:
+    """Start a confirmed real (non-dry-run) run. Disabled unless
+    ``REAL_EXECUTION_MODE=enabled``; commits state before enqueuing only ids."""
+    return dispatch_service.dispatch(db, run_id)
