@@ -279,3 +279,356 @@ def test_worker_start_rejects_unknown_attempt(real_enabled, db_session) -> None:
     env = _setup(db_session)
     with pytest.raises(ConflictError):
         worker_start(db_session, env.run.id, 987654)
+
+
+# =============================================================================
+# B3b-ii — real domain phase dispatch wiring
+# =============================================================================
+
+from adapters.cpanel.domains import DomainRecord, DomainType  # noqa: E402
+from adapters.cpanel.errors import CpanelError  # noqa: E402
+
+# An addon domain matching STEP, with a docroot inside the /home/u account home.
+ADDON = DomainRecord(name="demo.example.test", type=DomainType.addon, docroot="/home/u/demo")
+
+
+@pytest.fixture
+def domains_enabled(real_enabled):
+    """Both gates on: REAL_EXECUTION_MODE=enabled AND DOMAIN_WRITER_MODE=enabled."""
+    settings.domain_writer_mode = "enabled"
+    try:
+        yield
+    finally:
+        settings.domain_writer_mode = "disabled"
+
+
+class FakeGateway:
+    """Deterministic destination store; proves no source is ever touched.
+
+    ``effect`` shapes the create: ``apply`` (record appears), ``noop`` (silent
+    no-op → verify fails), ``raise_apply``/``raise_noop`` (ambiguous outcome that
+    raises after/without applying)."""
+
+    def __init__(self, *, present=None, effect="apply"):
+        self.present = list(present or [])
+        self.effect = effect
+        self.creates: list[tuple[str, str | None]] = []
+
+    def read_domains(self):
+        return list(self.present)
+
+    def read_single_domain(self, name):
+        return next((r for r in self.present if r.name == name), None)
+
+    def create(self, requested, normalized_name, docroot):
+        self.creates.append((normalized_name, docroot))
+        if self.effect in ("apply", "raise_apply"):
+            self.present.append(DomainRecord(name=normalized_name, type=requested.type, docroot=docroot))
+        if self.effect in ("raise_apply", "raise_noop"):
+            raise CpanelError("ambiguous outcome")
+
+
+def _with_domains_source(db: Session, env: SimpleNamespace) -> None:
+    """Give the source snapshot the rich domains_data envelope for the addon."""
+    env.src.data = {"domains_data": {"addon_domains": [
+        {"domain": "demo.example.test", "documentroot": "/home/u/demo"}]}}
+    db.commit()
+
+
+def _use_gateway(monkeypatch, gateway) -> None:
+    monkeypatch.setattr(dispatch_module, "_build_domain_gateway", lambda db, run: gateway)
+
+
+def _dispatch(db: Session, env: SimpleNamespace, monkeypatch) -> int:
+    monkeypatch.setattr(dispatch_module, "_enqueue", lambda *_: None)
+    return dispatch(db, env.run.id)["attempt_id"]
+
+
+def _readiness(db: Session, migration_id: int) -> WriterReadinessReport:
+    return db.query(WriterReadinessReport).filter_by(migration_id=migration_id).one()
+
+
+# --- 1/2. Double gate ---------------------------------------------------------
+
+def test_invalid_domain_writer_mode_rejected_failclosed() -> None:
+    import pydantic
+    from app.core.config import Settings
+    with pytest.raises(pydantic.ValidationError):
+        Settings(domain_writer_mode="real")
+
+
+def test_domain_flag_off_halts_without_write(real_enabled, db_session, monkeypatch) -> None:
+    # Master on but DOMAIN_WRITER_MODE disabled -> not executable -> safe halt.
+    assert settings.domain_writer_mode == "disabled"
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.halted.value
+    assert gw.creates == []
+
+
+# --- 3. Gateway built from the destination only ------------------------------
+
+def test_gateway_built_only_from_destination(real_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session)
+    env.destination.auth_type = "token_ref"; env.destination.auth_ref = "env://B3BII_TOK"
+    db_session.commit()
+    monkeypatch.setenv("B3BII_TOK", "tok-xyz")
+    gw = dispatch_module._build_domain_gateway(db_session, env.run)
+    creds = gw._client.credentials
+    assert creds.host == env.destination.host and creds.username == env.destination.username
+    # A run pointed at the source endpoint is structurally refused as a target.
+    source_ep = db_session.query(Endpoint).filter_by(migration_id=env.migration.id, role="source").one()
+    env.run.destination_endpoint_id = source_ep.id; db_session.commit()
+    with pytest.raises(ConflictError):
+        dispatch_module._build_domain_gateway(db_session, env.run)
+
+
+def test_real_gateway_routes_reads_and_create_to_client() -> None:
+    """The real gateway builds the B3a create op and routes it to client.write."""
+    from adapters.cpanel.contract import SafeRead
+    from app.modules.executions.domain_rules import RequestedDomain
+
+    class FakeClient:
+        def __init__(self):
+            self.reads: list = []
+            self.written = None
+
+        def read(self, op):
+            self.reads.append(op)
+            if op.function == "single_domain_data":
+                return SimpleNamespace(data={})  # absent -> None
+            return SimpleNamespace(data={"main_domain": "d.test"})
+
+        def write(self, op):
+            self.written = op
+            return SimpleNamespace(data={})
+
+    client = FakeClient()
+    gw = dispatch_module._RealDomainGateway(client)
+    gw.read_domains()
+    gw.read_single_domain("demo.example.test")
+    assert all(isinstance(op, SafeRead) for op in client.reads)  # reads stay safe
+    gw.create(RequestedDomain(name="demo.example.test", type=DomainType.addon, docroot="/home/u/demo"),
+              "demo.example.test", "/home/u/demo")
+    assert client.written is not None and client.written.params["domain"] == "demo.example.test"
+
+
+# --- 4/5/6. Solo-domains outcomes -> succeeded --------------------------------
+
+def test_solo_domain_create_verified_succeeds(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.succeeded.value
+    assert gw.creates == [("demo.example.test", "/home/u/demo")]
+    attempt = db_session.get(ExecutionAttempt, attempt_id)
+    assert attempt.status == ExecutionStatus.succeeded.value
+    assert attempt.checkpoint["completed"] == [STEP["id"]]
+
+
+def test_already_present_succeeds_without_write(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    gw = FakeGateway(present=[ADDON], effect="noop"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.succeeded.value
+    assert gw.creates == []
+
+
+def test_ambiguous_create_resolved_by_fresh_read_single_create(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    gw = FakeGateway(effect="raise_apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.succeeded.value
+    assert len(gw.creates) == 1  # never auto-retried
+
+
+# --- 7. Hard failures -> failed ----------------------------------------------
+
+def test_blocked_step_fails(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    conflicting = DomainRecord(name="demo.example.test", type=DomainType.alias, docroot=None)
+    gw = FakeGateway(present=[conflicting]); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.failed.value
+    assert gw.creates == []
+    assert "existing_domain_differs" in (run.error or "")
+
+
+def test_post_write_mismatch_fails(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    gw = FakeGateway(effect="noop"); _use_gateway(monkeypatch, gw)  # create silently no-ops
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.failed.value
+    assert gw.creates == [("demo.example.test", "/home/u/demo")]
+    assert "create_not_verified" in (run.error or "")
+
+
+# --- 8/11. Manual/unsupported and only-unimplemented -> halted (no false success)
+
+def test_manual_domain_step_halts_not_succeeds(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session)  # no domains_data -> unresolved -> manual/pending
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.halted.value
+    assert gw.creates == []
+    assert db_session.get(ExecutionAttempt, attempt_id).checkpoint["manual_pending"] is True
+
+
+def test_only_unimplemented_category_halts(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session)
+    env.run.preview = [{"step_id": "email_forwarders:x", "category": "email_forwarders", "target": "destination"}]
+    _readiness(db_session, env.migration.id).categories = [
+        {"category": "email_forwarders", "status": "eligible_for_real_design"}]
+    db_session.commit()
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.halted.value
+    assert gw.creates == []
+
+
+def test_mixed_run_halts_partial_not_succeeded(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    env.run.preview = [
+        {"step_id": STEP["id"], "category": "domains", "target": "destination"},
+        {"step_id": "email_forwarders:x", "category": "email_forwarders", "target": "destination"}]
+    _readiness(db_session, env.migration.id).categories = [
+        {"category": "domains", "status": "eligible_for_real_design"},
+        {"category": "email_forwarders", "status": "eligible_for_real_design"}]
+    db_session.commit()
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.halted.value  # never succeeded
+    assert gw.creates == [("demo.example.test", "/home/u/demo")]  # domain WAS written
+    attempt = db_session.get(ExecutionAttempt, attempt_id)
+    assert attempt.checkpoint["pending_categories"] == ["email_forwarders"]
+    assert STEP["id"] in attempt.checkpoint["completed"]
+
+
+# --- 12/13/14. Gate/lease/fencing drift stops the write ----------------------
+
+def test_stale_fencing_before_phase_blocks(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    future = datetime.now(timezone.utc) + timedelta(seconds=settings.execution_lease_ttl_seconds + 60)
+    lease_service.acquire(db_session, destination_endpoint_id=env.destination.id, owner="intruder", now=future)
+    with pytest.raises(ConflictError):
+        worker_start(db_session, env.run.id, attempt_id)
+    assert gw.creates == []
+    db_session.refresh(env.run)
+    assert env.run.status == ExecutionStatus.queued.value
+
+
+def test_drift_in_before_write_blocks_create(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    future = datetime.now(timezone.utc) + timedelta(seconds=settings.execution_lease_ttl_seconds + 60)
+
+    class DriftingGateway(FakeGateway):
+        def read_domains(self):
+            # A newer holder takes over the lease just before the write.
+            lease_service.acquire(db_session, destination_endpoint_id=env.destination.id,
+                                  owner="intruder", now=future)
+            return []
+
+    gw = DriftingGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    with pytest.raises(ConflictError):
+        worker_start(db_session, env.run.id, attempt_id)
+    assert gw.creates == []  # before_write refused; create never reached
+    db_session.refresh(env.run)
+    assert env.run.status == ExecutionStatus.running.value  # no terminal success
+
+
+def test_completed_write_not_stranded_by_unrelated_gate_drift(domains_enabled, db_session, monkeypatch) -> None:
+    """A verified write must still reach a terminal state when a NON-fencing gate
+    condition drifts after the mutation (e.g. the strong confirmation ages out
+    during a long real phase). The post-write re-check is fencing-scoped, so the
+    completed write is never stranded in a non-terminal ``running`` run."""
+    env = _setup(db_session); _with_domains_source(db_session, env)
+
+    class AgingGateway(FakeGateway):
+        def create(self, requested, normalized_name, docroot):
+            super().create(requested, normalized_name, docroot)
+            # The real phase took long enough that the strong confirmation expired.
+            env.run.confirmed_at = datetime.now(timezone.utc) - timedelta(
+                seconds=settings.real_confirmation_ttl_seconds + 60)
+            db_session.commit()
+
+    gw = AgingGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.succeeded.value  # terminal, not stranded
+    assert gw.creates == [("demo.example.test", "/home/u/demo")]
+
+
+def test_fencing_lost_after_write_no_success(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    future = datetime.now(timezone.utc) + timedelta(seconds=settings.execution_lease_ttl_seconds + 60)
+
+    class TakeoverOnCreate(FakeGateway):
+        def create(self, requested, normalized_name, docroot):
+            super().create(requested, normalized_name, docroot)
+            lease_service.acquire(db_session, destination_endpoint_id=env.destination.id,
+                                  owner="intruder", now=future)
+
+    gw = TakeoverOnCreate(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    with pytest.raises(ConflictError):
+        worker_start(db_session, env.run.id, attempt_id)
+    assert len(gw.creates) == 1  # the write did happen
+    db_session.refresh(env.run)
+    attempt = db_session.get(ExecutionAttempt, attempt_id)
+    assert env.run.status == ExecutionStatus.running.value  # success not persisted
+    assert attempt.status == ExecutionStatus.running.value
+
+
+# --- 16/17. Retry idempotency and concurrent cancellation --------------------
+
+def test_retry_after_partial_does_not_duplicate_create(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    # A prior attempt already created the domain; the fresh read must see it.
+    gw = FakeGateway(present=[ADDON], effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    assert run.status == ExecutionStatus.succeeded.value
+    assert gw.creates == []  # already_present -> no duplicate create
+
+
+def test_concurrent_cancellation_blocks_worker(domains_enabled, db_session, monkeypatch) -> None:
+    from app.modules.executions import service
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    service.cancel(db_session, env.run.id)
+    with pytest.raises(ConflictError):
+        worker_start(db_session, env.run.id, attempt_id)
+    assert gw.creates == []
+    db_session.refresh(env.run)
+    assert env.run.status == ExecutionStatus.cancelled.value
+
+
+# --- 18. Checkpoint/compensation redacted, no secret -------------------------
+
+def test_checkpoint_and_compensation_are_redacted(domains_enabled, db_session, monkeypatch) -> None:
+    env = _setup(db_session); _with_domains_source(db_session, env)
+    env.run.encrypted_secrets = {STEP["id"]: "top-secret-token"}; db_session.commit()
+    gw = FakeGateway(effect="apply"); _use_gateway(monkeypatch, gw)
+    attempt_id = _dispatch(db_session, env, monkeypatch)
+    run = worker_start(db_session, env.run.id, attempt_id)
+    attempt = db_session.get(ExecutionAttempt, attempt_id)
+    assert "top-secret-token" not in (repr(attempt.checkpoint) + repr(attempt.compensation))
+    comp = attempt.compensation["domains"][0]
+    assert comp["reverse"] == "manual_removal_only"
+    assert set(comp) >= {"action", "domain", "type", "docroot"}
+    for event in run.events:
+        assert "top-secret-token" not in repr(event.result or {})

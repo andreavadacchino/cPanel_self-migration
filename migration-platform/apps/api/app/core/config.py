@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Recognised values of ``DOMAIN_WRITER_MODE``. ``disabled`` (default) does
+# nothing, ``mock`` drives the simulated writer path, and ``enabled`` is the
+# real destination writer's own switch (still inert without the master
+# ``REAL_EXECUTION_MODE`` gate). Any other value is a misconfiguration of a
+# write-enabling safety flag and is rejected fail-closed at load time.
+_DOMAIN_WRITER_MODES = frozenset({"disabled", "mock", "enabled"})
 
 
 class Settings(BaseSettings):
@@ -48,9 +56,29 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
+    @field_validator("domain_writer_mode")
+    @classmethod
+    def _validate_domain_writer_mode(cls, value: str) -> str:
+        # Fail closed: refuse to boot with an unknown value for a flag that can
+        # authorise a real destination mutation, rather than silently treating a
+        # typo (e.g. "enabledd", "real") as disabled and hiding the misconfig.
+        if value not in _DOMAIN_WRITER_MODES:
+            raise ValueError(
+                f"DOMAIN_WRITER_MODE non valido: {value!r} "
+                f"(ammessi: {', '.join(sorted(_DOMAIN_WRITER_MODES))})"
+            )
+        return value
+
     @property
     def real_execution_enabled(self) -> bool:
         return self.real_execution_mode == "enabled"
+
+    @property
+    def domain_real_writer_enabled(self) -> bool:
+        # Double gate: a real destination domain create is reachable only when
+        # BOTH the master real switch and the domain-writer switch are enabled.
+        # Exact-match on each value keeps every other combination fail-closed.
+        return self.real_execution_enabled and self.domain_writer_mode == "enabled"
 
 
 @lru_cache

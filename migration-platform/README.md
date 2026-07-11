@@ -614,6 +614,47 @@ Interruttore `REAL_EXECUTION_MODE` (default `disabled`): endpoint e actor
 falliscono chiusi. Nessuna route o UI può modificare il flag. A3 non aggiunge
 migrazioni (usa le tabelle esistenti; `halted` è un nuovo valore di stato).
 
+### Fase domini reale nel worker (B3b-ii)
+
+Sotto il **doppio gate** `REAL_EXECUTION_MODE=enabled` **e**
+`DOMAIN_WRITER_MODE=enabled` (proprietà `settings.domain_real_writer_enabled`,
+entrambi `disabled` per default) `worker_start` collega il motore additivo di
+B3b-i (`real_domain_writer.py`) al percorso reale. Con il gate spento la categoria
+`domains` non è eseguibile e il run si ferma in `halted` senza mutazioni.
+
+- **Gateway solo-destinazione**: `_build_domain_gateway` costruisce il client
+  cPanel **esclusivamente** dall'endpoint destinazione (`allow_destination_writes=True`);
+  nessun endpoint/credenziale/client sorgente raggiunge il motore, e un endpoint
+  non-`destination` è rifiutato.
+- **Rivalidazione a tre stadi**: `authorize` (lease + fencing + evidenza fresca)
+  prima della fase, il hook `before_write` **immediatamente prima di ogni create**,
+  e `authorize` + `finalize_attempt` (che riverifica il fencing) prima di persistere
+  esito/checkpoint/compensation. Un worker fenced-out dopo la write non registra
+  successo.
+- **Evidenza sorgente fail-closed**: il motore richiede record ricchi (tipo +
+  docroot), cioè un envelope `DomainInfo::domains_data`. L'inventario attuale
+  raccoglie solo la lista nomi di `list_domains`, quindi di norma l'envelope è
+  assente: ogni passo diventa **manuale/pending** e il run si ferma in `halted`,
+  mai una write fabbricata (arricchire l'inventario è lavoro separato).
+- **Stato terminale**: solo domini idonei tutti verificati (incluso
+  `already_present` senza write) → `succeeded`; passo `blocked`/create non
+  verificata → `failed`; passo manuale o categoria non implementata presente nel
+  run → `halted` con `pending_categories`/`manual_pending` nel checkpoint — **mai**
+  `succeeded` mentre restano categorie selezionate non eseguite.
+
+La create è **non idempotente e mai ri-tentata**: un esito ambiguo è risolto da
+una rilettura fresca e un retry che rilegge il dominio presente lo classifica
+`already_present` senza duplicarlo. Checkpoint e compensation contengono solo
+descrittori redatti (`reverse: manual_removal_only`); nessun segreto entra in
+eventi, coda, risposte o eccezioni. B3b-ii non aggiunge migrazioni né stati
+(riusa `succeeded`/`failed`/`halted`). Esito e checkpoint sono persistiti da un
+unico commit di `finalize_attempt` (run e tentativo insieme, atomico). Limitazione
+residua ereditata da A3: un crash del worker *durante* la fase (dopo il commit
+`running`) lascia un tentativo `running` non riaccodabile; il recupero richiede
+una reconciliation esterna (fuori scope), ma la rilettura fresca del motore
+garantisce che un tentativo ripreso classifichi il dominio già creato come
+`already_present` senza duplicarlo.
+
 ## Writer domini mock-only
 
 `worker.actors.domain_writer.domain_writer_actor` prepara il flusso asincrono
@@ -625,10 +666,12 @@ del primo writer, ma il servizio accetta esclusivamente:
 - passi della categoria `domains`.
 
 La configurazione Docker e `.env.example` usano
-`DOMAIN_WRITER_MODE=disabled`. Il valore `real` non è implementato e viene
-rifiutato; non esiste alcuna route o controllo UI che accodi il writer. Questa
-separazione impedisce di trasformare accidentalmente un dry-run confermato in
-una scrittura.
+`DOMAIN_WRITER_MODE=disabled`. I soli valori ammessi sono `disabled`, `mock`
+(questo writer simulato) ed `enabled` (writer domini reale di B3b-ii, inerte
+senza `REAL_EXECUTION_MODE=enabled`); qualunque altro valore — incluso il
+ritirato `real` — è rifiutato **fail-closed al load** (l'app non parte). Non
+esiste alcuna route o controllo UI che accodi il writer. Questa separazione
+impedisce di trasformare accidentalmente un dry-run confermato in una scrittura.
 
 Il writer mock esegue un controllo di presenza prima della creazione, non
 cancella e non sovrascrive domini, conserva chiamata prevista, risultato e
@@ -910,8 +953,12 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_mock_orchestr
 
 ## Configurazione e stato dei writer
 
-Tutti i writer sono mock-only, privi di route/UI di dispatch e disabilitati per
-default. Il valore `real` non è implementato e viene rifiutato dal codice.
+Tutti i writer sono disabilitati per default e privi di route/UI di dispatch. Il
+valore `real` non è implementato e viene rifiutato dal codice. **Eccezione
+domini**: il writer reale è raggiungibile dal worker sotto il doppio gate
+`REAL_EXECUTION_MODE=enabled` + `DOMAIN_WRITER_MODE=enabled` (vedi «Fase domini
+reale nel worker (B3b-ii)»); per `DOMAIN_WRITER_MODE` sono ammessi solo
+`disabled`/`mock`/`enabled`, ogni altro valore è rifiutato fail-closed al load.
 
 | Writer | Variabile | Stato predefinito |
 |--------|-----------|-------------------|
