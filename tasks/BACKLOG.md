@@ -32,7 +32,9 @@
 | `[x]` | `B1` | [Harden cPanel adapter](B1-harden-cpanel-adapter.md) | High | L | A5 |
 | `[/]` | `B2` | [Implement SSH adapter](B2-implement-ssh-adapter.md) (split → B2a/B2b) | High | L | A5 |
 | `[x]` | `B2a` | [SSH contract, host-key security, command execution](B2a-ssh-command-execution.md) | High | M | A5 |
-| `[ ]` | `B2b` | [SSH streaming, cancellation, backpressure](B2b-ssh-streaming-backpressure.md) | High | M | B2a |
+| `[/]` | `B2b` | [SSH streaming, cancellation, backpressure](B2b-ssh-streaming-backpressure.md) (split → B2b-i/B2b-ii) | High | M | B2a |
+| `[x]` | `B2b-i` | [SSH stream contracts, pump, fake](B2b-i-ssh-stream-pump.md) | High | M | B2a |
+| `[ ]` | `B2b-ii` | [SSH stream session wiring and paramiko lifecycle](B2b-ii-ssh-stream-sessions.md) | High | M | B2b-i |
 | `[x]` | `B3a` | [Domain adapter and safety rules](B3a-domain-adapter-rules.md) | High | M | B1 |
 | `[x]` | `B3b-i` | [Real domain write phase engine](B3b-i-domain-phase-engine.md) | High | M | B3a |
 | `[x]` | `B3b-ii` | [Domain phase dispatch wiring](B3b-ii-domain-phase-dispatch.md) | High | M | B3b-i |
@@ -60,13 +62,26 @@
 > `B2b`; i writer basati su comandi (`B5`) possono partire da `B2a`. L'ID `B2` è ritirato per
 > l'implementazione e non riutilizzato.
 
+> `B2b` (SSH streaming, cancellation, backpressure), misurato a **~1080 righe su ~9 file**
+> (streaming.py contratti+pump ~270, wiring `client.py` ~70, streaming paramiko ~70, fake
+> source/sink ~150, ~460 di test, ~50 doc), supera i guardrail 8 file / 500 righe. Come previsto
+> dal task, è stato suddiviso in `B2b-i` (contratti di streaming tipizzati, motore `pump()`
+> backpressured/bounded/cancellabile con risultato parziale tipizzato, fake source/sink
+> deterministico e test del pump) e `B2b-ii` (wiring dei ruoli sulle sessioni —
+> `SourceReadSession.start_stdout` / `DestinationWriteSession.start_stdin` autorizzato — backend
+> paramiko di streaming, test strutturali e integrazione, doc). B2b-i è il minimo boundary
+> testabile del motore di streaming (il pump opera su protocolli `ByteSource`/`StdinSink`, testato
+> contro il fake senza sessioni né rete); B2b-ii collega i ruoli e il trasporto reale. Le
+> dipendenze di trasferimento contenuti (`C1`/`C2`/`C3`) puntano a `B2b-ii` (streaming end-to-end).
+> L'ID `B2b` è ritirato per l'implementazione.
+
 > `B3c` (Rich domain inventory contract), misurato a ~580 righe / 8–9 file, è stato suddiviso in `B3c-i` (contratto domini nel collector: produce e persiste l'envelope ricco `domains_data` fail-closed) e `B3c-ii` (integrazione readiness/gate + prova end-to-end che B3b-ii consuma i record ricchi); vedi [B3c-rich-domain-inventory.md](B3c-rich-domain-inventory.md). L'ID `B3c` è ritirato e non riutilizzato per implementazione. **B3c-ii chiude la limitazione residua (a) di B3b-ii** (inventario privo dell'envelope ricco → passi dominio manual/pending); la limitazione crash/recovery di B3b-ii resta assegnata a **C4**. Le categorie downstream (`B4`/`B5`/`B6`/`B7`/`C1`) dipendono ora da `B3c-ii`.
 
 ### Wave C — Content transfer
 
-| `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2b, B3c-ii |
-| `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2b, B6 |
-| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b, B4 |
+| `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2b-ii, B3c-ii |
+| `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2b-ii, B6 |
+| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4 |
 | `[ ]` | `C4` | [Transfer checkpoint resume](C4-transfer-checkpoint-resume.md) | High | L | C1, C2, C3 |
 
 ### Wave D — Verification and recovery
@@ -90,7 +105,7 @@ graph LR
   A2-->A3
   A2-->A4-->A5
   A5-->B1
-  A5-->B2a-->B2b
+  A5-->B2a-->B2b-i-->B2b-ii
   B1-->B3a-->B3b-i-->B3b-ii-->B3c-i-->B3c-ii
   B1-->B4
   B3c-ii-->B4
@@ -101,11 +116,11 @@ graph LR
   B3c-ii-->B6
   B1-->B7
   B3c-ii-->B7
-  B2b-->C1
+  B2b-ii-->C1
   B3c-ii-->C1
-  B2b-->C2
+  B2b-ii-->C2
   B6-->C2
-  B2b-->C3
+  B2b-ii-->C3
   B4-->C3
   C1-->C4
   C2-->C4

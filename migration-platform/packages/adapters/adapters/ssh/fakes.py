@@ -17,6 +17,19 @@ from adapters.ssh.errors import SshError
 from adapters.ssh.hostkeys import HostKeyRecord
 
 
+class FakeClock:
+    """A deterministic monotonic clock the fakes advance on scripted steps."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self._t = start
+
+    def now(self) -> float:
+        return self._t
+
+    def advance(self, seconds: float) -> None:
+        self._t += seconds
+
+
 def make_host_key(host: str, port: int = 22, *, seed: str = "primary") -> HostKeyRecord:
     """A deterministic, valid host-key record (base64 decodes for fingerprinting)."""
     blob = base64.b64encode(f"fake-ssh-key::{seed}".encode()).decode("ascii")
@@ -154,11 +167,186 @@ class FakeBackend:
         return self._connection
 
 
+# -- streaming fakes (B2b-i) ----------------------------------------------
+
+
+@dataclass
+class SourceStep:
+    """One scripted read: bytes to return, or an error, plus optional side effects."""
+
+    chunk: bytes = b""
+    error: SshError | None = None
+    advance: float = 0.0
+    on_read: Callable[[], None] | None = None
+
+
+class FakeByteSource:
+    """A deterministic byte producer (never receives stdin).
+
+    A scripted ``chunk`` longer than the requested ``max_bytes`` is delivered in
+    ``max_bytes`` pieces, so a single large blob exercises chunking and lets a test
+    assert the pump's one-chunk high-water mark.
+    """
+
+    def __init__(
+        self,
+        steps: list[SourceStep] | None = None,
+        *,
+        clock: FakeClock | None = None,
+        exit_status: int | None = 0,
+        exit_signal: str | None = None,
+        stderr: bytes = b"",
+        stderr_truncated: bool = False,
+        exit_ready: bool = True,
+        poll_advance: float = 0.0,
+        on_poll: Callable[[], None] | None = None,
+    ) -> None:
+        self._steps = list(steps or [])
+        self._clock = clock
+        self._exit_status = exit_status
+        self._exit_signal = exit_signal
+        self._stderr = stderr
+        self._stderr_truncated = stderr_truncated
+        self._exit_ready = exit_ready
+        self._poll_advance = poll_advance
+        self._on_poll = on_poll
+        self.read_calls = 0
+        self.close_count = 0
+
+    def read_chunk(self, max_bytes: int, *, timeout: float | None) -> bytes:
+        self.read_calls += 1
+        if not self._steps:
+            return b""  # EOF
+        step = self._steps[0]
+        if step.on_read is not None:
+            step.on_read()
+        if self._clock is not None and step.advance:
+            self._clock.advance(step.advance)
+        if step.error is not None:
+            self._steps.pop(0)
+            raise step.error
+        data = step.chunk[:max_bytes]
+        remainder = step.chunk[max_bytes:]
+        if remainder:
+            self._steps[0] = SourceStep(chunk=remainder)  # keep serving the blob
+        else:
+            self._steps.pop(0)
+        return data
+
+    def exited(self) -> bool:
+        if not self._exit_ready:
+            if self._on_poll is not None:
+                self._on_poll()
+            if self._clock is not None and self._poll_advance:
+                self._clock.advance(self._poll_advance)
+            return False
+        return True
+
+    def stderr(self) -> tuple[bytes, bool]:
+        return self._stderr, self._stderr_truncated
+
+    def exit_status(self) -> int | None:
+        return self._exit_status
+
+    def exit_signal(self) -> str | None:
+        return self._exit_signal
+
+    def close(self) -> None:
+        self.close_count += 1
+
+
+class FakeStdinSink:
+    """A deterministic stdin receiver with slow-consumer / partial-write / error hooks."""
+
+    def __init__(
+        self,
+        *,
+        clock: FakeClock | None = None,
+        accept_per_write: int | None = None,
+        write_error: SshError | None = None,
+        error_after_bytes: int = 0,
+        close_stdin_error: SshError | None = None,
+        advance_per_write: float = 0.0,
+        on_write: Callable[[], None] | None = None,
+        exit_status: int | None = 0,
+        exit_signal: str | None = None,
+        stderr: bytes = b"",
+        stderr_truncated: bool = False,
+        exit_ready: bool = True,
+        poll_advance: float = 0.0,
+        on_poll: Callable[[], None] | None = None,
+    ) -> None:
+        self._clock = clock
+        self._accept = accept_per_write
+        self._write_error = write_error
+        self._error_after = error_after_bytes
+        self._close_stdin_error = close_stdin_error
+        self._advance = advance_per_write
+        self._on_write = on_write
+        self._exit_status = exit_status
+        self._exit_signal = exit_signal
+        self._stderr = stderr
+        self._stderr_truncated = stderr_truncated
+        self._exit_ready = exit_ready
+        self._poll_advance = poll_advance
+        self._on_poll = on_poll
+        # Test-only accumulation to assert no byte is lost; the pump itself never
+        # buffers the whole payload (it holds one chunk).
+        self.received = bytearray()
+        self.max_write_chunk = 0
+        self.write_calls = 0
+        self.stdin_closed = False
+        self.close_count = 0
+
+    def write_some(self, data: bytes, *, timeout: float | None) -> int:
+        self.write_calls += 1
+        self.max_write_chunk = max(self.max_write_chunk, len(data))
+        if self._on_write is not None:
+            self._on_write()
+        if self._clock is not None and self._advance:
+            self._clock.advance(self._advance)
+        if self._write_error is not None and len(self.received) >= self._error_after:
+            raise self._write_error
+        n = len(data) if self._accept is None else min(self._accept, len(data))
+        self.received.extend(data[:n])
+        return n
+
+    def close_stdin(self) -> None:
+        if self._close_stdin_error is not None:
+            raise self._close_stdin_error
+        self.stdin_closed = True
+
+    def exited(self) -> bool:
+        if not self._exit_ready:
+            if self._on_poll is not None:
+                self._on_poll()
+            if self._clock is not None and self._poll_advance:
+                self._clock.advance(self._poll_advance)
+            return False
+        return True
+
+    def stderr(self) -> tuple[bytes, bool]:
+        return self._stderr, self._stderr_truncated
+
+    def exit_status(self) -> int | None:
+        return self._exit_status
+
+    def exit_signal(self) -> str | None:
+        return self._exit_signal
+
+    def close(self) -> None:
+        self.close_count += 1
+
+
 __all__ = [
     "make_host_key",
+    "FakeClock",
     "FakeCommandScript",
     "FakeExecution",
     "FakeConnection",
     "FakeHandshake",
     "FakeBackend",
+    "SourceStep",
+    "FakeByteSource",
+    "FakeStdinSink",
 ]

@@ -224,12 +224,33 @@ poter leggere e verificare la host key **prima** dell'auth; tutta la logica di
 policy/sicurezza vive in `client.py`, testato al 99% con un **fake backend
 deterministico** (`fakes.py`) — nessun test contatta un server reale.
 
-Test mirati (49, branch coverage):
+Test mirati (branch coverage):
 
 ```bash
 cd packages/adapters && PYTHONPATH=. python -m pytest adapters/ssh/tests -q \
   --cov=adapters/ssh --cov-report=term-missing --cov-branch
 ```
+
+### Motore di streaming source→destination (B2b-i)
+
+`adapters/ssh/streaming.py` aggiunge il motore `pump(source, sink, options, …)` che
+copia byte da un `ByteSource` (la sorgente **produce solo byte**) verso uno
+`StdinSink` (stdin di destinazione) con **backpressure reale**: scrive un chunk per
+intero prima di leggere il successivo, così un consumer lento arresta naturalmente
+il producer. Tiene in memoria **un solo chunk** (`chunk_size`, high-water mark),
+quindi la memoria massima è indipendente dalla dimensione totale — nessuna coda non
+limitata. Gestisce short write (completa il chunk senza perdita), chiusura stdin a
+EOF, stderr bounded/troncato di entrambi i lati, exit code/signal di entrambi i
+lati, conteggio byte e una progress callback **rate-limited e senza payload**. La
+cancellazione cooperativa è verificata prima dello start, durante read, durante una
+write bloccata e nell'attesa exit; timeout distinti `start`/`idle`/`total`/`close`
+su clock monotòno iniettabile. Un timeout/cancel/interruzione restituisce un
+`StreamResult` **parziale tipizzato** con byte trasferiti e lato del guasto; un
+flusso iniziato **non viene mai ritentato**. Entrambi i canali sono chiusi
+esattamente una volta (destinazione drenata anche se la sorgente fallisce). Dati
+trasferiti e segreti non compaiono mai in log/errori/audit/progress. Il wiring dei
+ruoli sulle sessioni (`start_stdout`/`start_stdin` autorizzato) e il backend
+paramiko di streaming sono in **B2b-ii**.
 
 ### Stato di implementazione
 
@@ -244,7 +265,8 @@ cd packages/adapters && PYTHONPATH=. python -m pytest adapters/ssh/tests -q \
 | Checklist manuale | Generata e persistita dalla comparazione |
 | Esecutore dry-run | Funzionante, nessuna scrittura reale |
 | Readiness writer reali | Report persistente read-only, nessun dispatch |
-| Boundary SSH (B2a) | Esecuzione comandi verificata host-key; streaming in B2b; non collegato al dispatch |
+| Boundary SSH (B2a) | Esecuzione comandi verificata host-key; non collegato al dispatch |
+| Motore streaming SSH (B2b-i) | `pump()` backpressured/bounded/cancellabile; wiring sessioni+paramiko in B2b-ii |
 | Migrazione dati/configurazioni | Writer reali non abilitati |
 
 ## Copertura del preflight

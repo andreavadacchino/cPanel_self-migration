@@ -49,6 +49,17 @@ from adapters.ssh.hostkeys import (
     HostKeyRecord,
     KnownHostsStore,
 )
+from adapters.ssh.streaming import (
+    ByteSource,
+    StdinSink,
+    StreamAudit,
+    StreamFailureSide,
+    StreamOptions,
+    StreamOutcome,
+    StreamProgress,
+    StreamResult,
+    pump,
+)
 
 __all__ = [
     # client
@@ -73,6 +84,16 @@ __all__ = [
     "HostKeyPolicy",
     "HostKeyRecord",
     "KnownHostsStore",
+    # streaming
+    "ByteSource",
+    "StdinSink",
+    "StreamAudit",
+    "StreamFailureSide",
+    "StreamOptions",
+    "StreamOutcome",
+    "StreamProgress",
+    "StreamResult",
+    "pump",
     # errors
     "SshAuthError",
     "SshCancelledError",

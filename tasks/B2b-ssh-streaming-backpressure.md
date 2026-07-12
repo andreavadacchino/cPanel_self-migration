@@ -1,13 +1,31 @@
-# Task B2b: SSH streaming, cancellation, backpressure
+# Task B2b: SSH streaming, cancellation, backpressure — SPLIT (retired)
 
 | Field | Value |
 |---|---|
-| **ID** | `B2b` |
-| **Status** | `[ ]` |
+| **ID** | `B2b` (ritirato) |
+| **Status** | `[/]` split — non completare con questo ID |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B2a |
-| **Branch** | `feat/b2b-ssh-streaming-backpressure` |
+| **Branch** | `feat/b2b-ssh-streaming-backpressure` (non usare) |
+
+> **Split.** L'implementazione completa di B2b è stata misurata a **~1080 righe su
+> ~9 file** (streaming.py contratti+pump ~270, wiring `client.py` ~70, streaming
+> paramiko ~70, fake source/sink ~150, ~460 di test, ~50 doc), oltre i guardrail 8
+> file / 500 righe. Come previsto da questo stesso task ("misura prima di
+> implementare; se necessario proponi un ulteriore split"), è stata suddivisa in:
+>
+> - [`B2b-i` — SSH stream contracts, pump, fake](B2b-i-ssh-stream-pump.md) (dep: B2a)
+> - [`B2b-ii` — SSH stream session wiring and paramiko lifecycle](B2b-ii-ssh-stream-sessions.md) (dep: B2b-i)
+>
+> B2b-i è il minimo boundary testabile del motore di streaming: il `pump()` opera
+> su protocolli `ByteSource`/`StdinSink` ed è verificato contro un fake
+> deterministico, senza sessioni né rete. B2b-ii collega i ruoli sulle sessioni
+> (`start_stdout`/`start_stdin` autorizzato) e il trasporto paramiko reale. Le
+> dipendenze di trasferimento contenuti (C1/C2/C3) puntano a `B2b-ii`. L'ID `B2b` è
+> ritirato e non riutilizzato. Il testo storico sottostante resta come riferimento.
+
+---
 
 **Origin:** second half of the split of the original `B2` (see
 [B2-implement-ssh-adapter.md](B2-implement-ssh-adapter.md)). B2b builds on the
