@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     mysql_user_writer_mode: str = "disabled"
     forwarder_writer_mode: str = "disabled"
     default_address_writer_mode: str = "disabled"
+    routing_writer_mode: str = "disabled"
     cron_writer_mode: str = "disabled"
     ftp_writer_mode: str = "disabled"
     mailing_list_writer_mode: str = "disabled"
@@ -94,6 +95,18 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("routing_writer_mode")
+    @classmethod
+    def _validate_routing_writer_mode(cls, value: str) -> str:
+        # Fail-closed (B4c-i): an unknown value for a flag that can authorise a real
+        # mail-route overwrite is rejected at load time.
+        if value not in _DOMAIN_WRITER_MODES:
+            raise ValueError(
+                f"ROUTING_WRITER_MODE non valido: {value!r} "
+                f"(ammessi: {', '.join(sorted(_DOMAIN_WRITER_MODES))})"
+            )
+        return value
+
     @property
     def real_execution_enabled(self) -> bool:
         return self.real_execution_mode == "enabled"
@@ -118,6 +131,13 @@ class Settings(BaseSettings):
         # "enabled". The B4b-i rules perform no write; this gate is the seam the
         # B4b-ii engine (and B4e dispatch) require before any real catch-all set.
         return self.real_execution_enabled and self.default_address_writer_mode == "enabled"
+
+    @property
+    def routing_real_writer_enabled(self) -> bool:
+        # Double gate for the compensable routing writer (B4c): reachable only when
+        # both the master real switch and ROUTING_WRITER_MODE are "enabled". The B4c-i
+        # rules perform no write; the B4c-ii engine (and B4e) require this gate.
+        return self.real_execution_enabled and self.routing_writer_mode == "enabled"
 
 
 @lru_cache

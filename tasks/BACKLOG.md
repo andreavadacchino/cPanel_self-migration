@@ -46,9 +46,11 @@
 | `[/]` | `B4b` | [Default address / catch-all writer](B4b-default-address-writer.md) (split → B4b-i/B4b-ii) | High | M | B4a |
 | `[x]` | `B4b-i` | [Default-address evidence contract and rules](B4b-i-default-address-contract.md) | High | M | B4a |
 | `[x]` | `B4b-ii` | [Compensable default-address writer engine](B4b-ii-default-address-writer-engine.md) | High | M | B4b-i |
-| `[ ]` | `B4c` | [Email routing writer](B4c-email-routing-writer.md) | High | M | B4a |
+| `[/]` | `B4c` | [Email routing writer](B4c-email-routing-writer.md) (split → B4c-i/B4c-ii) | High | M | B4a |
+| `[x]` | `B4c-i` | [Routing evidence contract and rules](B4c-i-routing-contract.md) | High | M | B4a |
+| `[ ]` | `B4c-ii` | [Compensable routing writer engine](B4c-ii-routing-writer-engine.md) | High | M | B4c-i |
 | `[ ]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) | High | M | B4a |
-| `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c, B4d |
+| `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c-ii, B4d |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
@@ -124,6 +126,29 @@
 > `B4e` dipende ora da `B4b-ii` (non più `B4b`); `B4b-i → B4b-ii`. L'ID `B4b` è ritirato per
 > l'implementazione e non riutilizzato.
 
+> `B4c` (Email routing writer), misurato a **~895 righe su 7 file** (`routing_rules.py` ~200,
+> `routing_writer.py` ~150, contratto collector ~45, `config.py` ~20, ~450 test, ~30 doc), supera
+> ~1,8× il budget di 500 righe/PR. Nulla è riutilizzabile (nessun collector/regole/mock/plan/comparison
+> per `email_routing`); il seam `backup_of`/`persist_backup` di B4b-ii è riusato da B4c-ii, quindi
+> `email_write.py` non viene toccato. Lettura `Email::list_mxs` (UAPI), write `Email::setmxcheck` (API2,
+> overwrite). Semantica vincolante (confermata): nessuno stato dest è "fresh" per default; la policy di
+> overwrite è **vuota per default** e un `set` è raggiungibile solo con policy esplicita, approvata ed
+> **evidence-bound** che autorizza esattamente la transizione osservata (dominio + stato dest live +
+> stato source richiesto); `secondary` sempre manuale; `detected`/MX/DNS mai decisionali. Su conferma
+> dell'utente suddiviso al confine **evidence/rules → writer engine**:
+>
+> - [`B4c-i` — Routing evidence contract and rules](B4c-i-routing-contract.md) (dep: B4a): op tipizzate
+>   SafeRead `list_mxs` + DestinationWrite `setmxcheck` (irraggiungibili), contratto
+>   `email_routing_contract` versionato, classificazione `local`/`remote`/`auto`/`secondary`/`unknown`,
+>   policy model evidence-bound + validazione, matrice decisionale pura, flag `ROUTING_WRITER_MODE`
+>   disabled-by-default. Nessun engine/dispatch/write.
+> - [`B4c-ii` — Compensable routing writer engine](B4c-ii-routing-writer-engine.md) (dep: B4c-i):
+>   `routing_writer.py` che riusa `execute_email_phase` e il seam B4b-ii esistente (nessuna modifica a
+>   `email_write.py`). Non cablato nel dispatch (resta a B4e).
+>
+> `B4e` dipende ora da `B4c-ii` (non più `B4c`); `B4c-i → B4c-ii`. L'ID `B4c` è ritirato per
+> l'implementazione e non riutilizzato.
+
 > `B3c` (Rich domain inventory contract), misurato a ~580 righe / 8–9 file, è stato suddiviso in `B3c-i` (contratto domini nel collector: produce e persiste l'envelope ricco `domains_data` fail-closed) e `B3c-ii` (integrazione readiness/gate + prova end-to-end che B3b-ii consuma i record ricchi); vedi [B3c-rich-domain-inventory.md](B3c-rich-domain-inventory.md). L'ID `B3c` è ritirato e non riutilizzato per implementazione. **B3c-ii chiude la limitazione residua (a) di B3b-ii** (inventario privo dell'envelope ricco → passi dominio manual/pending); la limitazione crash/recovery di B3b-ii resta assegnata a **C4**. Le categorie downstream (`B4`/`B5`/`B6`/`B7`/`C1`) dipendono ora da `B3c-ii`.
 
 ### Wave C — Content transfer
@@ -159,10 +184,10 @@ graph LR
   B1-->B4a
   B3c-ii-->B4a
   B4a-->B4b-i-->B4b-ii
-  B4a-->B4c
+  B4a-->B4c-i-->B4c-ii
   B4a-->B4d
   B4b-ii-->B4e
-  B4c-->B4e
+  B4c-ii-->B4e
   B4d-->B4e
   B1-->B5
   B2a-->B5

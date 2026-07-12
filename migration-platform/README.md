@@ -1035,6 +1035,36 @@ Doppio gate `DEFAULT_ADDRESS_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled
 `default_address_rules.py`, `default_address_writer.py` e il seam di `email_write.py`
 100%.
 
+### Contratto evidence routing email e policy gate (B4c-i)
+
+Il routing è *compensabile*: `Email::setmxcheck` (**API2**) **sovrascrive** lo stato
+esistente; la lettura è `Email::list_mxs` (**UAPI**). B4c-i costruisce il fondamento
+decisionale — nessuna scrittura — e B4c-ii aggiunge l'engine (riusando il seam B4b-ii,
+senza toccare `email_write.py`).
+
+`routing_rules.py` (puro) classifica **solo** il campo configurato `mxcheck` in
+`local`/`remote`/`auto`/`secondary`/`unknown`; `detected`, gli MX e il DNS **non sono
+mai** input decisionali (conservati come evidenza), `alwaysaccept` non trasforma la
+classe, e una combinazione incoerente (es. `mxcheck=local` con flag `remote`) →
+`unknown`. Op tipizzate SafeRead `list_mxs_op()` (UAPI) e DestinationWrite
+`setmxcheck_op()` (API2, costruibili/testabili ma irraggiungibili). Il collector
+persiste `email_routing_contract` versionato e fail-closed (lettura fallita→
+`failed`/`unavailable` mai `empty`; dominio mail-routing atteso senza record→`partial`;
+duplicati conflittuali/record inattesi→`ambiguous`; `is_write_eligible` richiede
+versione corrente **e** `succeeded`).
+
+**Policy gate evidence-bound.** Nessuno stato destination è "fresh" per default: la
+matrice pura fa `already_present` sugli equivalenti (senza policy) e `blocked` su ogni
+differenza, **salvo** una `RoutingSetPolicy` esplicita e approvata che vincola
+esattamente la transizione osservata (dominio + routing source richiesto + routing
+destination live + `evidence_fingerprint` + scadenza + id approvazione redatto). Una
+policy generica, di dominio/source/destination errati, con fingerprint stale o scaduta
+→ `blocked`. `secondary` e `unknown` sono sempre `manual` (anche con policy);
+partial/unreadable/ambiguous → `manual`; dominio assente → `blocked`.
+
+Doppio gate `ROUTING_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled` (exact-match,
+disabled-by-default, validator fail-closed). Coverage: `routing_rules.py` 100%.
+
 ```bash
 cd apps/api
 PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_default_address_contract.py \
@@ -1243,6 +1273,7 @@ reale nel worker (B3b-ii)»); per `DOMAIN_WRITER_MODE` sono ammessi solo
 | Utenti e grant MySQL | `MYSQL_USER_WRITER_MODE` | `disabled` |
 | Forwarder | `FORWARDER_WRITER_MODE` | `disabled` |
 | Default address (catch-all) | `DEFAULT_ADDRESS_WRITER_MODE` | `disabled` |
+| Email routing (mail route) | `ROUTING_WRITER_MODE` | `disabled` |
 | Cron | `CRON_WRITER_MODE` | `disabled` |
 | FTP | `FTP_WRITER_MODE` | `disabled` |
 | Mailing list | `MAILING_LIST_WRITER_MODE` | `disabled` |

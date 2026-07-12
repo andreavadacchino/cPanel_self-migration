@@ -84,6 +84,9 @@ def collect(client: CpanelClient) -> tuple[dict, dict]:
     _collect_default_address(client, data, coverage)
     if coverage["default_address_contract"]["status"] in {"partial", "ambiguous", "unavailable", "failed"}:
         warnings += 1
+    _collect_email_routing(client, data, coverage)
+    if coverage["email_routing_contract"]["status"] in {"partial", "ambiguous", "unavailable", "failed"}:
+        warnings += 1
     _collect_cron(client, data, coverage)
     if coverage["cron_jobs"]["status"] in {"unsupported", "unavailable"}:
         warnings += 1
@@ -592,6 +595,38 @@ def _collect_default_address(client: CpanelClient, data: dict, coverage: dict) -
     data["default_address_contract"] = envelope
     counted = envelope["status"] in {rules.SUCCEEDED, rules.PARTIAL, rules.AMBIGUOUS}
     coverage["default_address_contract"] = {
+        "status": envelope["status"],
+        "method": rules.METHOD,
+        "read_only_verified": True,
+        "items_count": len(envelope["records"]) if counted else None,
+        "message": envelope["message"],
+    }
+
+
+def _collect_email_routing(client: CpanelClient, data: dict, coverage: dict) -> None:
+    """Persist the versioned, fail-closed email routing contract (task B4c-i).
+
+    One account-level UAPI SafeRead of ``Email::list_mxs`` (the B4c-i op), reconciled
+    with the mail-routing domain set (main + addon + parked; subdomains never carry
+    their own mail route) by the pure ``routing_rules`` module. A failed/malformed read
+    is ``failed``/``unavailable`` — never an empty routing set. No write is performed.
+    """
+    from app.modules.executions import routing_rules as rules
+
+    enumerated = _dns_zones(data.get("domains"))
+    domains_readable = coverage.get("domains", {}).get("status") in {"succeeded", "empty"}
+    payload: object = None
+    read_error: str | None = None
+    if domains_readable:
+        try:
+            payload = client.read(rules.list_mxs_op()).data
+        except Exception as exc:  # transport/application/malformed read
+            read_error = type(exc).__name__
+    envelope = rules.build_contract(
+        payload, enumerated, read_ok=domains_readable and read_error is None, read_error=read_error)
+    data["email_routing_contract"] = envelope
+    counted = envelope["status"] in {rules.SUCCEEDED, rules.PARTIAL, rules.AMBIGUOUS}
+    coverage["email_routing_contract"] = {
         "status": envelope["status"],
         "method": rules.METHOD,
         "read_only_verified": True,
