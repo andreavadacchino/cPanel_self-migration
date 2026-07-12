@@ -1071,6 +1071,37 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_default_addre
   --cov=app.modules.executions.default_address_rules --cov-report=term-missing
 ```
 
+### Engine writer routing compensabile (B4c-ii)
+
+`routing_writer.py` riusa `execute_email_phase` (B4a) e il seam `backup_of`/
+`persist_backup` (B4b-ii) senza toccare `email_write.py`, consumando **solo** contratto/
+regole/policy di B4c-i. Poiché `setmxcheck` sovrascrive, la scrittura è raggiunta **solo**
+su decisione `set` — una singola transizione esatta autorizzata da una `RoutingSetPolicy`
+su evidenza live verificata e non driftata; un routing differente o custom è `blocked` e
+**mai** sovrascritto, `secondary`/`unknown` è `manual`. La policy è **consumata così com'è**
+validata da B4c-i: il writer non la costruisce né la allarga, e `policy_authorizes` ri-deriva
+il fingerprint dalla lettura **live**, così una destination driftata rispetto allo snapshot
+approvato fallisce l'exact-match.
+
+Flusso per dominio: fresh-read live `list_mxs` → `RoutingEvidence` costruita solo dal
+payload live → `decide()` con dominio/source/destination live/policy → backup tipizzato del
+routing precedente **dal live** (backup-or-nothing, persistito **prima** della scrittura) →
+`before_write` (seam gate/fencing B4e) → unica `setmxcheck` (mai auto-retry; timeout/ambiguo
+→ fresh-read, mai seconda write) → verify live (equivalenza con il source richiesto).
+La `mxcheck` è un enum (`local`/`remote`/`auto`) non sensibile; il raw `mxcheck` precedente
+vive **solo** nel backup store, mai in eventi/error/result. La compensation redatta porta il
+solo backup reference. Gateway destination-only (nessuna primitiva source).
+
+Doppio gate `ROUTING_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled` (disabled-by-default);
+l'engine resta **irraggiungibile dal runtime** (non in `IMPLEMENTED_REAL_CATEGORIES`) fino al
+cablaggio dispatch/authorize/lease/fencing di B4e. Coverage: `routing_writer.py` 100%.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_routing_writer.py \
+  --cov=app.modules.executions.routing_writer --cov-report=term-missing
+```
+
 ## Writer cron mock-only con approvazione
 
 `worker.actors.cron_writer.cron_writer_actor` è governato da

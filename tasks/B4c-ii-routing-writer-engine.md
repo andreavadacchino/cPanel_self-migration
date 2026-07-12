@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **ID** | `B4c-ii` |
-| **Status** | `[ ]` |
+| **Status** | `[x]` |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B4c-i |
@@ -51,11 +51,11 @@ success; wrong domain; raw/payload in events.
 
 **Acceptance Criteria:**
 
-- [ ] Only a policy-authorized transition is set, backed up before the write and
+- [x] Only a policy-authorized transition is set, backed up before the write and
       verified live; a differing routing is never overwritten; the source is never
       written.
-- [ ] No test, typecheck, Compose, or coverage regression.
-- [ ] Real behavior disabled by default and unreachable from the runtime until B4e.
+- [x] No test, typecheck, Compose, or coverage regression.
+- [x] Real behavior disabled by default and unreachable from the runtime until B4e.
 
 **Verification Commands:**
 
@@ -65,3 +65,68 @@ cd ../worker && DRAMATIQ_TESTING=1 python -m pytest
 cd ../web && npm run build
 cd ../.. && docker compose config -q
 ```
+
+---
+
+## Completion Record
+
+**Data:** 2026-07-12
+
+**Riepilogo implementazione.** Engine writer del routing email implementato come fase
+*compensabile* riusando `execute_email_phase` (B4a) e il seam `backup_of`/`persist_backup`
+(B4b-ii) **senza toccare** `email_write.py`, consumando **solo** contratto/regole/policy
+di B4c-i. `routing_writer.py` (nuovo) costruisce le due evidenze `RoutingEvidence`
+esclusivamente dal payload live (`_source_evidence` dalla richiesta source, con
+`classify()` a ridurre un routing arbitrario alla classe; `_destination_evidence` dal
+solo `mxcheck` configurato di `list_mxs`, missing/unreadable/conflicting/malformed →
+non-writable), invoca `rules.decide()` con dominio/source/destination live/policy/now, e
+mappa `RoutingAction → WriteAction` (`set → create`). La `RoutingSetPolicy` è **consumata
+esattamente** come validata da B4c-i: il writer non la costruisce né la allarga, e
+`policy_authorizes` ri-deriva il fingerprint dal **live**, così una destination driftata
+fallisce l'exact-match. Backup tipizzato del routing precedente **dal live** (non dallo
+snapshot), persistito **prima** della scrittura (backup-or-nothing); `setmxcheck` unica,
+mai auto-retry (timeout/ambiguo → fresh-read, mai seconda write); verify live per
+equivalenza col source. `mxcheck` (enum non sensibile) nel planned_call; raw precedente
+solo nel backup store; compensation redatta con il solo backup reference. Gateway
+`RoutingGateway` destination-only (nessuna primitiva source). Doppio gate
+`ROUTING_WRITER_MODE` + `REAL_EXECUTION_MODE`, disabled-by-default, **irraggiungibile dal
+runtime** (non in `IMPLEMENTED_REAL_CATEGORIES`) fino a B4e.
+
+**File principali.** `apps/api/app/modules/executions/routing_writer.py` (nuovo, 188
+righe), `apps/api/app/tests/test_real_routing_writer.py` (nuovo, 39 test). Doc:
+`README.md` (sezione «Engine writer routing compensabile (B4c-ii)»). Task/BACKLOG
+aggiornati. Nessuna modifica a `email_write.py`, `routing_rules.py`, `collector.py`,
+`config.py`, `dispatch.py`, actor o `IMPLEMENTED_REAL_CATEGORIES`.
+
+**Test e comandi eseguiti (esito).**
+- Mirati B4c-ii: `pytest test_real_routing_writer.py` → **41 passed**; coverage
+  `routing_writer.py` **100%**.
+- Intera suite API: **476 passed** (+39 nuovi test; nessuna regressione; mock/dry-run
+  intatti). Worker (venv root): **18 passed**. Web `npm run build`: **OK**.
+  `docker compose config -q`: **OK**.
+
+**Esito review adversariale.** Coperti tutti i vettori: writer che genera policy (il
+writer non costruisce mai `RoutingSetPolicy`, solo `policies.get`); policy non exact-match
+(blocco parametrizzato dominio/source/dest/fingerprint/scadenza → blocked, zero write);
+policy riusata dopo drift (`test_live_drift_after_snapshot_invalidates_policy` + fingerprint
+stale); backup dallo snapshot (backup costruito dal `live` passato dal framework; asserito
+`raw == live`); backup dopo write (`gw.order == ["backup", "write"]`); secondary
+automatizzato (source e dest secondary → manual anche con policy); `detected` usato per
+verificare (`test_detection_never_authorizes_a_write`; verify usa solo `mxcheck`); retry di
+`setmxcheck` (ambiguo timeout → single attempt + fresh-read); falso successo (post-write
+mismatch → failed, compensation disponibile); raw/secret leak (`test_no_raw_or_secret_*`,
+approval id assente); modifica accidentale del framework condiviso (diff limitato a 2 nuovi
+file + doc/task, `email_write.py` immutato).
+
+**Documentazione aggiornata.** `README.md` — nuova sezione B4c-ii con flusso, gate e
+comando coverage; la riga della tabella flag `ROUTING_WRITER_MODE` e `.env.example` erano
+già presenti da B4c-i.
+
+**Nota budget.** Codice di produzione `routing_writer.py` = 188 righe (≈130 logiche),
+**sotto** il target 500. Il file di test (409 righe) è dimensionato dalla matrice di 39 test
+obbligatori. File toccati: 5 (≤8). Nessun ulteriore split giustificato (codice corretto,
+100% coperto, gate verdi).
+
+**Limitazioni residue (per B4e).** Cablaggio nel dispatch runtime (authorize/lease/fencing
+via `before_write`, aggiunta a `IMPLEMENTED_REAL_CATEGORIES`) resta a B4e, insieme
+all'autoresponder writer.

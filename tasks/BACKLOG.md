@@ -48,7 +48,7 @@
 | `[x]` | `B4b-ii` | [Compensable default-address writer engine](B4b-ii-default-address-writer-engine.md) | High | M | B4b-i |
 | `[/]` | `B4c` | [Email routing writer](B4c-email-routing-writer.md) (split → B4c-i/B4c-ii) | High | M | B4a |
 | `[x]` | `B4c-i` | [Routing evidence contract and rules](B4c-i-routing-contract.md) | High | M | B4a |
-| `[ ]` | `B4c-ii` | [Compensable routing writer engine](B4c-ii-routing-writer-engine.md) | High | M | B4c-i |
+| `[x]` | `B4c-ii` | [Compensable routing writer engine](B4c-ii-routing-writer-engine.md) | High | M | B4c-i |
 | `[ ]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) | High | M | B4a |
 | `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c-ii, B4d |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
