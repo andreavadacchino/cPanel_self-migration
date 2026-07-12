@@ -45,7 +45,7 @@
 | `[x]` | `B4a` | [Email writer framework + forwarder](B4a-email-framework-forwarder.md) | High | M | B1, B3c-ii |
 | `[/]` | `B4b` | [Default address / catch-all writer](B4b-default-address-writer.md) (split → B4b-i/B4b-ii) | High | M | B4a |
 | `[x]` | `B4b-i` | [Default-address evidence contract and rules](B4b-i-default-address-contract.md) | High | M | B4a |
-| `[ ]` | `B4b-ii` | [Compensable default-address writer engine](B4b-ii-default-address-writer-engine.md) | High | M | B4b-i |
+| `[x]` | `B4b-ii` | [Compensable default-address writer engine](B4b-ii-default-address-writer-engine.md) | High | M | B4b-i |
 | `[ ]` | `B4c` | [Email routing writer](B4c-email-routing-writer.md) | High | M | B4a |
 | `[ ]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) | High | M | B4a |
 | `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c, B4d |

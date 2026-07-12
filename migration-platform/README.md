@@ -995,8 +995,8 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_forwarde
 ### Contratto evidence default-address (catch-all) e regole pure (B4b-i)
 
 Il catch-all è *compensabile, non additivo*: `Email::set_default_address`
-**sovrascrive** il valore corrente. B4b-i costruisce solo il fondamento decisionale
-— nessuna scrittura — mentre l'engine writer compensabile è B4b-ii (non cablato nel
+**sovrascrive** il valore corrente. B4b-i costruisce il fondamento decisionale
+— nessuna scrittura — e B4b-ii aggiunge l'engine writer compensabile (non cablato nel
 dispatch fino a B4e).
 
 `default_address_rules.py` (puro) tiene ogni valore **byte-faithful** (il default
@@ -1017,9 +1017,23 @@ matrice decisionale pura: raw equivalenti → `already_present`; destinazione fr
 customizzata → `blocked` (mai overwrite); dominio assente sulla destinazione →
 `blocked`; sorgente `other`/mancante o evidenza illeggibile/ambigua → `manual`.
 
+**Engine compensabile (B4b-ii).** `default_address_writer.py` riusa
+`execute_email_phase` e le decisioni B4b-i, estendendo il framework con il seam
+generico `backup_of`/`persist_backup` (il forwarder additivo resta invariato,
+senza backup). Una `set_default_address` avviene **solo** su decisione live `set`;
+prima della write il valore live precedente viene salvato come **backup tipizzato
+persistito atomicamente** (backup non costruibile o non persistito → zero write). Il
+compensation metadata contiene **solo il riferimento** al backup (nessun raw); il raw
+vive esclusivamente nel contenitore protetto del seam. Nessun retry: una risposta
+ambigua risolve con una nuova fresh-read (equivalente→verified, altrimenti failed con
+compensation reference disponibile), mai una seconda write; verifica post-write via
+decisione B4b-i (solo l'equivalenza produce verified). Gateway solo-destinazione
+(fresh-read SafeRead + set DestinationWrite B4b-i), non registrato nel dispatch.
+
 Doppio gate `DEFAULT_ADDRESS_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled`
 (exact-match, disabled-by-default, validator fail-closed). Coverage:
-`default_address_rules.py` 100%.
+`default_address_rules.py`, `default_address_writer.py` e il seam di `email_write.py`
+100%.
 
 ```bash
 cd apps/api
