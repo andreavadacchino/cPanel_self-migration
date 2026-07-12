@@ -49,8 +49,10 @@
 | `[/]` | `B4c` | [Email routing writer](B4c-email-routing-writer.md) (split → B4c-i/B4c-ii) | High | M | B4a |
 | `[x]` | `B4c-i` | [Routing evidence contract and rules](B4c-i-routing-contract.md) | High | M | B4a |
 | `[x]` | `B4c-ii` | [Compensable routing writer engine](B4c-ii-routing-writer-engine.md) | High | M | B4c-i |
-| `[ ]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) | High | M | B4a |
-| `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c-ii, B4d |
+| `[/]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) (split → B4d-i/B4d-ii) | High | M | B4a |
+| `[x]` | `B4d-i` | [Filter evidence contract, fingerprint and rules](B4d-i-filter-contract.md) | High | M | B4a |
+| `[ ]` | `B4d-ii` | [Additive-only filter writer engine](B4d-ii-filter-writer-engine.md) | High | M | B4d-i |
+| `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
@@ -149,6 +151,36 @@
 > `B4e` dipende ora da `B4c-ii` (non più `B4c`); `B4c-i → B4c-ii`. L'ID `B4c` è ritirato per
 > l'implementazione e non riutilizzato.
 
+> `B4d` (Email filters writer), misurato a **~1365 righe su ~7 file** (`filter_rules.py` op tipizzate +
+> canonical fingerprint ordinato + contratto 2-scope + regole pure ~300, `filter_writer.py` engine +
+> upsert-guard ~170, `config.py` ~15, `test_filter_rules.py` ~380, `test_real_filter_writer.py` ~450,
+> README + `.env.example` ~50), oltre ~2,7× il budget di 500 righe/PR (il solo codice di produzione
+> ~485 è già al limite senza test/doc). Nulla è riutilizzabile: non esistono op tipizzate Python filtri,
+> né un contratto versionato con fingerprint (il collector attuale è una lista piatta). Lettura
+> `Email::list_filters` (UAPI) per scope account e mailbox, dettaglio `Email::get_filter` (UAPI), write
+> `Email::store_filter` (API2) che **UPSERT** (non idempotente, pericolosa). Fatto critico: `get_filter`
+> su filtro inesistente ritorna un **TEMPLATE** (`status:1`, `filtername="Rule 1"`) non un errore →
+> l'esistenza va gateata **solo** su `list_filters`. Su conferma dell'utente suddiviso al confine
+> **evidence/rules → additive-only engine**:
+>
+> - [`B4d-i` — Filter evidence contract, fingerprint and rules](B4d-i-filter-contract.md) (dep: B4a):
+>   SafeRead tipizzate `list_filters` (account + mailbox) e `get_filter` (solo dopo esistenza provata
+>   dalla lista), DestinationWrite `store_filter` (API2, costruibile ma irraggiungibile), contratto
+>   `email_filters` versionato a due scope (account + mailbox `local@domain`) fail-closed, canonical
+>   fingerprint deterministico completo e ordinato sul payload (rules/actions, nessun sorting/
+>   normalizzazione, distinzione null/empty/missing/zero), classificazione/completezza,
+>   matrice decisionale pura (`already_present`/`create`/`blocked`/`manual`, nessuna write), flag
+>   `FILTER_WRITER_MODE` disabled-by-default. Nessun engine/dispatch/write, nessun `DeleteFilter`.
+> - [`B4d-ii` — Additive-only filter writer engine](B4d-ii-filter-writer-engine.md) (dep: B4d-i):
+>   `filter_writer.py` che riusa `execute_email_phase`, gateway destination-only, fresh-read per scope,
+>   **upsert-guard** immediatamente prima della `store_filter` (nome live-assente obbligatorio; nome
+>   comparso tra snapshot e write → block; fresh-read inaffidabile → zero write), nessun `DeleteFilter`,
+>   verify via fingerprint completo, compensation redatta (rimozione futura del solo filtro creato).
+>   Non cablato nel dispatch (resta a B4e).
+>
+> `B4e` dipende ora da `B4d-ii` (non più `B4d`); `B4d-i → B4d-ii`. L'ID `B4d` è ritirato per
+> l'implementazione e non riutilizzato.
+
 > `B3c` (Rich domain inventory contract), misurato a ~580 righe / 8–9 file, è stato suddiviso in `B3c-i` (contratto domini nel collector: produce e persiste l'envelope ricco `domains_data` fail-closed) e `B3c-ii` (integrazione readiness/gate + prova end-to-end che B3b-ii consuma i record ricchi); vedi [B3c-rich-domain-inventory.md](B3c-rich-domain-inventory.md). L'ID `B3c` è ritirato e non riutilizzato per implementazione. **B3c-ii chiude la limitazione residua (a) di B3b-ii** (inventario privo dell'envelope ricco → passi dominio manual/pending); la limitazione crash/recovery di B3b-ii resta assegnata a **C4**. Le categorie downstream (`B4`/`B5`/`B6`/`B7`/`C1`) dipendono ora da `B3c-ii`.
 
 ### Wave C — Content transfer
@@ -185,10 +217,10 @@ graph LR
   B3c-ii-->B4a
   B4a-->B4b-i-->B4b-ii
   B4a-->B4c-i-->B4c-ii
-  B4a-->B4d
+  B4a-->B4d-i-->B4d-ii
   B4b-ii-->B4e
   B4c-ii-->B4e
-  B4d-->B4e
+  B4d-ii-->B4e
   B1-->B5
   B2a-->B5
   B3c-ii-->B5

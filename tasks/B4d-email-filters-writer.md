@@ -3,11 +3,26 @@
 | Field | Value |
 |---|---|
 | **ID** | `B4d` |
-| **Status** | `[ ]` |
+| **Status** | `[/]` (retired — split into B4d-i / B4d-ii) |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B4a |
 | **Branch** | `feat/b4d-email-filters-writer` |
+
+> **Split record (2026-07-12).** Misurato a **~1365 righe su ~7 file** (`filter_rules.py`
+> ~300, `filter_writer.py` ~170, `config.py` ~15, `test_filter_rules.py` ~380,
+> `test_real_filter_writer.py` ~450, README + `.env.example` ~50) — oltre ~2,7× il budget
+> 500 righe/PR; il solo codice di produzione (~485) è già al limite senza test/doc. Nulla
+> è riutilizzabile (nessuna op tipizzata Python filtri, nessun contratto versionato con
+> fingerprint — il collector attuale è una lista piatta). Su conferma dell'utente,
+> suddiviso al confine **evidence/rules → additive-only engine**:
+>
+> - [`B4d-i` — Filter evidence contract, fingerprint and rules](B4d-i-filter-contract.md)
+>   (dep: B4a).
+> - [`B4d-ii` — Additive-only filter writer engine](B4d-ii-filter-writer-engine.md)
+>   (dep: B4d-i).
+>
+> `B4e` dipende ora da `B4d-ii`. L'ID `B4d` è ritirato e non riutilizzato.
 
 **Origin:** per-capability split of `B4` (see
 [B4-email-config-writers.md](B4-email-config-writers.md)). Builds on the B4a

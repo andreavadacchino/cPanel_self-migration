@@ -81,6 +81,9 @@ def collect(client: CpanelClient) -> tuple[dict, dict]:
     _collect_email_filters(client, data, coverage)
     if coverage["email_filters"]["status"] in {"partial", "unavailable"}:
         warnings += 1
+    _collect_email_filters_contract(client, data, coverage)
+    if coverage["email_filters_contract"]["status"] in {"partial", "ambiguous", "unavailable", "failed"}:
+        warnings += 1
     _collect_default_address(client, data, coverage)
     if coverage["default_address_contract"]["status"] in {"partial", "ambiguous", "unavailable", "failed"}:
         warnings += 1
@@ -632,6 +635,57 @@ def _collect_email_routing(client: CpanelClient, data: dict, coverage: dict) -> 
         "read_only_verified": True,
         "items_count": len(envelope["records"]) if counted else None,
         "message": envelope["message"],
+    }
+
+
+def _read_filter_scope(client: CpanelClient, rules, scope: str, *, account: str | None):
+    """Read one scope: list_filters, then get_filter for each ENUMERATED name only (never
+    an existence probe). A list failure marks the scope non-readable; a per-name detail
+    failure degrades that name (scope → partial), never the whole scope to empty."""
+    try:
+        payload = client.read(rules.list_filters_op(account)).data
+    except Exception as exc:  # transport/application/malformed read
+        return rules.ScopeInput(scope=scope, list_ok=False, list_error=type(exc).__name__)
+    details: dict = {}
+    if isinstance(payload, list):
+        for entry in payload:
+            if not isinstance(entry, dict) or not isinstance(entry.get("filtername"), str):
+                continue
+            name = entry["filtername"]
+            if name in details:
+                continue
+            try:
+                detail = client.read(rules.get_filter_op(name, account)).data
+                details[name] = {"ok": True, "payload": detail}
+            except Exception as exc:
+                details[name] = {"ok": False, "error": type(exc).__name__}
+    return rules.ScopeInput(scope=scope, list_ok=True, list_payload=payload, details=details)
+
+
+def _collect_email_filters_contract(client: CpanelClient, data: dict, coverage: dict) -> None:
+    """Persist the versioned two-scope email filters contract (task B4d-i).
+
+    One SafeRead ``Email::list_filters`` per scope (account-level + each inventoried
+    mailbox), each enumerated name enriched by a ``get_filter`` detail. The pure
+    ``filter_rules`` module builds the fail-closed envelope with a canonical fingerprint;
+    a list failure is ``failed``/``unavailable`` (never empty), a detail failure is
+    ``partial``, a name mismatch/conflicting duplicate is ``ambiguous``. No write.
+    """
+    from app.modules.executions import filter_rules as rules
+
+    scopes = [_read_filter_scope(client, rules, rules.ACCOUNT_SCOPE, account=None)]
+    for item in data.get("email_accounts", []):
+        if isinstance(item, dict) and isinstance(item.get("email"), str) and item["email"]:
+            scopes.append(_read_filter_scope(client, rules, item["email"], account=item["email"]))
+    envelope = rules.build_contract(scopes)
+    data["email_filters_contract"] = envelope
+    counted = envelope["status"] in {rules.SUCCEEDED, rules.PARTIAL, rules.AMBIGUOUS}
+    coverage["email_filters_contract"] = {
+        "status": envelope["status"],
+        "method": rules.METHOD,
+        "read_only_verified": True,
+        "items_count": sum(len(s["records"]) for s in envelope["scopes"]) if counted else None,
+        "message": None if envelope["status"] in {rules.SUCCEEDED, rules.EMPTY} else f"filtri: {envelope['status']}",
     }
 
 

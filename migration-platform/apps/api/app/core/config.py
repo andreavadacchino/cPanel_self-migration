@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     forwarder_writer_mode: str = "disabled"
     default_address_writer_mode: str = "disabled"
     routing_writer_mode: str = "disabled"
+    filter_writer_mode: str = "disabled"
     cron_writer_mode: str = "disabled"
     ftp_writer_mode: str = "disabled"
     mailing_list_writer_mode: str = "disabled"
@@ -107,6 +108,18 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("filter_writer_mode")
+    @classmethod
+    def _validate_filter_writer_mode(cls, value: str) -> str:
+        # Fail-closed (B4d-i): an unknown value for a flag that can authorise a real
+        # filter store_filter (an UPSERT) is rejected at load time.
+        if value not in _DOMAIN_WRITER_MODES:
+            raise ValueError(
+                f"FILTER_WRITER_MODE non valido: {value!r} "
+                f"(ammessi: {', '.join(sorted(_DOMAIN_WRITER_MODES))})"
+            )
+        return value
+
     @property
     def real_execution_enabled(self) -> bool:
         return self.real_execution_mode == "enabled"
@@ -138,6 +151,14 @@ class Settings(BaseSettings):
         # both the master real switch and ROUTING_WRITER_MODE are "enabled". The B4c-i
         # rules perform no write; the B4c-ii engine (and B4e) require this gate.
         return self.real_execution_enabled and self.routing_writer_mode == "enabled"
+
+    @property
+    def filter_real_writer_enabled(self) -> bool:
+        # Double gate for the additive-only filter writer (B4d): reachable only when
+        # both the master real switch and FILTER_WRITER_MODE are "enabled". The B4d-i
+        # rules perform no write; the B4d-ii engine (and B4e) require this gate before
+        # any real store_filter (an UPSERT reached only on a live-absent name).
+        return self.real_execution_enabled and self.filter_writer_mode == "enabled"
 
 
 @lru_cache

@@ -1102,6 +1102,50 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_routing_
   --cov=app.modules.executions.routing_writer --cov-report=term-missing
 ```
 
+### Contratto evidence filtri email, fingerprint e regole (B4d-i)
+
+I filtri sono *additivi*: `Email::store_filter` (**API2**) è un **UPSERT** — un filtro
+omonimo ma diverso non va mai sovrascritto. La lettura è `Email::list_filters` (**UAPI**)
+per **scope** — account-level (`account` assente) e per mailbox (`account=local@domain`) —
+con dettaglio `Email::get_filter`. B4d-i costruisce il fondamento decisionale (nessuna
+scrittura); B4d-ii aggiunge l'engine additive-only (riusando `execute_email_phase`, senza
+toccare `email_write.py`).
+
+**Regola critica `get_filter`.** Su un filtro **inesistente** cPanel ritorna `status:1` con
+un **TEMPLATE** (`filtername="Rule 1"`, una regola/azione vuota), non un errore. L'esistenza
+è quindi gateata **solo** su `list_filters`: `get_filter` non è mai un existence check, il
+template non è mai un filtro reale, un nome del dettaglio ≠ nome enumerato → `ambiguous`, un
+dettaglio template/vuoto → `incomplete`. Una failure del dettaglio rende lo scope `partial`,
+mai `empty`.
+
+`filter_rules.py` (puro) fornisce: op tipizzate SafeRead `list_filters_op`/`get_filter_op`
+(get solo dopo esistenza provata dalla lista) e DestinationWrite `store_filter_op` (API2,
+costruibile ma irraggiungibile; **nessuna** `DeleteFilter`); un **canonical fingerprint**
+deterministico e order-preserving sul payload completo (ogni rule = `part`/`match`/`opt`
+incl. null/`val`/`number`, ogni action = `action`/`dest`/`number`; ordine di rules/actions
+preservato, nessun sorting, nessuna normalizzazione di regex/whitespace/quoting; distingue
+null/empty/missing/zero) — il fingerprint è un hash opaco, il payload completo resta nel
+contratto protetto ma **mai** in log/audit/errori; classificazione `complete`/`incomplete`/
+`unsupported` (operatore/azione sconosciuti tenuti, mai scartati); contratto `email_filters`
+versionato a due scope, fail-closed (list failure → `failed`/`unavailable` mai `empty`;
+detail failure → `partial`; name-mismatch/template o duplicato conflittuale → `ambiguous`;
+duplicato equivalente → dedup; account-level `succeeded` non nasconde una mailbox `partial`,
+lo status complessivo è il peggiore degli scope; `is_write_eligible` richiede versione
+corrente **e** tutti gli scope succeeded/empty). Matrice pura: same scope+name+fingerprint →
+`already_present`; nome live-assente + source completa/supportata → `create`; stesso nome,
+fingerprint diverso → `blocked`; destination-only → preserve/no-op (mai delete);
+source incomplete/unsupported → `manual`; destination partial/unreadable/ambiguous → `manual`;
+mailbox destination assente → `blocked`. Nessun rename/reorder/replace/delete, nessuna write.
+
+Doppio gate `FILTER_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled` (exact-match,
+disabled-by-default, validator fail-closed). Coverage: `filter_rules.py` 100%.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_email_filter_contract.py \
+  --cov=app.modules.executions.filter_rules --cov-report=term-missing
+```
+
 ## Writer cron mock-only con approvazione
 
 `worker.actors.cron_writer.cron_writer_actor` è governato da
@@ -1305,6 +1349,7 @@ reale nel worker (B3b-ii)»); per `DOMAIN_WRITER_MODE` sono ammessi solo
 | Forwarder | `FORWARDER_WRITER_MODE` | `disabled` |
 | Default address (catch-all) | `DEFAULT_ADDRESS_WRITER_MODE` | `disabled` |
 | Email routing (mail route) | `ROUTING_WRITER_MODE` | `disabled` |
+| Email filters | `FILTER_WRITER_MODE` | `disabled` |
 | Cron | `CRON_WRITER_MODE` | `disabled` |
 | FTP | `FTP_WRITER_MODE` | `disabled` |
 | Mailing list | `MAILING_LIST_WRITER_MODE` | `disabled` |
