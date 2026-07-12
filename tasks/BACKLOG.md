@@ -51,7 +51,7 @@
 | `[x]` | `B4c-ii` | [Compensable routing writer engine](B4c-ii-routing-writer-engine.md) | High | M | B4c-i |
 | `[/]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) (split → B4d-i/B4d-ii) | High | M | B4a |
 | `[x]` | `B4d-i` | [Filter evidence contract, fingerprint and rules](B4d-i-filter-contract.md) | High | M | B4a |
-| `[ ]` | `B4d-ii` | [Additive-only filter writer engine](B4d-ii-filter-writer-engine.md) | High | M | B4d-i |
+| `[x]` | `B4d-ii` | [Additive-only filter writer engine](B4d-ii-filter-writer-engine.md) | High | M | B4d-i |
 | `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |

@@ -1146,6 +1146,41 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_email_filter_
   --cov=app.modules.executions.filter_rules --cov-report=term-missing
 ```
 
+### Engine writer filtri additive-only (B4d-ii)
+
+`filter_writer.py` riusa `execute_email_phase` (B4a) e consuma **solo** contratto/
+fingerprint/regole di B4d-i, **senza toccare** `email_write.py`. Poiché `store_filter` è un
+**UPSERT**, la write è raggiunta solo su nome live-assente, provato da **due fresh-read
+distinte**: la `read_live` iniziale dietro la decisione, e una seconda `list_filters` di
+**guardia** eseguita **dentro** il gateway di scrittura, immediatamente adiacente a
+`store_filter`. L'ordine effettivo — dato l'ordine del framework `before_write` →
+`gateway.create` — è: read-live → decide → `before_write` (seam authorize/fencing B4e) →
+fresh-list guard → unica `store_filter`; dopo la guardia non esiste altra logica fallibile
+prima della chiamata API. La guardia prova l'assenza **solo per enumerazione** (mai
+`get_filter`), riusa lo stesso scope, e non riusa la prima lista; se il nome è ricomparso o
+la lista è unreadable/malformed → zero write.
+
+Un filtro omonimo ma con fingerprint diverso è `blocked` (mai sovrascritto); un filtro
+destination-only non è mai toccato; **nessun** `DeleteFilter`. Verify tramite fingerprint
+**completo** su una nuova lista (enumerazione → `get_filter` → confronto scope/nome/rules/
+actions; un template non produce mai successo). Una sola `store_filter`, mai retry;
+timeout/ambiguo → fresh-read, mai seconda write. Il payload rules/actions non entra in
+eventi/error/result (planned_call = scope + nome). La compensation redatta
+(`manual_remove_created_filter`, scope + nome + fingerprint + conferma richiesta) è attaccata
+**solo** per una create che il gateway ha realmente scritto **e** che la rilettura ha
+verificato — mai per `already_present` né per una write saltata dalla guardia, così non può
+mai rimuovere un filtro preesistente.
+
+Doppio gate `FILTER_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled` (disabled-by-default);
+l'engine resta **irraggiungibile dal runtime** (non in `IMPLEMENTED_REAL_CATEGORIES`) fino al
+cablaggio dispatch/authorize/lease/fencing di B4e. Coverage: `filter_writer.py` 100%.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_filter_writer.py \
+  --cov=app.modules.executions.filter_writer --cov-report=term-missing
+```
+
 ## Writer cron mock-only con approvazione
 
 `worker.actors.cron_writer.cron_writer_actor` è governato da
