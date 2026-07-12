@@ -14,6 +14,7 @@ from adapters.ssh.client import (
     SshClient,
     SshReadSession,
     SshWriteSession,
+    stream_between,
 )
 from adapters.ssh.contract import (
     Command,
@@ -67,6 +68,7 @@ __all__ = [
     "SshClient",
     "SshReadSession",
     "SshWriteSession",
+    "stream_between",
     # contract
     "Command",
     "CommandResult",

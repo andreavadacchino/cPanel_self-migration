@@ -78,16 +78,22 @@ class FakeConnection:
         default: FakeCommandScript | None = None,
         *,
         run_error: SshError | None = None,
+        stdout_sources: dict[str, "FakeByteSource"] | None = None,
+        stdin_sinks: dict[str, "FakeStdinSink"] | None = None,
     ) -> None:
         self._scripts = scripts or {}
         self._default = default if default is not None else FakeCommandScript()
         self._run_error = run_error
+        self._stdout_sources = stdout_sources or {}
+        self._stdin_sinks = stdin_sinks or {}
         self.run_count = 0
         self.last_wire: str | None = None
         self.last_command_timeout: float | None = None
         self.last_idle_timeout: float | None = None
         self.executions: list[FakeExecution] = []
         self.closed = False
+        self.stdout_starts = 0
+        self.stdin_starts = 0
 
     def run(self, wire: str, *, command_timeout, idle_timeout) -> FakeExecution:
         self.run_count += 1
@@ -104,6 +110,18 @@ class FakeConnection:
 
     def close(self) -> None:
         self.closed = True
+
+    def start_stdout(self, wire: str, *, command_timeout, idle_timeout) -> "FakeByteSource":
+        self.stdout_starts += 1
+        if wire not in self._stdout_sources:
+            raise SshError("No fake stdout stream scripted")
+        return self._stdout_sources[wire]
+
+    def start_stdin(self, wire: str, *, command_timeout, idle_timeout) -> "FakeStdinSink":
+        self.stdin_starts += 1
+        if wire not in self._stdin_sinks:
+            raise SshError("No fake stdin stream scripted")
+        return self._stdin_sinks[wire]
 
 
 class FakeHandshake:

@@ -267,6 +267,7 @@ paramiko di streaming sono in **B2b-ii**.
 | Readiness writer reali | Report persistente read-only, nessun dispatch |
 | Boundary SSH (B2a) | Esecuzione comandi verificata host-key; non collegato al dispatch |
 | Motore streaming SSH (B2b-i) | `pump()` backpressured/bounded/cancellabile; wiring sessioni+paramiko in B2b-ii |
+| Sessioni streaming SSH (B2b-ii) | `start_stdout` solo read/source; `start_stdin` solo destination write autorizzata; transport Paramiko incrementale |
 | Migrazione dati/configurazioni | Writer reali non abilitati |
 
 ## Copertura del preflight

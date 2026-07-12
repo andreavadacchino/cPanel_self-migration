@@ -41,6 +41,7 @@ from adapters.ssh.errors import (
     SshTransportError,
     SshWriteNotAuthorizedError,
 )
+from adapters.ssh.streaming import ByteSource, StdinSink, StreamOptions, StreamProgress, StreamResult, pump
 from adapters.ssh.hostkeys import (
     HostKeyDecision,
     HostKeyPolicy,
@@ -69,6 +70,12 @@ class BackendConnection(Protocol):
     def run(
         self, wire: str, *, command_timeout: float | None, idle_timeout: float | None
     ) -> BackendExecution: ...
+    def start_stdout(
+        self, wire: str, *, command_timeout: float | None, idle_timeout: float | None
+    ) -> ByteSource: ...
+    def start_stdin(
+        self, wire: str, *, command_timeout: float | None, idle_timeout: float | None
+    ) -> StdinSink: ...
     def close(self) -> None: ...
 
 
@@ -282,6 +289,16 @@ class SshReadSession(_BaseSession):
             raise SshWriteNotAuthorizedError("A read session cannot run a write command")
         return self._execute(cmd, cancel=cancel, check=check)
 
+    def start_stdout(self, cmd: Command) -> ByteSource:
+        """Start a typed read command and expose only its stdout byte source."""
+        if self._closed:
+            raise SshTransportError("SSH session is closed")
+        if cmd.is_write:
+            raise SshWriteNotAuthorizedError("A read session cannot stream a write command")
+        return self._conn.start_stdout(
+            cmd.wire, command_timeout=self._timeouts.command, idle_timeout=self._timeouts.idle
+        )
+
 
 class SshWriteSession(_BaseSession):
     """A destination-only session that may run authorized writes.
@@ -313,6 +330,44 @@ class SshWriteSession(_BaseSession):
         if not self._destination_verified:
             raise SshWriteNotAuthorizedError("Destination has not been verified")
         return self._execute(cmd, cancel=cancel, check=check)
+
+    def start_stdin(self, cmd: Command) -> StdinSink:
+        """Start an authorized destination write and expose only its stdin sink."""
+        if self._closed:
+            raise SshTransportError("SSH session is closed")
+        if not cmd.is_write:
+            raise SshCommandRejectedError("start_stdin requires a write command")
+        if not self._allow_writes:
+            raise SshWriteNotAuthorizedError("Real SSH writes are disabled")
+        if not self._destination_verified:
+            raise SshWriteNotAuthorizedError("Destination has not been verified")
+        return self._conn.start_stdin(
+            cmd.wire, command_timeout=self._timeouts.command, idle_timeout=self._timeouts.idle
+        )
+
+
+def stream_between(
+    source_session: SshReadSession,
+    source_command: Command,
+    destination_session: SshWriteSession,
+    destination_command: Command,
+    options: StreamOptions | None = None,
+    *,
+    cancel: threading.Event | None = None,
+    progress: Callable[[StreamProgress], None] | None = None,
+) -> StreamResult:
+    """Start both typed operations and pump bytes without retrying either side."""
+    source = source_session.start_stdout(source_command)
+    try:
+        sink = destination_session.start_stdin(destination_command)
+    except Exception:
+        source.close()
+        raise
+    secrets = source_session._secrets + destination_session._secrets
+    return pump(
+        source, sink, options, cancel=cancel, progress=progress,
+        secrets=secrets, operation=f"{source_command.label()} -> {destination_command.label()}",
+    )
 
 
 # -- client ----------------------------------------------------------------
@@ -461,4 +516,5 @@ __all__ = [
     "SshClient",
     "SshReadSession",
     "SshWriteSession",
+    "stream_between",
 ]

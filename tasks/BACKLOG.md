@@ -34,7 +34,7 @@
 | `[x]` | `B2a` | [SSH contract, host-key security, command execution](B2a-ssh-command-execution.md) | High | M | A5 |
 | `[/]` | `B2b` | [SSH streaming, cancellation, backpressure](B2b-ssh-streaming-backpressure.md) (split → B2b-i/B2b-ii) | High | M | B2a |
 | `[x]` | `B2b-i` | [SSH stream contracts, pump, fake](B2b-i-ssh-stream-pump.md) | High | M | B2a |
-| `[ ]` | `B2b-ii` | [SSH stream session wiring and paramiko lifecycle](B2b-ii-ssh-stream-sessions.md) | High | M | B2b-i |
+| `[x]` | `B2b-ii` | [SSH stream session wiring and paramiko lifecycle](B2b-ii-ssh-stream-sessions.md) | High | M | B2b-i |
 | `[x]` | `B3a` | [Domain adapter and safety rules](B3a-domain-adapter-rules.md) | High | M | B1 |
 | `[x]` | `B3b-i` | [Real domain write phase engine](B3b-i-domain-phase-engine.md) | High | M | B3a |
 | `[x]` | `B3b-ii` | [Domain phase dispatch wiring](B3b-ii-domain-phase-dispatch.md) | High | M | B3b-i |
@@ -143,4 +143,3 @@ graph LR
 - Real writer modes remain disabled by default.
 - No stale/partial evidence may authorize a write.
 - No secret may enter logs, events, queue payloads, or API responses.
-
