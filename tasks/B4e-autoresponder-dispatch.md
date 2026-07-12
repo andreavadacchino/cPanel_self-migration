@@ -3,11 +3,29 @@
 | Field | Value |
 |---|---|
 | **ID** | `B4e` |
-| **Status** | `[ ]` |
+| **Status** | `[/]` (retired — split into B4e-i / B4e-ii / B4e-iii) |
 | **Priority** | High |
-| **Size** | M |
-| **Dependencies** | B4a, B4b, B4c, B4d |
+| **Size** | L |
+| **Dependencies** | B4a, B4b-ii, B4c-ii, B4d-ii |
 | **Branch** | `feat/b4e-autoresponder-dispatch` |
+
+> **Split record (2026-07-12).** Misurato a **~2465 righe su ~18 file** (~5× il budget 500).
+> Analisi fattuale: `default_address`/`email_routing` non esistono come categoria in
+> comparison/plan/preview/readiness (solo contratti evidence per-dominio); l'autoresponder
+> è `MANUAL` (escluso dal preview); **nessuno store backup durevole** esiste (`persist_backup`
+> è solo callback nei test) mentre default-address/routing lo richiedono (backup-or-nothing);
+> interfacce engine non uniformi; l'actor A3 non riprende un attempt `running` (recovery = C4);
+> nessuno stato `partial` (`halted` modella il successo parziale). Su conferma dell'utente,
+> suddiviso al confine **contract/rules → engine → dispatch**:
+>
+> - [`B4e-i` — Autoresponder evidence contract and rules](B4e-i-autoresponder-contract.md) (dep: B4a).
+> - [`B4e-ii` — Additive-only autoresponder writer engine](B4e-ii-autoresponder-writer-engine.md) (dep: B4e-i).
+> - [`B4e-iii` — Email phases pipeline and dispatch integration](B4e-iii-email-dispatch-integration.md)
+>   (dep: B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii) — aggregatore, ulteriore split previsto in
+>   **iii-a** (durable backup store), **iii-b** (pipeline integration), **iii-c** (runtime registry
+>   + dispatch), da formalizzare dopo B4e-ii.
+>
+> `C3` dipende ora da `B4e-iii`. L'ID `B4e` è ritirato e non riutilizzato per l'implementazione.
 
 **Origin:** final sub-task of the per-capability split of `B4` (see
 [B4-email-config-writers.md](B4-email-config-writers.md)). Adds the autoresponder

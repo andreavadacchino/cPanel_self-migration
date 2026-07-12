@@ -1181,6 +1181,48 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_filter_w
   --cov=app.modules.executions.filter_writer --cov-report=term-missing
 ```
 
+### Contratto evidence autoresponder, fingerprint e regole (B4e-i)
+
+Gli autoresponder sono *additivi*: `Email::add_auto_responder` (`domain`+`email` local part;
+`start`/`stop` omessi se 0) è un **UPSERT** — un autoresponder omonimo ma diverso non va mai
+sovrascritto. La lettura è `Email::list_auto_responders` (**UAPI**) **per dominio**, con
+dettaglio `Email::get_auto_responder` per indirizzo. B4e-i costruisce il fondamento
+decisionale (nessuna scrittura); B4e-ii aggiunge l'engine additive-only; B4e-iii cabla il
+dispatch.
+
+**Esistenza e redazione.** L'esistenza è provata **solo** da `list_auto_responders`
+(`get_auto_responder` mai come existence check; un detail che porta un indirizzo in conflitto
+→ `ambiguous`); un fallimento del dettaglio rende il dominio `partial`, una lista fallita è
+`failed`/`unavailable` (mai `empty`), uno zero-responder reale resta distinto dall'illeggibile.
+Il **canonical fingerprint** è deterministico e order-stable sul payload completo
+(`from`/`subject`/`body`/`interval`/`is_html`/`charset`/`start`/`stop` + campi extra;
+distingue null/empty/missing/zero/`"0"`/bool; nessuna normalizzazione di body/subject/
+whitespace/HTML/charset), ma **solo l'hash opaco e i metadati non sensibili**
+(`interval`/`is_html`/`charset`/`start`/`stop`) entrano nel contratto — `from`/`subject`/`body`
+non compaiono mai nel contratto persistito, log, audit, eventi, errori o `repr`.
+
+`autoresponder_rules.py` (puro) fornisce op tipizzate `list_auto_responders_op`/
+`get_auto_responder_op`/`add_auto_responder_op` (irraggiungibile; **nessun** delete),
+`classify_completeness` (`complete`/`incomplete`/`unsupported`, modalità HTML sconosciuta
+tenuta come unsupported), contratto `autoresponder_contract` versionato per-dominio fail-closed
+(worst-of-domains, `is_write_eligible` richiede versione corrente **e** tutti i domini
+succeeded/empty), e la matrice additiva `decide` (same address+fingerprint → already_present;
+address live-assente + source completa → create; stesso address, fingerprint diverso → blocked;
+source incomplete/unsupported → manual; destination partial/ambiguous → manual; dominio assente
+→ blocked; nessun overwrite/upsert/delete). Il collector persiste il contratto versionato senza
+toccare il flat `email_autoresponders` (comparison/mock invariati); la categoria resta `MANUAL`
+e non dispatchabile fino a B4e-iii.
+
+Doppio gate `AUTORESPONDER_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled` (exact-match,
+disabled-by-default, validator fail-closed; il valore `mock` guida il writer mock separato).
+Coverage: `autoresponder_rules.py` 100%.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_email_autoresponder_contract.py \
+  --cov=app.modules.executions.autoresponder_rules --cov-report=term-missing
+```
+
 ## Writer cron mock-only con approvazione
 
 `worker.actors.cron_writer.cron_writer_actor` è governato da

@@ -52,7 +52,10 @@
 | `[/]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) (split → B4d-i/B4d-ii) | High | M | B4a |
 | `[x]` | `B4d-i` | [Filter evidence contract, fingerprint and rules](B4d-i-filter-contract.md) | High | M | B4a |
 | `[x]` | `B4d-ii` | [Additive-only filter writer engine](B4d-ii-filter-writer-engine.md) | High | M | B4d-i |
-| `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c-ii, B4d-ii |
+| `[/]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) (split → B4e-i/ii/iii) | High | L | B4a, B4b-ii, B4c-ii, B4d-ii |
+| `[x]` | `B4e-i` | [Autoresponder evidence contract and rules](B4e-i-autoresponder-contract.md) | High | M | B4a |
+| `[ ]` | `B4e-ii` | [Additive-only autoresponder writer engine](B4e-ii-autoresponder-writer-engine.md) | High | M | B4e-i |
+| `[ ]` | `B4e-iii` | [Email phases pipeline and dispatch integration](B4e-iii-email-dispatch-integration.md) (further split → iii-a/b/c) | High | L | B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
@@ -151,6 +154,42 @@
 > `B4e` dipende ora da `B4c-ii` (non più `B4c`); `B4c-i → B4c-ii`. L'ID `B4c` è ritirato per
 > l'implementazione e non riutilizzato.
 
+> `B4e` (Autoresponder writer + email dispatch integration), misurato a **~2465 righe su ~18 file**
+> (autoresponder contract/rules ~365 + engine ~200 + integrazione dispatch ~480 di produzione — refactor
+> `dispatch.py` mono-categoria in registry uniforme a 5 engine con interfacce eterogenee, store backup
+> durevole con tabella+migrazione Alembic, autorizzazione/fencing per-categoria e per-write, commit
+> atomico, semantica terminale — più ~1290 di test e ~130 di doc), oltre ~5× il budget 500 righe/PR.
+> Analisi (2026-07-12): `default_address` e `email_routing` **non esistono** come categoria in
+> comparison/plan/preview/readiness (solo contratti evidence per-dominio); l'autoresponder è `MANUAL`
+> (escluso dal preview); **non esiste uno store backup durevole** (`persist_backup` è solo callback nei
+> test) mentre i writer default-address/routing lo richiedono (backup-or-nothing); interfacce engine
+> non uniformi; l'actor A3 non riprende un attempt `running` (recovery resta a `C4`); nessuno stato
+> `partial` (`halted` modella il successo parziale). Su conferma dell'utente, suddiviso al confine
+> **contract/rules → engine → dispatch**:
+>
+> - [`B4e-i` — Autoresponder evidence contract and rules](B4e-i-autoresponder-contract.md) (dep: B4a):
+>   op tipizzate `list_auto_responders`/`get_auto_responder`/`add_auto_responder` (irraggiungibile),
+>   contratto `autoresponder_contract` versionato per-dominio, canonical fingerprint completo
+>   (from/subject/body/interval/is_html/charset/start/stop, sensibili redatti), regole additive pure,
+>   flag `AUTORESPONDER_WRITER_MODE`. Nessun engine/dispatch/write.
+> - [`B4e-ii` — Additive-only autoresponder writer engine](B4e-ii-autoresponder-writer-engine.md)
+>   (dep: B4e-i): nuovo `real_autoresponder_writer.py` (il mock resta intatto), riusa
+>   `execute_email_phase`, due fresh-read anti-upsert, verify per fingerprint, compensation redatta.
+>   Non cablato nel dispatch.
+> - [`B4e-iii` — Email phases pipeline and dispatch integration](B4e-iii-email-dispatch-integration.md)
+>   (dep: B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii): **task aggregatore**, già previsto per un ulteriore
+>   split (formalizzato dopo B4e-ii, con misurazione aggiornata):
+>   **B4e-iii-a** — Durable email backup store (tabella PostgreSQL + migrazione Alembic + persist reale);
+>   **B4e-iii-b** — Email categories pipeline integration (rende `default_address`/`email_routing`/
+>   autoresponder categorie evidence-bound esplicite in comparison/plan/preview/readiness — decisione
+>   AD1 confermata: estendere la pipeline, non lasciarle follow-up facoltativi);
+>   **B4e-iii-c** — Email runtime registry and dispatch (registry uniforme, gate/fencing per-categoria
+>   e per-write, commit atomico, semantica terminale). AD2 confermata: nessuna write compensabile
+>   default-address/routing è cablabile finché B4e-iii-a non è completo.
+>
+> `C3` dipende ora da `B4e-iii` (non più `B4e`); `B4a → B4e-i → B4e-ii → B4e-iii`. L'ID `B4e` è ritirato
+> per l'implementazione (resta come contenitore documentale dello split).
+
 > `B4d` (Email filters writer), misurato a **~1365 righe su ~7 file** (`filter_rules.py` op tipizzate +
 > canonical fingerprint ordinato + contratto 2-scope + regole pure ~300, `filter_writer.py` engine +
 > upsert-guard ~170, `config.py` ~15, `test_filter_rules.py` ~380, `test_real_filter_writer.py` ~450,
@@ -187,7 +226,7 @@
 
 | `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2b-ii, B3c-ii |
 | `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2b-ii, B6 |
-| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e |
+| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e-iii |
 | `[ ]` | `C4` | [Transfer checkpoint resume](C4-transfer-checkpoint-resume.md) | High | L | C1, C2, C3 |
 
 ### Wave D — Verification and recovery
@@ -218,9 +257,10 @@ graph LR
   B4a-->B4b-i-->B4b-ii
   B4a-->B4c-i-->B4c-ii
   B4a-->B4d-i-->B4d-ii
-  B4b-ii-->B4e
-  B4c-ii-->B4e
-  B4d-ii-->B4e
+  B4a-->B4e-i-->B4e-ii-->B4e-iii
+  B4b-ii-->B4e-iii
+  B4c-ii-->B4e-iii
+  B4d-ii-->B4e-iii
   B1-->B5
   B2a-->B5
   B3c-ii-->B5
@@ -233,7 +273,7 @@ graph LR
   B2b-ii-->C2
   B6-->C2
   B2b-ii-->C3
-  B4e-->C3
+  B4e-iii-->C3
   B4-->C3
   C1-->C4
   C2-->C4

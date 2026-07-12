@@ -38,13 +38,19 @@ def test_autoresponder_inventory_collects_full_detail_per_domain() -> None:
     assert responder["from"] == "Support"
     assert responder["interval"] == 8
     assert responder["_detail_status"] == "succeeded"
+    # Versioned per-domain contract (B4e-i): opaque fingerprint + redacted metadata only.
     assert data["coverage"]["autoresponder_contract"]["status"] == "succeeded"
-    contract_item = data["autoresponder_contract"]["items"][0]
-    assert contract_item == {"email": "away@example.test", "required_fields_present": ["body", "from", "interval", "subject"], "detail_status": "succeeded"}
-    assert "body" not in contract_item and "subject" not in contract_item and "from" not in contract_item
-    assert "Torno presto" not in str(data["autoresponder_contract"])
-    assert "Support" not in str(data["autoresponder_contract"])
-    assert "Assente" not in str(data["autoresponder_contract"])
+    contract = data["autoresponder_contract"]
+    assert contract["version"] == 1
+    record = contract["domains"][0]["records"][0]
+    assert record["address"] == "away@example.test"
+    assert record["fingerprint"].startswith("afpv1:")
+    assert record["completeness"] == "complete"
+    assert record["metadata"] == {"interval": 8, "is_html": 0, "charset": "utf-8", "start": None, "stop": None}
+    assert "body" not in record and "subject" not in record and "from" not in record
+    assert "Torno presto" not in str(contract)   # body never stored/serialised
+    assert "Support" not in str(contract)         # from never stored
+    assert "Assente" not in str(contract)         # subject never stored
 
 
 def test_autoresponder_detail_failure_is_partial_never_empty() -> None:
@@ -53,7 +59,9 @@ def test_autoresponder_detail_failure_is_partial_never_empty() -> None:
     assert coverage["status"] == "partial"
     assert coverage["items_count"] == 1
     assert data["email_autoresponders"][0]["_detail_status"] == "failed"
-    assert data["coverage"]["autoresponder_contract"]["status"] == "failed"
+    # The versioned contract is fail-closed: a detail failure is partial, never empty.
+    assert data["coverage"]["autoresponder_contract"]["status"] == "partial"
+    assert data["autoresponder_contract"]["domains"][0]["records"][0]["issue"] == "detail_unavailable"
 
 
 def test_autoresponder_comparison_includes_body_and_schedule() -> None:

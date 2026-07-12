@@ -120,6 +120,18 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("autoresponder_writer_mode")
+    @classmethod
+    def _validate_autoresponder_writer_mode(cls, value: str) -> str:
+        # Fail-closed (B4e-i): an unknown value for a flag that can authorise a real
+        # add_auto_responder (an UPSERT) is rejected at load time.
+        if value not in _DOMAIN_WRITER_MODES:
+            raise ValueError(
+                f"AUTORESPONDER_WRITER_MODE non valido: {value!r} "
+                f"(ammessi: {', '.join(sorted(_DOMAIN_WRITER_MODES))})"
+            )
+        return value
+
     @property
     def real_execution_enabled(self) -> bool:
         return self.real_execution_mode == "enabled"
@@ -159,6 +171,15 @@ class Settings(BaseSettings):
         # rules perform no write; the B4d-ii engine (and B4e) require this gate before
         # any real store_filter (an UPSERT reached only on a live-absent name).
         return self.real_execution_enabled and self.filter_writer_mode == "enabled"
+
+    @property
+    def autoresponder_real_writer_enabled(self) -> bool:
+        # Double gate for the additive-only autoresponder writer (B4e): reachable only
+        # when both the master real switch and AUTORESPONDER_WRITER_MODE are "enabled".
+        # The B4e-i rules perform no write; the B4e-ii engine (and B4e-iii dispatch)
+        # require this gate before any real add_auto_responder (an UPSERT reached only
+        # on a live-absent address). The value "mock" drives the separate mock writer.
+        return self.real_execution_enabled and self.autoresponder_writer_mode == "enabled"
 
 
 @lru_cache

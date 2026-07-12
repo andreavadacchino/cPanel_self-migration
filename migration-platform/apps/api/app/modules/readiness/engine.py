@@ -56,8 +56,8 @@ def _category_gaps(category: str, source_data: dict | None, destination_data: di
         return _domains_gaps(source_data, destination_data)
     if category == "email_forwarders" and _coverage(data, "forwarder_contract") == "succeeded" and _coverage(destination_data or {}, "forwarder_contract") == "succeeded":
         return [("eligible_for_real_design", "forwarder_contract_verified", "La fresh read per coppia completa è supportata da evidenze read-only correnti su entrambi gli endpoint.")]
-    if category == "email_autoresponders" and _coverage(data, "autoresponder_contract") == "succeeded" and _coverage(destination_data or {}, "autoresponder_contract") == "succeeded":
-        return [("eligible_for_real_design", "autoresponder_contract_verified", "Lista e dettaglio per indirizzo supportano il futuro controllo anti-upsert su entrambi gli endpoint.")]
+    if category == "email_autoresponders" and _coverage(data, "autoresponder_contract") in {"succeeded", "empty"} and _coverage(destination_data or {}, "autoresponder_contract") in {"succeeded", "empty"}:
+        return [("eligible_for_real_design", "autoresponder_contract_verified", "Lista e dettaglio per indirizzo (contratto versionato B4e-i) supportano il futuro controllo anti-upsert su entrambi gli endpoint.")]
     if category == "dns_records" and _coverage(data, "dns_contract") == "succeeded" and _coverage(destination_data or {}, "dns_contract") == "succeeded":
         return [("eligible_for_real_design", "dns_contract_verified", "Zone proprietarie, collisioni e strategia di fresh read sono censite su entrambi gli endpoint.")]
     if category == "databases" and _coverage(data, "database_contract") == "succeeded" and _coverage(destination_data or {}, "database_contract") == "succeeded":

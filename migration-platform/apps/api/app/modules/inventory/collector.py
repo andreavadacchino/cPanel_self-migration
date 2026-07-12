@@ -75,8 +75,10 @@ def collect(client: CpanelClient) -> tuple[dict, dict]:
     if coverage["dns_records"]["status"] in {"partial", "unavailable"}:
         warnings += 1
     _collect_autoresponders(client, data, coverage)
-    _assess_autoresponder_contract(data, coverage)
+    _collect_autoresponder_contract(client, data, coverage)
     if coverage["email_autoresponders"]["status"] in {"partial", "unavailable"}:
+        warnings += 1
+    if coverage["autoresponder_contract"]["status"] in {"partial", "ambiguous", "unavailable", "failed"}:
         warnings += 1
     _collect_email_filters(client, data, coverage)
     if coverage["email_filters"]["status"] in {"partial", "unavailable"}:
@@ -386,36 +388,53 @@ def _assess_forwarder_contract(data: dict, coverage: dict) -> None:
     }
 
 
-def _assess_autoresponder_contract(data: dict, coverage: dict) -> None:
-    method = "UAPI Email::list_auto_responders + get_auto_responder pre-write read contract"
-    items = data.get("email_autoresponders") if isinstance(data.get("email_autoresponders"), list) else []
-    evidence: list[dict] = []
-    invalid: list[str] = []
-    required = ("from", "subject", "body", "interval")
-    for item in items:
-        if not isinstance(item, dict):
-            invalid.append("[invalid-item]")
-            continue
-        address = str(item.get("email") or "").strip().lower()
-        present = sorted(field for field in required if item.get(field) is not None)
-        valid = address.count("@") == 1 and all(address.split("@")) and item.get("_detail_status") == "succeeded" and len(present) == len(required)
-        if not valid:
-            invalid.append(address or "[missing-address]")
-            continue
-        evidence.append({"email": address, "required_fields_present": present, "detail_status": "succeeded"})
-    readable = coverage.get("email_autoresponders", {}).get("status") in {"succeeded", "empty"}
-    succeeded = readable and not invalid
-    data["autoresponder_contract"] = {
-        "items": evidence,
-        "invalid_addresses": sorted(invalid),
-        "fresh_read_strategy": "list_then_get_detail_by_address",
-    }
+def _read_autoresponder_domain(client: CpanelClient, rules, domain: str):
+    """Read one domain: list_auto_responders, then get_auto_responder for each ENUMERATED
+    address only (never an existence probe). A list failure marks the domain non-readable; a
+    per-address detail failure degrades that address (domain → partial), never to empty."""
+    try:
+        payload = _items(client.execute("Email", "list_auto_responders", {"domain": domain}))
+    except Exception as exc:  # transport/application/malformed read
+        return rules.DomainInput(domain=domain, list_ok=False, list_error=type(exc).__name__)
+    listed = payload if isinstance(payload, list) else None
+    details: dict = {}
+    if isinstance(listed, list):
+        for entry in listed:
+            if not isinstance(entry, dict) or not isinstance(entry.get("email"), str) or not entry["email"].strip():
+                continue
+            address = entry["email"].strip()
+            if address in details:
+                continue
+            try:
+                detail = _items(client.execute("Email", "get_auto_responder", {"email": address}))
+                details[address] = {"ok": True, "payload": detail}
+            except Exception as exc:
+                details[address] = {"ok": False, "error": type(exc).__name__}
+    return rules.DomainInput(domain=domain, list_ok=True, list_payload=listed, details=details)
+
+
+def _collect_autoresponder_contract(client: CpanelClient, data: dict, coverage: dict) -> None:
+    """Persist the versioned per-domain autoresponder contract (task B4e-i).
+
+    One SafeRead ``list_auto_responders`` per domain, each enumerated address enriched by a
+    ``get_auto_responder`` detail. The pure ``autoresponder_rules`` module builds the
+    fail-closed envelope with a canonical fingerprint; only the opaque fingerprint and
+    non-sensitive metadata are stored — never ``from``/``subject``/``body``. A list failure
+    is ``failed``/``unavailable`` (never empty), a detail failure is ``partial``, a
+    template/mismatch or conflicting duplicate is ``ambiguous``. No write.
+    """
+    from app.modules.executions import autoresponder_rules as rules
+
+    inputs = [_read_autoresponder_domain(client, rules, domain) for domain in _domains(data.get("domains"))]
+    envelope = rules.build_contract(inputs)
+    data["autoresponder_contract"] = envelope
+    counted = envelope["status"] in {rules.SUCCEEDED, rules.PARTIAL, rules.AMBIGUOUS}
     coverage["autoresponder_contract"] = {
-        "status": "succeeded" if succeeded else "failed" if invalid else "unavailable",
-        "method": method,
+        "status": envelope["status"],
+        "method": rules.METHOD,
         "read_only_verified": True,
-        "items_count": len(evidence) if succeeded else None,
-        "message": None if succeeded else "Dettaglio autoresponder non idoneo al contratto anti-upsert." if invalid else "Inventario autoresponder non leggibile.",
+        "items_count": sum(len(d["records"]) for d in envelope["domains"]) if counted else None,
+        "message": None if envelope["status"] in {rules.SUCCEEDED, rules.EMPTY} else f"autoresponder: {envelope['status']}",
     }
 
 
