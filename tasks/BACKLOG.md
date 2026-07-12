@@ -43,10 +43,12 @@
 | `[x]` | `B3c-ii` | [Rich domain readiness integration](B3c-ii-domain-readiness-integration.md) | High | M | B3c-i |
 | `[/]` | `B4` | [Real email configuration writers](B4-email-config-writers.md) (split → B4a–B4e) | High | L | B1, B3c-ii |
 | `[x]` | `B4a` | [Email writer framework + forwarder](B4a-email-framework-forwarder.md) | High | M | B1, B3c-ii |
-| `[ ]` | `B4b` | [Default address / catch-all writer](B4b-default-address-writer.md) | High | M | B4a |
+| `[/]` | `B4b` | [Default address / catch-all writer](B4b-default-address-writer.md) (split → B4b-i/B4b-ii) | High | M | B4a |
+| `[x]` | `B4b-i` | [Default-address evidence contract and rules](B4b-i-default-address-contract.md) | High | M | B4a |
+| `[ ]` | `B4b-ii` | [Compensable default-address writer engine](B4b-ii-default-address-writer-engine.md) | High | M | B4b-i |
 | `[ ]` | `B4c` | [Email routing writer](B4c-email-routing-writer.md) | High | M | B4a |
 | `[ ]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) | High | M | B4a |
-| `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b, B4c, B4d |
+| `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b-ii, B4c, B4d |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
@@ -99,6 +101,29 @@
 > additivo). Le categorie downstream che dipendono dalla configurazione email completa (`C3`) puntano a
 > `B4e` (integrazione dispatch finale). L'ID `B4` è ritirato per l'implementazione e non riutilizzato.
 
+> `B4b` (Default address / catch-all writer), misurato a **~850 righe su 7 file** (contratto collector
+> ~70, `default_address_rules.py` ~150, `default_address_writer.py` ~140, seam compensabile in
+> `email_write.py` ~40, `config.py` ~20, ~400 test, ~30 doc), supera di ~1,7× il budget di 500 righe/PR
+> (il file count regge; le righe no). Nulla è riutilizzabile: non esistono collector, regole, mock,
+> categoria di plan o sezione comparison per `default_address`. Su conferma dell'utente è stato suddiviso
+> al confine **evidence/rules → writer engine** in due sotto-task ognuno ≤8 file / ≤500 righe:
+>
+> - [`B4b-i` — Default-address evidence contract and rules](B4b-i-default-address-contract.md) (dep: B4a):
+>   SafeRead `Email::list_default_address`, DestinationWrite tipizzata `Email::set_default_address`
+>   (costruibile/testabile ma irraggiungibile), contratto `default_address_contract` versionato,
+>   classificazione opaca pura (`fail`/`blackhole`/`account_default`/`address`/`other`) con username
+>   sorgente/destinazione legati all'evidenza, regole pure (`already_present`/`set`/`blocked`/`manual`,
+>   nessuna write), flag `DEFAULT_ADDRESS_WRITER_MODE` disabled-by-default. Nessuna modifica a
+>   `email_write.py`, nessun engine, nessun dispatch, nessuna chiamata reale.
+> - [`B4b-ii` — Compensable default-address writer engine](B4b-ii-default-address-writer-engine.md)
+>   (dep: B4b-i): seam `backup_of` in `email_write.py` (backup redatto persistito **prima** della write,
+>   backup-fallito→zero-write), `default_address_writer.py` compensabile (fresh-read→decide→backup→gated
+>   `set`→verify live→compensation) che riusa `execute_email_phase` senza duplicare il lifecycle. Non
+>   cablato nel dispatch (resta a B4e).
+>
+> `B4e` dipende ora da `B4b-ii` (non più `B4b`); `B4b-i → B4b-ii`. L'ID `B4b` è ritirato per
+> l'implementazione e non riutilizzato.
+
 > `B3c` (Rich domain inventory contract), misurato a ~580 righe / 8–9 file, è stato suddiviso in `B3c-i` (contratto domini nel collector: produce e persiste l'envelope ricco `domains_data` fail-closed) e `B3c-ii` (integrazione readiness/gate + prova end-to-end che B3b-ii consuma i record ricchi); vedi [B3c-rich-domain-inventory.md](B3c-rich-domain-inventory.md). L'ID `B3c` è ritirato e non riutilizzato per implementazione. **B3c-ii chiude la limitazione residua (a) di B3b-ii** (inventario privo dell'envelope ricco → passi dominio manual/pending); la limitazione crash/recovery di B3b-ii resta assegnata a **C4**. Le categorie downstream (`B4`/`B5`/`B6`/`B7`/`C1`) dipendono ora da `B3c-ii`.
 
 ### Wave C — Content transfer
@@ -133,10 +158,10 @@ graph LR
   B1-->B3a-->B3b-i-->B3b-ii-->B3c-i-->B3c-ii
   B1-->B4a
   B3c-ii-->B4a
-  B4a-->B4b
+  B4a-->B4b-i-->B4b-ii
   B4a-->B4c
   B4a-->B4d
-  B4b-->B4e
+  B4b-ii-->B4e
   B4c-->B4e
   B4d-->B4e
   B1-->B5

@@ -81,6 +81,9 @@ def collect(client: CpanelClient) -> tuple[dict, dict]:
     _collect_email_filters(client, data, coverage)
     if coverage["email_filters"]["status"] in {"partial", "unavailable"}:
         warnings += 1
+    _collect_default_address(client, data, coverage)
+    if coverage["default_address_contract"]["status"] in {"partial", "ambiguous", "unavailable", "failed"}:
+        warnings += 1
     _collect_cron(client, data, coverage)
     if coverage["cron_jobs"]["status"] in {"unsupported", "unavailable"}:
         warnings += 1
@@ -554,6 +557,43 @@ def _collect_domains_contract(client: CpanelClient, data: dict, coverage: dict) 
     coverage["domains_contract"] = {
         "status": envelope["status"],
         "method": domain_contract.METHOD,
+        "read_only_verified": True,
+        "items_count": len(envelope["records"]) if counted else None,
+        "message": envelope["message"],
+    }
+
+
+def _collect_default_address(client: CpanelClient, data: dict, coverage: dict) -> None:
+    """Persist the versioned, fail-closed default (catch-all) address contract
+    (task B4b-i).
+
+    One account-level SafeRead of ``Email::list_default_address`` (the B4b-i op),
+    reconciled with the verified domain enumeration by the pure
+    ``default_address_rules`` module. A failed/malformed read is recorded as
+    ``failed``/``unavailable`` — never an empty catch-all set — and the values are
+    kept byte-faithful. No write is ever performed here.
+    """
+    from app.modules.executions import default_address_rules as rules
+
+    account = getattr(getattr(client, "credentials", None), "username", None)
+    enumerated = _domains(data.get("domains"))
+    domains_readable = coverage.get("domains", {}).get("status") in {"succeeded", "empty"}
+    payload: object = None
+    read_error: str | None = None
+    if domains_readable:
+        try:
+            payload = client.read(rules.list_default_address_op()).data
+        except Exception as exc:  # transport/application/malformed read
+            read_error = type(exc).__name__
+    envelope = rules.build_contract(
+        payload, enumerated, account,
+        read_ok=domains_readable and read_error is None, read_error=read_error,
+    )
+    data["default_address_contract"] = envelope
+    counted = envelope["status"] in {rules.SUCCEEDED, rules.PARTIAL, rules.AMBIGUOUS}
+    coverage["default_address_contract"] = {
+        "status": envelope["status"],
+        "method": rules.METHOD,
         "read_only_verified": True,
         "items_count": len(envelope["records"]) if counted else None,
         "message": envelope["message"],

@@ -992,6 +992,41 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_forwarde
   --cov=app.modules.executions.email_write --cov=app.modules.executions.forwarder_rules --cov-branch
 ```
 
+### Contratto evidence default-address (catch-all) e regole pure (B4b-i)
+
+Il catch-all è *compensabile, non additivo*: `Email::set_default_address`
+**sovrascrive** il valore corrente. B4b-i costruisce solo il fondamento decisionale
+— nessuna scrittura — mentre l'engine writer compensabile è B4b-ii (non cablato nel
+dispatch fino a B4e).
+
+`default_address_rules.py` (puro) tiene ogni valore **byte-faithful** (il default
+cPanel è il letterale `:fail: No Such User Here`, confrontato come stringa opaca) e
+lo classifica senza mai mutarlo: `fail` / `blackhole` / `account_default` (== username
+account, legato all'evidenza) / `address` (forward semplice, parser esplicito) /
+`other` (pipe/programma/path/quoting inatteso — mai indovinato). Espone le op tipizzate
+SafeRead `list_default_address_op()` e DestinationWrite `set_default_address_op()`
+(costruibili e testabili ma irraggiungibili dal runtime: la write resta disabilitata).
+
+Il collector persiste `default_address_contract`, un envelope **versionato e
+fail-closed**: una lettura fallita è `failed`/`unavailable` (mai `empty`), un dominio
+verificato senza record è `partial`, duplicati conflittuali o record inattesi sono
+`ambiguous`, e `is_write_eligible` richiede versione corrente **e** stato `succeeded`
+(mai la sola stringa di stato → snapshot legacy leggibili ma non eleggibili). La
+matrice decisionale pura: raw equivalenti → `already_present`; destinazione fresca
+(fail/blackhole/account_default) con sorgente round-trippabile → `set`; destinazione
+customizzata → `blocked` (mai overwrite); dominio assente sulla destinazione →
+`blocked`; sorgente `other`/mancante o evidenza illeggibile/ambigua → `manual`.
+
+Doppio gate `DEFAULT_ADDRESS_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled`
+(exact-match, disabled-by-default, validator fail-closed). Coverage:
+`default_address_rules.py` 100%.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_default_address_contract.py \
+  --cov=app.modules.executions.default_address_rules --cov-report=term-missing
+```
+
 ## Writer cron mock-only con approvazione
 
 `worker.actors.cron_writer.cron_writer_actor` è governato da
@@ -1193,6 +1228,7 @@ reale nel worker (B3b-ii)»); per `DOMAIN_WRITER_MODE` sono ammessi solo
 | Database MySQL | `DATABASE_WRITER_MODE` | `disabled` |
 | Utenti e grant MySQL | `MYSQL_USER_WRITER_MODE` | `disabled` |
 | Forwarder | `FORWARDER_WRITER_MODE` | `disabled` |
+| Default address (catch-all) | `DEFAULT_ADDRESS_WRITER_MODE` | `disabled` |
 | Cron | `CRON_WRITER_MODE` | `disabled` |
 | FTP | `FTP_WRITER_MODE` | `disabled` |
 | Mailing list | `MAILING_LIST_WRITER_MODE` | `disabled` |

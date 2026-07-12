@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     database_writer_mode: str = "disabled"
     mysql_user_writer_mode: str = "disabled"
     forwarder_writer_mode: str = "disabled"
+    default_address_writer_mode: str = "disabled"
     cron_writer_mode: str = "disabled"
     ftp_writer_mode: str = "disabled"
     mailing_list_writer_mode: str = "disabled"
@@ -81,6 +82,18 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("default_address_writer_mode")
+    @classmethod
+    def _validate_default_address_writer_mode(cls, value: str) -> str:
+        # Same fail-closed rule (B4b-i): an unknown value for a flag that can
+        # authorise a real catch-all overwrite is rejected at load time.
+        if value not in _DOMAIN_WRITER_MODES:
+            raise ValueError(
+                f"DEFAULT_ADDRESS_WRITER_MODE non valido: {value!r} "
+                f"(ammessi: {', '.join(sorted(_DOMAIN_WRITER_MODES))})"
+            )
+        return value
+
     @property
     def real_execution_enabled(self) -> bool:
         return self.real_execution_mode == "enabled"
@@ -97,6 +110,14 @@ class Settings(BaseSettings):
         # Double gate for the real additive forwarder writer (B4a): reachable only
         # when both the master real switch and FORWARDER_WRITER_MODE are "enabled".
         return self.real_execution_enabled and self.forwarder_writer_mode == "enabled"
+
+    @property
+    def default_address_real_writer_enabled(self) -> bool:
+        # Double gate for the compensable default-address writer (B4b): reachable
+        # only when both the master real switch and DEFAULT_ADDRESS_WRITER_MODE are
+        # "enabled". The B4b-i rules perform no write; this gate is the seam the
+        # B4b-ii engine (and B4e dispatch) require before any real catch-all set.
+        return self.real_execution_enabled and self.default_address_writer_mode == "enabled"
 
 
 @lru_cache
