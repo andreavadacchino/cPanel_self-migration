@@ -9,6 +9,12 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import ConflictError
 from app.modules.endpoints.models import Endpoint
+from app.modules.executions.email_write import (
+    EmailItem,
+    EmailPhaseResult,
+    execute_email_phase,
+)
+from app.modules.executions.forwarder_rules import decide_forwarder
 from app.modules.executions.models import ExecutionEvent, ExecutionRun
 from app.modules.executions.phase import PhaseOutcome
 from app.modules.inventory.models import InventorySnapshot
@@ -132,3 +138,61 @@ def execute(db: Session, run_id: int) -> ExecutionRun:
         run.error = outcome.reason
     db.commit(); db.refresh(run)
     return run
+
+
+# -- real additive forwarder phase (task B4a; unreachable until B4e wires it) --
+#
+# The real phase reuses the shared email-write engine and the pure forwarder
+# rules. It is effectful only through an injected ``EmailGateway`` (destination
+# only), so tests drive it with a deterministic fake and no real cPanel is
+# contacted. It is not registered in the runtime dispatch here; B4e wires it under
+# the double gate ``FORWARDER_WRITER_MODE=enabled`` + ``REAL_EXECUTION_MODE``.
+
+_ADD_FORWARDER = {"api": "UAPI", "module": "Email", "function": "add_forwarder"}
+
+
+def parse_forwarder_step(step_id: str) -> tuple[str, str]:
+    """Parse ``email_forwarders:<source> -> <destination>`` into a lowercase pair.
+
+    An unparseable step degrades to an empty pair so the decision layer blocks it
+    (``forwarder_source_invalid``) instead of crashing the whole phase.
+    """
+    raw = step_id.split(":", 1)[1] if ":" in step_id else step_id
+    try:
+        return _parse_pair(raw)
+    except ConflictError:
+        return "", ""
+
+
+def resolve_forwarder_items(step_ids: list[str]) -> list[EmailItem]:
+    items: list[EmailItem] = []
+    for step_id in step_ids:
+        source, destination = parse_forwarder_step(step_id)
+        items.append(EmailItem(
+            step_id=step_id,
+            label=f"{source}->{destination}" if source else "[invalid-forwarder]",
+            payload={"source": source, "destination": destination},
+        ))
+    return items
+
+
+def plan_forwarder_call(item: EmailItem) -> dict:
+    # Redacted planned call: routing config only, never a credential.
+    return {**_ADD_FORWARDER, "arguments": {"pair": item.label}}
+
+
+def compensation_forwarder(item: EmailItem) -> dict:
+    # Additive create: reversal is a controlled manual removal only.
+    return {"action": "add_forwarder", "item": item.label, "reverse": "manual_removal_only"}
+
+
+def run_forwarder_phase(
+    run: ExecutionRun, step_ids: list[str], gateway, *, before_write=None
+) -> EmailPhaseResult:
+    """Run the additive forwarder phase over the given preview step ids."""
+    items = resolve_forwarder_items(step_ids)
+    return execute_email_phase(
+        run, items, gateway, phase="forwarder_write",
+        decide=decide_forwarder, plan_call=plan_forwarder_call,
+        compensation_of=compensation_forwarder, before_write=before_write,
+    )

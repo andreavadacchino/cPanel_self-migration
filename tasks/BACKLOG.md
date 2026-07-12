@@ -41,7 +41,12 @@
 | `[/]` | `B3c` | [Rich domain inventory contract](B3c-rich-domain-inventory.md) (split → B3c-i/B3c-ii) | High | L | B3b-ii |
 | `[x]` | `B3c-i` | [Domain inventory contract (collector)](B3c-i-domain-inventory-contract.md) | High | M | B3b-ii |
 | `[x]` | `B3c-ii` | [Rich domain readiness integration](B3c-ii-domain-readiness-integration.md) | High | M | B3c-i |
-| `[ ]` | `B4` | [Real email configuration writers](B4-email-config-writers.md) | High | L | B1, B3c-ii |
+| `[/]` | `B4` | [Real email configuration writers](B4-email-config-writers.md) (split → B4a–B4e) | High | L | B1, B3c-ii |
+| `[x]` | `B4a` | [Email writer framework + forwarder](B4a-email-framework-forwarder.md) | High | M | B1, B3c-ii |
+| `[ ]` | `B4b` | [Default address / catch-all writer](B4b-default-address-writer.md) | High | M | B4a |
+| `[ ]` | `B4c` | [Email routing writer](B4c-email-routing-writer.md) | High | M | B4a |
+| `[ ]` | `B4d` | [Email filters writer](B4d-email-filters-writer.md) | High | M | B4a |
+| `[ ]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) | High | M | B4a, B4b, B4c, B4d |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
@@ -75,13 +80,32 @@
 > dipendenze di trasferimento contenuti (`C1`/`C2`/`C3`) puntano a `B2b-ii` (streaming end-to-end).
 > L'ID `B2b` è ritirato per l'implementazione.
 
+> `B4` (Real email configuration writers), misurato a **~3200–3800 righe su ~25–30 file** (5 categorie
+> con semantiche di sicurezza distinte — forwarder additivo/dedup, default-address che **sovrascrive** il
+> catch-all, autoresponder/filtri **UPSERT**, routing MX; 3 categorie prive di evidence/flag), oltre i
+> guardrail 8 file / 500 righe di ~7×. Anche lo split a 3 suggerito dal task resta ~1000–1530 righe per
+> sotto-task. Su conferma dell'utente è stato suddiviso **per-capability** in 5 sotto-task, ognuno ≈ una
+> categoria testabile ≤~700 righe (aderente al precedente B3b), dietro un flag reale exact-match
+> disabled-by-default e non cablato/raggiungibile finché il rispettivo wiring sicuro non è completo:
+>
+> - [`B4a` — Email writer framework + forwarder](B4a-email-framework-forwarder.md) (dep: B1, B3c-ii)
+> - [`B4b` — Default address / catch-all writer](B4b-default-address-writer.md) (dep: B4a)
+> - [`B4c` — Email routing writer](B4c-email-routing-writer.md) (dep: B4a)
+> - [`B4d` — Email filters writer](B4d-email-filters-writer.md) (dep: B4a)
+> - [`B4e` — Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) (dep: B4a–B4d)
+>
+> B4a stabilisce il framework condiviso (gateway per-item fresh-read→decide→gated-write→verify-live→
+> compensation redatta, eventi evidence, flag) validandolo con la categoria più semplice (forwarder
+> additivo). Le categorie downstream che dipendono dalla configurazione email completa (`C3`) puntano a
+> `B4e` (integrazione dispatch finale). L'ID `B4` è ritirato per l'implementazione e non riutilizzato.
+
 > `B3c` (Rich domain inventory contract), misurato a ~580 righe / 8–9 file, è stato suddiviso in `B3c-i` (contratto domini nel collector: produce e persiste l'envelope ricco `domains_data` fail-closed) e `B3c-ii` (integrazione readiness/gate + prova end-to-end che B3b-ii consuma i record ricchi); vedi [B3c-rich-domain-inventory.md](B3c-rich-domain-inventory.md). L'ID `B3c` è ritirato e non riutilizzato per implementazione. **B3c-ii chiude la limitazione residua (a) di B3b-ii** (inventario privo dell'envelope ricco → passi dominio manual/pending); la limitazione crash/recovery di B3b-ii resta assegnata a **C4**. Le categorie downstream (`B4`/`B5`/`B6`/`B7`/`C1`) dipendono ora da `B3c-ii`.
 
 ### Wave C — Content transfer
 
 | `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2b-ii, B3c-ii |
 | `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2b-ii, B6 |
-| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4 |
+| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e |
 | `[ ]` | `C4` | [Transfer checkpoint resume](C4-transfer-checkpoint-resume.md) | High | L | C1, C2, C3 |
 
 ### Wave D — Verification and recovery
@@ -107,8 +131,14 @@ graph LR
   A5-->B1
   A5-->B2a-->B2b-i-->B2b-ii
   B1-->B3a-->B3b-i-->B3b-ii-->B3c-i-->B3c-ii
-  B1-->B4
-  B3c-ii-->B4
+  B1-->B4a
+  B3c-ii-->B4a
+  B4a-->B4b
+  B4a-->B4c
+  B4a-->B4d
+  B4b-->B4e
+  B4c-->B4e
+  B4d-->B4e
   B1-->B5
   B2a-->B5
   B3c-ii-->B5
@@ -121,6 +151,7 @@ graph LR
   B2b-ii-->C2
   B6-->C2
   B2b-ii-->C3
+  B4e-->C3
   B4-->C3
   C1-->C4
   C2-->C4

@@ -1,13 +1,36 @@
-# Task B4: Real email configuration writers
+# Task B4: Real email configuration writers — SPLIT (retired)
 
 | Field | Value |
 |---|---|
-| **ID** | `B4` |
-| **Status** | `[ ]` |
+| **ID** | `B4` (ritirato) |
+| **Status** | `[/]` split — non completare con questo ID |
 | **Priority** | High |
 | **Size** | L |
-| **Dependencies** | B1, B3 |
-| **Branch** | `feat/b4-email-config-writers` |
+| **Dependencies** | B1, B3c-ii |
+| **Branch** | `feat/b4-email-config-writers` (non usare) |
+
+> **Split.** L'implementazione completa di B4 è stata misurata a **~3200–3800 righe
+> su ~25–30 file** (5 categorie con semantiche di sicurezza distinte: forwarder
+> additivo/dedup, default-address che **sovrascrive** il catch-all, autoresponder e
+> filtri **UPSERT**, routing MX; 3 categorie — routing, default-address, filtri —
+> prive di evidence/flag), ~7× oltre i guardrail 8 file / 500 righe. Anche lo split a
+> 3 suggerito dal task originale (B4a/B4b/B4c) resta ~1000–1530 righe per sotto-task.
+> Su conferma esplicita dell'utente è stato suddiviso **per-capability** in 5
+> sotto-task (ognuno ≈ una categoria testabile ≤~700 righe, dietro un flag reale
+> exact-match disabled-by-default, non cablato finché il rispettivo wiring sicuro non
+> è completo):
+>
+> - [`B4a` — Email writer framework + forwarder](B4a-email-framework-forwarder.md) (dep: B1, B3c-ii)
+> - [`B4b` — Default address / catch-all writer](B4b-default-address-writer.md) (dep: B4a)
+> - [`B4c` — Email routing writer](B4c-email-routing-writer.md) (dep: B4a)
+> - [`B4d` — Email filters writer](B4d-email-filters-writer.md) (dep: B4a)
+> - [`B4e` — Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) (dep: B4a–B4d)
+>
+> `C3` (Mailbox content transfer) dipende ora da `B4e` (integrazione dispatch email
+> finale). L'ID `B4` è ritirato e non riutilizzato. Il testo storico sottostante
+> resta come riferimento.
+
+---
 
 **Goal:** Implement forwarder, autoresponder, routing, default-address, and filter writers with fresh reads, redacted payload handling, and verification.
 

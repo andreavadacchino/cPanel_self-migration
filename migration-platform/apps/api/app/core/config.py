@@ -69,6 +69,18 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("forwarder_writer_mode")
+    @classmethod
+    def _validate_forwarder_writer_mode(cls, value: str) -> str:
+        # Same fail-closed rule as the domain flag: an unknown value for a flag that
+        # can authorise a real email mutation is rejected at load time (B4a).
+        if value not in _DOMAIN_WRITER_MODES:
+            raise ValueError(
+                f"FORWARDER_WRITER_MODE non valido: {value!r} "
+                f"(ammessi: {', '.join(sorted(_DOMAIN_WRITER_MODES))})"
+            )
+        return value
+
     @property
     def real_execution_enabled(self) -> bool:
         return self.real_execution_mode == "enabled"
@@ -79,6 +91,12 @@ class Settings(BaseSettings):
         # BOTH the master real switch and the domain-writer switch are enabled.
         # Exact-match on each value keeps every other combination fail-closed.
         return self.real_execution_enabled and self.domain_writer_mode == "enabled"
+
+    @property
+    def forwarder_real_writer_enabled(self) -> bool:
+        # Double gate for the real additive forwarder writer (B4a): reachable only
+        # when both the master real switch and FORWARDER_WRITER_MODE are "enabled".
+        return self.real_execution_enabled and self.forwarder_writer_mode == "enabled"
 
 
 @lru_cache

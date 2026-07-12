@@ -945,6 +945,53 @@ cd apps/api
 PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_forwarder_writer.py
 ```
 
+### Framework writer email reale + forwarder additivo (B4a)
+
+`app/modules/executions/email_write.py` introduce il **framework condiviso** per i
+writer email reali che tutte le categorie (forwarder, default-address, routing,
+filtri, autoresponder) riusano, così la forma di sicurezza è scritta e testata una
+sola volta. Per ogni elemento il motore `execute_email_phase`:
+
+- fa una **fresh-read live** della destinazione e applica una funzione di decisione
+  di categoria;
+- `already_present` (match) → no-op verificato (nessuna scrittura);
+- `create` → **unico** percorso che raggiunge una `DestinationWrite`; **mai
+  ritentato**, e un esito ambiguo/timeout è risolto da una fresh-read, non da una
+  seconda scrittura cieca;
+- `blocked` (different / only-on-destination / non esprimibile) → fail closed;
+- `manual` (illeggibile / parziale / non risolvibile) → pending, mai scrittura
+  silenziosa;
+- verifica post-write rileggendo live e fidandosi solo se la decisione torna
+  `already_present`.
+
+Il motore non ha concern di runtime: appende eventi di audit **redatti** su
+`run.events` (solo una label sicura, mai token/password/body/regole) e restituisce
+un risultato aggregato, senza toccare sessione DB, macchina a stati o gate
+lease/fencing. Il `EmailGateway` espone solo operazioni di destinazione (nessuna
+primitiva di scrittura sorgente): la sorgente resta strutturalmente read-only. Un
+hook `before_write` è il seam che B4e userà per rivalidare gate + fencing
+immediatamente prima di ogni mutazione.
+
+La prima categoria reale è il **forwarder** additivo (`forwarder_rules.py` +
+`forwarder_writer.run_forwarder_phase`): chiave composta `sorgente→destinazione`,
+create solo se la coppia esatta è assente, una coppia con destinazione diversa
+dalla stessa sorgente è **additiva** (crea la nuova, non sostituisce l'esistente),
+forme non esprimibili come `add_forwarder` (pipe/programma/`:fail:`) o evidenza live
+ambigua/illeggibile falliscono chiuse. Dietro il doppio gate
+`FORWARDER_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled` (exact-match,
+**disabilitato per default**, valore ignoto rifiutato allo startup) e **non ancora
+cablato** nel dispatch runtime — `IMPLEMENTED_REAL_CATEGORIES` non include categorie
+email finché B4e non le collega, quindi un run di soli passi email si ferma
+(`halted`) senza mutazioni.
+
+Test mirato (coverage): `email_write.py` 99%, `forwarder_rules.py` 100%.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_forwarder_writer.py \
+  --cov=app.modules.executions.email_write --cov=app.modules.executions.forwarder_rules --cov-branch
+```
+
 ## Writer cron mock-only con approvazione
 
 `worker.actors.cron_writer.cron_writer_actor` è governato da
