@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     cors_origins: str = "http://localhost:5173"
     credential_encryption_key: str | None = None
+    # Dedicated key for the durable email pre-write backup store (task B4e-iii-a). It is
+    # deliberately SEPARATE from the credential key (no silent fallback) and is required only
+    # when a backup is persisted or loaded; its absence fails closed before any write. Losing
+    # this key makes the encrypted backups — and therefore rollback — unrecoverable.
+    email_backup_encryption_key: str | None = None
     preflight_inline: bool = False
     # Hard safety switch. Only "mock" is implemented; "real" is rejected.
     domain_writer_mode: str = "disabled"

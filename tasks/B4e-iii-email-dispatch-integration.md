@@ -3,11 +3,28 @@
 | Field | Value |
 |---|---|
 | **ID** | `B4e-iii` |
-| **Status** | `[ ]` |
+| **Status** | `[/]` (retired — split into iii-a/b/c) |
 | **Priority** | High |
 | **Size** | L |
 | **Dependencies** | B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | **Branch** | `feat/b4e-iii-email-dispatch-integration` |
+
+> **Split record (2026-07-12, formalized after B4e-ii).** This aggregator is retired `[/]` and
+> replaced by three effective sub-tasks, each ≤8 files / ≤500 lines:
+>
+> - **B4e-iii-a — Durable email backup store** (dep: B4b-ii, B4c-ii) →
+>   [B4e-iii-a-durable-email-backup-store.md](B4e-iii-a-durable-email-backup-store.md): makes the
+>   pre-write backups durable (encrypted PostgreSQL store + Alembic migration + service). AD2.
+> - **B4e-iii-b — Email categories pipeline integration** (dep: B4e-i, B4d-i, B4b-i, B4c-i) →
+>   [B4e-iii-b-email-categories-pipeline.md](B4e-iii-b-email-categories-pipeline.md): exposes
+>   `default_address`/`email_routing`/autoresponder as explicit evidence-bound categories/steps. AD1.
+> - **B4e-iii-c — Email runtime registry and dispatch** (dep: B4e-iii-a, B4e-iii-b, B4e-ii, B4a,
+>   B4b-ii, B4c-ii, B4d-ii) →
+>   [B4e-iii-c-email-runtime-registry-dispatch.md](B4e-iii-c-email-runtime-registry-dispatch.md):
+>   wires the engines to the real worker.
+>
+> `C3` now depends on **B4e-iii-c**. The requirements below are preserved as the umbrella spec the
+> three sub-tasks jointly satisfy; do not implement against this ID directly.
 
 **Origin:** third sub-task of the scope split of `B4e` (see
 [B4e-autoresponder-dispatch.md](B4e-autoresponder-dispatch.md), split record). **Aggregator:**

@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.errors import ConflictError
@@ -145,6 +145,73 @@ class ExecutionAttempt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     run: Mapped[ExecutionRun] = relationship(back_populates="attempts")
+
+
+class EmailBackupStatus(str, enum.Enum):
+    """Lifecycle of a durable pre-write email backup (task B4e-iii-a).
+
+    Only ``active`` is produced by B4e-iii-a; ``restored``/``superseded``/``invalidated`` are
+    the representable transitions the future wiring (B4e-iii-c) and rollback (D3) will drive.
+    """
+
+    active = "active"
+    restored = "restored"
+    superseded = "superseded"
+    invalidated = "invalidated"
+
+
+class EmailWriteBackup(Base):
+    """Durable, encrypted pre-write backup for the compensable email writers (task B4e-iii-a).
+
+    The compensable default-address (B4b-ii) and routing (B4c-ii) writers must persist the
+    previous live value *before* they overwrite it (backup-or-nothing). This table is that
+    durable store: the protected previous value lives ONLY in ``encrypted_payload`` (Fernet
+    ciphertext under the dedicated ``EMAIL_BACKUP_ENCRYPTION_KEY``); every other column is
+    non-sensitive. ``item_key`` is a redacted stable hash (never a raw address/domain);
+    ``evidence_fingerprint``/``payload_fingerprint`` are opaque hashes; ``backup_ref`` is the
+    opaque non-sequential reference the engines carry (never an integer id, never business data).
+
+    FK rationale: a backup is meaningless without its run/attempt, so those cascade; the
+    destination endpoint is ``RESTRICT`` so a rollback target cannot be deleted while a backup
+    references it; ``migration_id`` cascades with the top-level lifecycle.
+    """
+
+    __tablename__ = "email_write_backups"
+    __table_args__ = (
+        # One backup per (attempt, category, logical item) — a second, divergent evidence for
+        # the same item is a conflict, never a silent second row; the evidence fingerprint is
+        # part of the exact-idempotency anchor.
+        UniqueConstraint("execution_attempt_id", "category", "item_key", "evidence_fingerprint",
+                         name="uq_email_backup_idempotency"),
+        Index("ix_email_backup_run", "execution_run_id"),
+        Index("ix_email_backup_attempt", "execution_attempt_id"),
+        Index("ix_email_backup_destination", "destination_endpoint_id"),
+        Index("ix_email_backup_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    backup_ref: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    migration_id: Mapped[int] = mapped_column(ForeignKey("migrations.id", ondelete="CASCADE"), nullable=False)
+    execution_run_id: Mapped[int] = mapped_column(ForeignKey("execution_runs.id", ondelete="CASCADE"), nullable=False)
+    execution_attempt_id: Mapped[int] = mapped_column(ForeignKey("execution_attempts.id", ondelete="CASCADE"), nullable=False)
+    destination_endpoint_id: Mapped[int] = mapped_column(ForeignKey("endpoints.id", ondelete="RESTRICT"), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    item_key: Mapped[str] = mapped_column(String(128), nullable=False)          # redacted stable hash
+    evidence_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    encrypted_payload: Mapped[str] = mapped_column(Text, nullable=False)        # Fernet ciphertext
+    payload_schema_version: Mapped[int] = mapped_column(nullable=False)
+    key_version: Mapped[int] = mapped_column(nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(16), default=EmailBackupStatus.active.value, nullable=False)
+    requested_by: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    restored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:  # never expose ciphertext or any protected value
+        return (f"EmailWriteBackup(id={self.id!r}, backup_ref={self.backup_ref!r}, "
+                f"category={self.category!r}, status={self.status!r})")
 
 
 class ExecutionEvent(Base):

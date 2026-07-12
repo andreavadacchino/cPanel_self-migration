@@ -1266,6 +1266,54 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_autoresp
   --cov=app.modules.executions.real_autoresponder_writer --cov-report=term-missing
 ```
 
+### Store durevole cifrato dei backup pre-write (B4e-iii-a)
+
+I writer compensabili default-address (B4b-ii) e routing (B4c-ii) devono persistere il valore
+live **precedente** *prima* di sovrascriverlo (backup-or-nothing). `email_backup.py` fornisce lo
+store durevole: tabella `email_write_backups` (migrazione Alembic `0010`) + servizio interno
+tipizzato **senza route HTTP** e **senza API di query/list**.
+
+**Chiave di cifratura dedicata.** Il payload protetto è cifrato con `EMAIL_BACKUP_ENCRYPTION_KEY`
+(Fernet), **separata** da `CREDENTIAL_ENCRYPTION_KEY` — **nessun fallback silenzioso**. La chiave
+serve solo quando si persiste o si legge un backup e la sua assenza fallisce **fail-closed prima
+della write**. Generazione:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Formato/versione espliciti (`ebk1:` + `key_version`), serializzazione JSON deterministica che
+preserva null/stringhe/numeri/raw; il ciphertext non entra mai in API/log/eventi/`repr`; un
+errore di decrypt diventa un errore tipizzato redatto. **La perdita della chiave rende
+impossibile il rollback.** La key rotation non è ancora implementata (`key_version` conservato).
+
+**Servizio.** `persist_email_backup(db, run_id, attempt_id, category, item_key,
+evidence_fingerprint, payload, fencing_token) -> backup_ref` esegue, fail-closed in ordine:
+chiave presente → categoria ammessa (solo `default_address`/`email_routing`) → rilettura e
+binding run+attempt → fase reale attiva → destinazione valida → **fencing corrente (A4)** →
+schema/size del payload → idempotenza → cifra → commit. Il chiamante riceve il `backup_ref`
+opaco (UUID, mai l'id sequenziale) **solo dopo un commit riuscito**; l'operazione è idempotente
+(stessa chiave logica + evidence + payload → stesso ref) e non sovrascrive mai un backup
+divergente (conflict). `item_key` è una **hash redatta** (mai address/dominio in chiaro).
+`load_email_backup(db, backup_ref, expected_run_id, expected_category)` valida
+ownership/run/categoria, richiede stato `active`, decifra fail-closed, non enumera e non muta.
+
+**Atomicità (contratto per B4e-iii-c).** Il backup è committato **prima** della write remota; se
+il commit fallisce il writer non scrive. Write remota e PostgreSQL non sono un'unica transazione
+distribuita: tra commit del backup e write può restare un backup `active` **inutilizzato**
+(accettabile e distinguibile); il backup non viene marcato «usato» finché B4e-iii-c non collega
+il writer; nessuna transazione DB resta aperta durante la futura chiamata remota.
+
+**Nessun wiring attivo.** B4e-iii-a introduce solo lo store: nessun writer o dispatch è cablato
+qui. Le migrazioni hanno **un solo head** (`0010_email_write_backups`); `alembic upgrade head` e
+`alembic downgrade 0009_account_leases` sono verificati.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_email_backup_store.py \
+  --cov=app.modules.executions.email_backup --cov-report=term-missing
+```
+
 ## Writer cron mock-only con approvazione
 
 `worker.actors.cron_writer.cron_writer_actor` è governato da

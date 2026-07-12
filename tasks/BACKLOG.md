@@ -55,7 +55,10 @@
 | `[/]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) (split → B4e-i/ii/iii) | High | L | B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[x]` | `B4e-i` | [Autoresponder evidence contract and rules](B4e-i-autoresponder-contract.md) | High | M | B4a |
 | `[x]` | `B4e-ii` | [Additive-only autoresponder writer engine](B4e-ii-autoresponder-writer-engine.md) | High | M | B4e-i |
-| `[ ]` | `B4e-iii` | [Email phases pipeline and dispatch integration](B4e-iii-email-dispatch-integration.md) (further split → iii-a/b/c) | High | L | B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
+| `[/]` | `B4e-iii` | [Email phases pipeline and dispatch integration](B4e-iii-email-dispatch-integration.md) (split → iii-a/b/c) | High | L | B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
+| `[x]` | `B4e-iii-a` | [Durable email backup store](B4e-iii-a-durable-email-backup-store.md) | High | M | B4b-ii, B4c-ii |
+| `[ ]` | `B4e-iii-b` | [Email categories pipeline integration](B4e-iii-b-email-categories-pipeline.md) | High | M | B4e-i, B4d-i, B4b-i, B4c-i |
+| `[ ]` | `B4e-iii-c` | [Email runtime registry and dispatch](B4e-iii-c-email-runtime-registry-dispatch.md) | High | L | B4e-iii-a, B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
@@ -177,18 +180,29 @@
 >   `execute_email_phase`, due fresh-read anti-upsert, verify per fingerprint, compensation redatta.
 >   Non cablato nel dispatch.
 > - [`B4e-iii` — Email phases pipeline and dispatch integration](B4e-iii-email-dispatch-integration.md)
->   (dep: B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii): **task aggregatore**, già previsto per un ulteriore
->   split (formalizzato dopo B4e-ii, con misurazione aggiornata):
->   **B4e-iii-a** — Durable email backup store (tabella PostgreSQL + migrazione Alembic + persist reale);
->   **B4e-iii-b** — Email categories pipeline integration (rende `default_address`/`email_routing`/
->   autoresponder categorie evidence-bound esplicite in comparison/plan/preview/readiness — decisione
->   AD1 confermata: estendere la pipeline, non lasciarle follow-up facoltativi);
->   **B4e-iii-c** — Email runtime registry and dispatch (registry uniforme, gate/fencing per-categoria
->   e per-write, commit atomico, semantica terminale). AD2 confermata: nessuna write compensabile
->   default-address/routing è cablabile finché B4e-iii-a non è completo.
+>   (dep: B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii): **task aggregatore ritirato `[/]`**, suddiviso (dopo
+>   B4e-ii, con misurazione aggiornata) in tre sotto-task effettivi:
+>   - [`B4e-iii-a` — Durable email backup store](B4e-iii-a-durable-email-backup-store.md)
+>     (dep: B4b-ii, B4c-ii): store PostgreSQL durevole e **cifrato** per i backup pre-write di
+>     default-address e routing (tabella `email_write_backups` + migrazione Alembic + modello +
+>     servizio interno `persist_email_backup`/`load_email_backup`), con persistenza atomica,
+>     idempotenza, fencing (A4) e assenza di plaintext. Nessun writer/dispatch cablato. **AD2
+>     confermata:** nessuna write compensabile default-address/routing è cablabile finché questo
+>     store non è completo.
+>   - [`B4e-iii-b` — Email categories pipeline integration](B4e-iii-b-email-categories-pipeline.md)
+>     (dep: B4e-i, B4d-i, B4b-i, B4c-i): rende `default_address`/`email_routing`/autoresponder
+>     categorie/step **evidence-bound** esplicite in comparison/plan/preview/readiness (**AD1
+>     confermata:** estendere la pipeline, non lasciarle follow-up facoltativi né una categoria
+>     `email` generica; ogni categoria resta evidence-bound e disabled by default).
+>   - [`B4e-iii-c` — Email runtime registry and dispatch](B4e-iii-c-email-runtime-registry-dispatch.md)
+>     (dep: B4e-iii-a, B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii): registry uniforme che collega
+>     forwarder/default-address/routing/filtri/autoresponder al **worker reale**, con gate/fencing
+>     per-categoria e per-write (`before_write`), commit atomico run+attempt, checkpoint e semantica
+>     terminale esplicita.
 >
-> `C3` dipende ora da `B4e-iii` (non più `B4e`); `B4a → B4e-i → B4e-ii → B4e-iii`. L'ID `B4e` è ritirato
-> per l'implementazione (resta come contenitore documentale dello split).
+> `C3` dipende ora da `B4e-iii-c` (non più `B4e-iii`); `B4a → B4e-i → B4e-ii → {B4e-iii-a, B4e-iii-b}
+> → B4e-iii-c → C3`. Gli ID `B4e` e `B4e-iii` sono ritirati per l'implementazione (restano come
+> contenitori documentali dello split).
 
 > `B4d` (Email filters writer), misurato a **~1365 righe su ~7 file** (`filter_rules.py` op tipizzate +
 > canonical fingerprint ordinato + contratto 2-scope + regole pure ~300, `filter_writer.py` engine +
@@ -226,7 +240,7 @@
 
 | `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2b-ii, B3c-ii |
 | `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2b-ii, B6 |
-| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e-iii |
+| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e-iii-c |
 | `[ ]` | `C4` | [Transfer checkpoint resume](C4-transfer-checkpoint-resume.md) | High | L | C1, C2, C3 |
 
 ### Wave D — Verification and recovery
@@ -257,10 +271,14 @@ graph LR
   B4a-->B4b-i-->B4b-ii
   B4a-->B4c-i-->B4c-ii
   B4a-->B4d-i-->B4d-ii
-  B4a-->B4e-i-->B4e-ii-->B4e-iii
-  B4b-ii-->B4e-iii
-  B4c-ii-->B4e-iii
-  B4d-ii-->B4e-iii
+  B4a-->B4e-i-->B4e-ii-->B4e-iii-c
+  B4b-ii-->B4e-iii-a-->B4e-iii-c
+  B4c-ii-->B4e-iii-a
+  B4e-i-->B4e-iii-b-->B4e-iii-c
+  B4d-i-->B4e-iii-b
+  B4b-i-->B4e-iii-b
+  B4c-i-->B4e-iii-b
+  B4d-ii-->B4e-iii-c
   B1-->B5
   B2a-->B5
   B3c-ii-->B5
@@ -273,8 +291,7 @@ graph LR
   B2b-ii-->C2
   B6-->C2
   B2b-ii-->C3
-  B4e-iii-->C3
-  B4-->C3
+  B4e-iii-c-->C3
   C1-->C4
   C2-->C4
   C3-->C4
