@@ -54,7 +54,7 @@
 | `[x]` | `B4d-ii` | [Additive-only filter writer engine](B4d-ii-filter-writer-engine.md) | High | M | B4d-i |
 | `[/]` | `B4e` | [Autoresponder writer + email dispatch integration](B4e-autoresponder-dispatch.md) (split → B4e-i/ii/iii) | High | L | B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[x]` | `B4e-i` | [Autoresponder evidence contract and rules](B4e-i-autoresponder-contract.md) | High | M | B4a |
-| `[ ]` | `B4e-ii` | [Additive-only autoresponder writer engine](B4e-ii-autoresponder-writer-engine.md) | High | M | B4e-i |
+| `[x]` | `B4e-ii` | [Additive-only autoresponder writer engine](B4e-ii-autoresponder-writer-engine.md) | High | M | B4e-i |
 | `[ ]` | `B4e-iii` | [Email phases pipeline and dispatch integration](B4e-iii-email-dispatch-integration.md) (further split → iii-a/b/c) | High | L | B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |

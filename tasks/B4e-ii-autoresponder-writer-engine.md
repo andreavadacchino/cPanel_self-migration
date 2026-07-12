@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **ID** | `B4e-ii` |
-| **Status** | `[ ]` |
+| **Status** | `[x]` |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B4e-i |
@@ -54,11 +54,11 @@ able to remove a pre-existing responder; DestinationWrite payload in events.
 
 **Acceptance Criteria:**
 
-- [ ] An autoresponder is created only when its address is live-absent, guarded against the
+- [x] An autoresponder is created only when its address is live-absent, guarded against the
       upsert race, and verified live by the complete fingerprint; a same-address different
       responder is never overwritten; nothing is deleted; the source is never written.
-- [ ] No test, typecheck, Compose, or coverage regression.
-- [ ] Real behavior disabled by default and unreachable from the runtime until B4e-iii.
+- [x] No test, typecheck, Compose, or coverage regression.
+- [x] Real behavior disabled by default and unreachable from the runtime until B4e-iii.
 
 **Verification Commands:**
 
@@ -68,3 +68,59 @@ cd ../worker && DRAMATIQ_TESTING=1 python -m pytest
 cd ../web && npm run build
 cd ../.. && docker compose config -q
 ```
+
+---
+
+## Completion Record
+
+**Data:** 2026-07-12
+
+**Riepilogo implementazione.** Engine autoresponder *strettamente additivo* costruito e testato
+senza scritture reali sul runtime. `real_autoresponder_writer.py` (nuovo) riusa
+`execute_email_phase` (B4a) e consuma **solo** contratto/fingerprint/regole di B4e-i, **senza**
+toccare `email_write.py`; il writer mock `autoresponder_writer.py` resta intatto. **Provenienza
+payload:** il payload operativo completo (`from`/`subject`/`body`/`interval`/`is_html`/`charset`/
+`start`/`stop`) è risolto **solo** dallo snapshot immutabile `data["email_autoresponders"]`
+(`resolve_autoresponder_items`/`_resolve_source`) e **vincolato** al contratto — il fingerprint
+ricostruito dallo snapshot deve coincidere con `record["fingerprint"]`, e dominio + local part
+devono coincidere; assente/duplicato/detail-fallito/mismatch/completeness non-complete → `manual`/
+`blocked`, zero write, nessun default inventato. Il payload completo vive **solo** in
+`EmailItem.payload` (in memoria): planned_call/compensation/eventi portano soltanto dominio,
+indirizzo, fingerprint e metadati non sensibili. **Anti-upsert:** `AutoresponderGateway.create`
+esegue una seconda `list_auto_responders` di guardia (assenza per sola enumerazione, mai
+`get_auto_responder`) immediatamente prima dell'unica `add_auto_responder`; indirizzo ricomparso o
+lista unreadable/malformed → zero write. **Verify** per fingerprint completo su nuova lista+
+dettaglio (template mai come successo); una sola write, mai retry; timeout/ambiguo → fresh-read.
+**Compensation** redatta (`manual_remove_created_autoresponder`) solo per create realmente scritta
+e verificata (`gateway.stored`), mai per `already_present` o write saltata.
+
+**File principali.** `apps/api/app/modules/executions/real_autoresponder_writer.py` (nuovo, ~300
+righe con docstring), `apps/api/app/tests/test_real_autoresponder_writer.py` (nuovo, 40 test),
+`README.md` (sezione «Engine writer autoresponder additive-only (B4e-ii)»), `tasks/BACKLOG.md`
+(B4e-ii `[x]`). **Nessuna** modifica a `email_write.py`, `autoresponder_rules.py`,
+`autoresponder_writer.py` (mock), dispatch, actor, planner, readiness, config.
+
+**Test e comandi eseguiti (esito).**
+- Mirati B4e-ii: `pytest test_real_autoresponder_writer.py` → **40 passed**; coverage
+  `real_autoresponder_writer.py` **96%** (righe residue = rami difensivi belt-and-suspenders).
+- Intera suite API: **657 passed** (+40, nessuna regressione; mock/dry-run intatti).
+- Worker (venv `migration-platform/.venv`, `DRAMATIQ_TESTING=1`): **18 passed**.
+- Web `npm run build`: **OK**. `docker compose config -q`: **OK**.
+
+**Esito review adversariale.** Coperti tutti i vettori richiesti: payload accettato dal client
+(ignorato — solo snapshot, `test_payload_from_request_or_preview_is_ignored`); fingerprint non
+rivalidato (ricostruito e confrontato in `_resolve_source` + verify post-write); detail come
+existence check (guardia e assenza solo per enumerazione, `test_guard_uses_list_not_get_for_presence`);
+seconda lista omessa (guardia reale, `list_calls == 3`); upsert su address ricomparso (race tests →
+zero write); retry create (mai, single write su CpanelError); normalizzazione del body (verbatim,
+`test_body_..._preserved`); template accettato (→ ambiguous/manual, verify per fingerprint);
+payload sensibile persistito (redaction blob test; contratto senza from/subject/body); compensation
+con contenuto (solo dominio/indirizzo/fingerprint); modifica prematura planner/dispatch (non in
+`IMPLEMENTED_REAL_CATEGORIES`, categoria resta MANUAL). Nessuna modifica a B4e-iii o C3.
+
+**Documentazione aggiornata.** `README.md` (nuova sezione B4e-ii); il flag `AUTORESPONDER_WRITER_MODE`
+e `.env.example` erano già presenti da B4e-i.
+
+**Limitazioni residue (per B4e-iii).** Cablaggio dispatch/registry/gate/fencing per-categoria e
+promozione della categoria da `MANUAL` ad `AUTO` (split iii-a/b/c). L'engine resta irraggiungibile
+dal runtime fino ad allora.

@@ -1223,6 +1223,49 @@ PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_email_autores
   --cov=app.modules.executions.autoresponder_rules --cov-report=term-missing
 ```
 
+### Engine writer autoresponder additive-only (B4e-ii)
+
+`real_autoresponder_writer.py` riusa `execute_email_phase` (B4a) e consuma **solo** contratto/
+fingerprint/regole di B4e-i, **senza toccare** `email_write.py`; il writer mock
+`autoresponder_writer.py` resta intatto. Poiché `add_auto_responder` è un **UPSERT**, la write è
+raggiunta solo su indirizzo live-assente, provato da **due fresh-read distinte**: la `read_live`
+iniziale dietro la decisione, e una seconda `list_auto_responders` di **guardia** eseguita
+**dentro** il gateway, immediatamente adiacente a `add_auto_responder`. L'ordine effettivo è
+read-live → decide → `before_write` (seam authorize/fencing B4e-iii) → fresh-list guard → unica
+`add_auto_responder`; dopo la guardia non esiste altra logica fallibile prima della chiamata API.
+La guardia prova l'assenza **solo per enumerazione** (mai `get_auto_responder`), riusa lo stesso
+dominio e non riusa la prima lista; indirizzo ricomparso o lista unreadable/malformed → zero write.
+
+**Provenienza del payload.** Il payload operativo completo
+(`from`/`subject`/`body`/`interval`/`is_html`/`charset`/`start`/`stop`) è risolto **solo** dallo
+snapshot sorgente immutabile (`source_snapshot.data["email_autoresponders"]`) e **vincolato** al
+contratto B4e-i: il fingerprint ricostruito dallo snapshot deve coincidere con quello registrato
+nel contratto per quell'indirizzo, e dominio + local part devono coincidere. Payload assente/
+duplicato/detail-fallito/fingerprint-mismatch → `manual`/`blocked`, zero write; nessun campo
+mancante viene defaultato. Il payload completo vive **solo** in memoria (`EmailItem.payload`): non
+entra mai in eventi, planned_call, audit, errori o compensation (planned_call = dominio + indirizzo
++ fingerprint + metadati non sensibili). Payload da request body/preview/destination è ignorato.
+
+Un autoresponder omonimo ma con fingerprint diverso è `blocked` (mai sovrascritto); uno
+destination-only non è mai toccato; **nessun** `DeleteAutoresponder`. Verify tramite fingerprint
+**completo** su nuova lista+dettaglio (un template non produce mai successo). Una sola
+`add_auto_responder`, mai retry; timeout/ambiguo → fresh-read, mai seconda write. La compensation
+redatta (`manual_remove_created_autoresponder`, dominio + indirizzo + fingerprint + conferma
+richiesta) è attaccata **solo** per una create realmente scritta **e** verificata dalla rilettura —
+mai per `already_present` né per una write saltata dalla guardia, così non può mai rimuovere un
+autoresponder preesistente.
+
+Doppio gate `AUTORESPONDER_WRITER_MODE=enabled` + `REAL_EXECUTION_MODE=enabled`
+(disabled-by-default); l'engine resta **irraggiungibile dal runtime** (non in
+`IMPLEMENTED_REAL_CATEGORIES`) e la categoria resta `MANUAL` fino al cablaggio dispatch di
+B4e-iii. Coverage: `real_autoresponder_writer.py` 96%.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_autoresponder_writer.py \
+  --cov=app.modules.executions.real_autoresponder_writer --cov-report=term-missing
+```
+
 ## Writer cron mock-only con approvazione
 
 `worker.actors.cron_writer.cron_writer_actor` è governato da
