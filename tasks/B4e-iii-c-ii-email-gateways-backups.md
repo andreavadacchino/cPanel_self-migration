@@ -86,6 +86,18 @@ backup binding testato realmente, routing non-vacuo.
 
 **Tests:** 833 API (43 in runtime file). Worker 18 passed. Web build OK. Compose OK.
 
+**Commit 3 (hardening):** 2 file, 68 insertions / 2 deletions.
+
+1. **`_is_positive_int()`** helper — `type(value) is int and value > 0`; esclude bool, 0, negativi.
+2. **ID validation** — `run.id`, `attempt.id`, `execution_run_id`, `fencing_token`,
+   `destination_endpoint_id` validati con `_is_positive_int` prima di qualsiasi effetto.
+3. **`before_write` callable** — `callable(before_write)` invece di `is None`; un oggetto
+   non-callable non può più causare backup persistito seguito da TypeError.
+4. **29 test parametrizzati** — 6 valori invalidi × 4 campi ID + 4 valori non-callable per
+   before_write + 1 caso positivo.
+
+**Tests:** 862 API (72 in runtime file). Worker 18 passed. Web build OK. Compose OK.
+
 **Invarianti preservati:**
 - `dispatch.py` non importa il nuovo modulo
 - `IMPLEMENTED_REAL_CATEGORIES == frozenset({"domains"})`

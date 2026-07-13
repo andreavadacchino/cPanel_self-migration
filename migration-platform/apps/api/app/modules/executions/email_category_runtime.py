@@ -29,6 +29,10 @@ from app.modules.executions.email_write import EmailPhaseResult
 from app.modules.executions.models import ExecutionAttempt, ExecutionRun, ExecutionStatus
 
 
+def _is_positive_int(value: object) -> bool:
+    return type(value) is int and value > 0
+
+
 def is_category_enabled(category: str) -> bool:
     entry = REGISTRY.get(category)
     if entry is None:
@@ -172,19 +176,27 @@ def run_email_category(
         return EmailPhaseResult(ok=False, reason="unknown_category")
     if not isinstance(resolved, ResolvedEvidence) or resolved.category != category:
         return EmailPhaseResult(ok=False, reason="category_evidence_mismatch")
+    if not _is_positive_int(getattr(run, "id", None)):
+        return EmailPhaseResult(ok=False, reason="run_id_invalid")
+    if not _is_positive_int(getattr(attempt, "id", None)):
+        return EmailPhaseResult(ok=False, reason="attempt_id_invalid")
     if run.dry_run:
         return EmailPhaseResult(ok=False, reason="dry_run_not_writable")
-    if before_write is None:
+    if not callable(before_write):
         return EmailPhaseResult(ok=False, reason="before_write_required")
     _RUNNING = ExecutionStatus.running.value
     if getattr(run, "status", None) != _RUNNING:
         return EmailPhaseResult(ok=False, reason="run_not_running")
     if getattr(attempt, "status", None) != _RUNNING:
         return EmailPhaseResult(ok=False, reason="attempt_not_running")
+    if not _is_positive_int(getattr(attempt, "execution_run_id", None)):
+        return EmailPhaseResult(ok=False, reason="attempt_run_id_invalid")
     if getattr(attempt, "execution_run_id", None) != run.id:
         return EmailPhaseResult(ok=False, reason="attempt_run_mismatch")
-    if not isinstance(getattr(attempt, "fencing_token", None), int):
+    if not _is_positive_int(getattr(attempt, "fencing_token", None)):
         return EmailPhaseResult(ok=False, reason="fencing_token_invalid")
+    if not _is_positive_int(getattr(run, "destination_endpoint_id", None)):
+        return EmailPhaseResult(ok=False, reason="destination_endpoint_id_invalid")
     if not resolved.resolved:
         return EmailPhaseResult(ok=False, reason="evidence_not_resolved")
     if resolved.blocked:

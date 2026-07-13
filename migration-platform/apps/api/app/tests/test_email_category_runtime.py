@@ -317,6 +317,60 @@ def test_routing_already_present_no_write():
         mc.write.assert_not_called()
         bp.assert_not_called()
 
+# -- ID/fencing/callable hardening (Correction 3) -----------------------------
+
+import pytest
+
+_BAD_IDS = [None, True, False, 0, -1, "abc"]
+
+@pytest.mark.parametrize("bad", _BAD_IDS)
+def test_run_id_invalid(bad):
+    run = _run(); run.id = bad
+    with patch(f"{_P}._build_destination_client") as bc:
+        r = run_email_category(MagicMock(), run, _att(), "email_forwarders",
+                                _resolved("email_forwarders"), before_write=_bw())
+        assert not r.ok and r.reason == "run_id_invalid"; bc.assert_not_called()
+
+@pytest.mark.parametrize("bad", _BAD_IDS)
+def test_attempt_id_invalid(bad):
+    att = _att(); att.id = bad
+    with patch(f"{_P}._build_destination_client") as bc:
+        r = run_email_category(MagicMock(), _run(), att, "email_forwarders",
+                                _resolved("email_forwarders"), before_write=_bw())
+        assert not r.ok and r.reason == "attempt_id_invalid"; bc.assert_not_called()
+
+@pytest.mark.parametrize("bad", _BAD_IDS)
+def test_fencing_token_invalid(bad):
+    att = _att(fencing=bad)
+    with patch(f"{_P}._build_destination_client") as bc:
+        r = run_email_category(MagicMock(), _run(), att, "email_forwarders",
+                                _resolved("email_forwarders"), before_write=_bw())
+        assert not r.ok and r.reason == "fencing_token_invalid"; bc.assert_not_called()
+
+@pytest.mark.parametrize("bad", _BAD_IDS)
+def test_dest_endpoint_id_invalid(bad):
+    run = _run(); run.destination_endpoint_id = bad
+    with patch(f"{_P}._build_destination_client") as bc:
+        r = run_email_category(MagicMock(), run, _att(), "email_forwarders",
+                                _resolved("email_forwarders", step_ids=[], verified_pairs={}), before_write=_bw())
+        assert not r.ok and r.reason == "destination_endpoint_id_invalid"; bc.assert_not_called()
+
+@pytest.mark.parametrize("bad", [None, "not-callable", object(), 42])
+def test_before_write_not_callable(bad):
+    with patch(f"{_P}._build_destination_client") as bc:
+        r = run_email_category(MagicMock(), _run(), _att(), "email_forwarders",
+                                _resolved("email_forwarders"), before_write=bad)
+        assert not r.ok and r.reason == "before_write_required"; bc.assert_not_called()
+
+def test_all_ids_positive_passes():
+    mc = MagicMock()
+    with patch(f"{_P}.is_category_enabled", return_value=True), \
+         patch(f"{_P}._build_destination_client", return_value=mc), \
+         patch(f"{_P}._run_forwarder", return_value=EmailPhaseResult()):
+        r = run_email_category(MagicMock(), _run(), _att(), "email_forwarders",
+                                _resolved("email_forwarders", step_ids=[], verified_pairs={}), before_write=_bw())
+        assert r.ok; mc.close.assert_called_once()
+
 # -- invariants ----------------------------------------------------------------
 
 def test_no_dispatch_import():
