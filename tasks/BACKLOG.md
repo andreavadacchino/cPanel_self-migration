@@ -60,7 +60,7 @@
 | `[x]` | `B4e-iii-b` | [Email categories pipeline integration](B4e-iii-b-email-categories-pipeline.md) | High | M | B4e-i, B4d-i, B4b-i, B4c-i |
 | `[/]` | `B4e-iii-c` | [Email runtime registry and dispatch](B4e-iii-c-email-runtime-registry-dispatch.md) (split → c-i/c-ii/c-iii) | High | L | B4e-iii-a, B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[x]` | `B4e-iii-c-i` | [Email registry and evidence resolvers](B4e-iii-c-i-email-registry-resolvers.md) | High | M | B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
-| `[ ]` | `B4e-iii-c-ii` | [Destination gateways and durable backup bindings](B4e-iii-c-ii-email-gateways-backups.md) | High | M | B4e-iii-c-i, B4e-iii-a |
+| `[x]` | `B4e-iii-c-ii` | [Destination gateways and durable backup bindings](B4e-iii-c-ii-email-gateways-backups.md) | High | M | B4e-iii-c-i, B4e-iii-a |
 | `[ ]` | `B4e-iii-c-iii` | [Worker email dispatch and terminal semantics](B4e-iii-c-iii-email-worker-dispatch.md) | High | M | B4e-iii-c-ii |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |

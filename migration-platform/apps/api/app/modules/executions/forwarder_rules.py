@@ -13,6 +13,7 @@ Pure: no I/O, no secrets. The live evidence is the destination's own
 
 from __future__ import annotations
 
+from adapters.cpanel.contract import DestinationWrite, SafeRead, destination_write, safe_read
 from app.modules.executions.email_write import EmailItem, ItemDecision, WriteAction
 
 
@@ -111,4 +112,18 @@ def is_write_eligible(envelope: object) -> bool:
     return True
 
 
-__all__ = ["decide_forwarder", "parse_live_pairs", "CONTRACT_VERSION", "is_write_eligible"]
+def list_forwarders_op() -> SafeRead:
+    return safe_read("Email", "list_forwarders")
+
+
+def add_forwarder_op(source: str, destination: str) -> DestinationWrite:
+    domain = source.split("@", 1)[1] if "@" in source else ""
+    email = source.split("@", 1)[0] if "@" in source else source
+    return destination_write("Email", "add_forwarder",
+                             {"domain": domain, "email": email, "fwdopt": "fwd",
+                              "fwddomain": destination},
+                             idempotent=False)
+
+
+__all__ = ["decide_forwarder", "parse_live_pairs", "CONTRACT_VERSION", "is_write_eligible",
+           "list_forwarders_op", "add_forwarder_op"]
