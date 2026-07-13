@@ -198,14 +198,15 @@
 >     confermata:** estendere la pipeline, non lasciarle follow-up facoltativi né una categoria
 >     `email` generica; ogni categoria resta evidence-bound e disabled by default).
 >   - [`B4e-iii-c` — Email runtime registry and dispatch](B4e-iii-c-email-runtime-registry-dispatch.md)
->     (dep: B4e-iii-a, B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii): registry uniforme che collega
+>     (retired `[/]`, split → c-i/c-ii/c-iii): registry uniforme che collega
 >     forwarder/default-address/routing/filtri/autoresponder al **worker reale**, con gate/fencing
 >     per-categoria e per-write (`before_write`), commit atomico run+attempt, checkpoint e semantica
 >     terminale esplicita.
 >
-> `C3` dipende ora da `B4e-iii-c` (non più `B4e-iii`); `B4a → B4e-i → B4e-ii → {B4e-iii-a, B4e-iii-b}
-> → B4e-iii-c → C3`. Gli ID `B4e` e `B4e-iii` sono ritirati per l'implementazione (restano come
-> contenitori documentali dello split).
+> `C3` dipende ora da `B4e-iii-c-iii` (non più `B4e-iii`); `B4a → B4e-i → B4e-ii → {B4e-iii-a,
+> B4e-iii-b} → B4e-iii-c-i → B4e-iii-c-ii → B4e-iii-c-iii → C3`. Gli ID `B4e`, `B4e-iii` e
+> `B4e-iii-c` sono ritirati per l'implementazione (restano come contenitori documentali dello split).
+> C4 resta responsabile del resume degli attempt `running`.
 
 > `B4d` (Email filters writer), misurato a **~1365 righe su ~7 file** (`filter_rules.py` op tipizzate +
 > canonical fingerprint ordinato + contratto 2-scope + regole pure ~300, `filter_writer.py` engine +

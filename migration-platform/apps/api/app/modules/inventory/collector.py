@@ -375,6 +375,8 @@ def _assess_forwarder_contract(data: dict, coverage: dict) -> None:
     readable = coverage.get("email_forwarders", {}).get("status") in {"succeeded", "empty"}
     succeeded = readable and not invalid
     data["forwarder_contract"] = {
+        "version": 1,
+        "status": "succeeded" if succeeded else "failed" if invalid else "unavailable",
         "mappings": mappings,
         "invalid_sources": sorted(invalid),
         "fresh_read_strategy": "list_forwarders_exact_pair",

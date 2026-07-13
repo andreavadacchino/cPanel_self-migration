@@ -38,37 +38,39 @@ cd ../.. && docker compose config -q
 
 **Date:** 2026-07-14
 
-**Implementation:** `email_phase_registry.py` (262 lines) — typed `REGISTRY` table mapping
-the 5 email category IDs to `CategoryEntry` (flag property, backup need, scope strategy).
-Five evidence-bound resolvers extract the authoritative source payload from the immutable
-snapshot and its contract, validated with `is_write_eligible()` (or coverage status for
-forwarder). Step IDs are selectors only; a step not uniquely present in the snapshot is blocked.
-Duplicate contract records are detected fail-closed. Forwarder returns verified structured
-pairs, not re-parsed step IDs. Default-address reads `dest_username` from the destination
-contract. Routing policies remain empty (no provider exists). Filters grouped by scope.
-Autoresponders grouped by domain with fingerprint re-validation.
+**Commit 1 (`75fcf72`):** initial implementation — 7 files, 693 insertions (518 production+test,
+the rest split documentation). Review found 1 Critical + 2 High + 3 Medium; Critical and
+filter/autoresponder dedup (Medium) corrected in-commit. Forwarder versioning (High), routing
+clock placeholder (Medium), and full snapshot leak (Medium) remained open.
 
-**Files:**
+**Commit 2 (corrective):** all remaining High and Medium resolved:
 
-| File | Lines |
+1. **Forwarder contract versioned** — `forwarder_rules.py` now has `CONTRACT_VERSION = 1`,
+   `is_write_eligible()` (checks version, status, mappings shape, no invalid sources, no
+   duplicates, supported fresh-read strategy). Collector updated to persist `version` and
+   `status` in the envelope. Legacy snapshots without version are not write-eligible.
+
+2. **Flat/contract reconciliation** — the forwarder resolver now reconstructs pairs from the
+   flat `email_forwarders` snapshot AND validates them against the contract's `mappings`.
+   Any mismatch (extra/missing pair in either direction) → fail-closed. Step IDs remain
+   selectors only; the verified pair comes from the reconciled snapshot, not the step ID.
+
+3. **Routing clock removed** — `now=0` placeholder removed from resolved kwargs. The runtime
+   clock will be injected by c-ii/c-iii. `policies={}` remains (keeps routing inert).
+
+4. **Autoresponder projection** — `snapshot_data` in kwargs now contains only the verified
+   entries (`{"email_autoresponders": [selected_entries]}`), not the full account snapshot.
+   No extraneous categories, account metadata, or unselected items leak.
+
+**Files modified (corrective commit):**
+
+| File | Change |
 |---|---|
-| `email_phase_registry.py` (NEW) | 262 |
-| `test_email_phase_registry.py` (NEW) | 256 |
-| `B4e-iii-c-i-email-registry-resolvers.md` (NEW) | 36 |
-| `B4e-iii-c-ii-email-gateways-backups.md` (NEW) | 27 |
-| `B4e-iii-c-iii-email-worker-dispatch.md` (NEW) | 27 |
-| `B4e-iii-c-email-runtime-registry-dispatch.md` | updated |
-| `BACKLOG.md` | updated |
+| `forwarder_rules.py` | +30 (CONTRACT_VERSION, is_write_eligible) |
+| `collector.py` | +2 (version + status in envelope) |
+| `email_phase_registry.py` | ~40 net (reconciliation, projection, routing fix) |
+| `test_email_phase_registry.py` | +70 (12 new tests) |
+| `BACKLOG.md` | stale references corrected |
+| `B4e-iii-c-i task file` | updated Completion Record |
 
-**Tests:** 757 API tests pass (+27 new). Web build and Compose validation pass.
-
-**Review:** adversarial python-reviewer found 1 Critical (`dest_username` from source
-contract), 2 High (forwarder version check absent, forwarder returns step_ids not structured
-data), 3 Medium (filter/autoresponder no local dedup, routing placeholder policies, full
-snapshot in kwargs). Critical and both Highs corrected; Medium #3 (filter/autoresponder dedup)
-corrected. Medium #4/#5 documented as known limitations for c-ii.
-
-**Known limitation (High #1):** `forwarder_contract` has no `version` field and no
-`is_write_eligible()` — this is an upstream gap in the collector/`forwarder_rules` design,
-not closable in c-i. The registry uses coverage status check as the current best available
-validation. A future task should add versioning to the forwarder contract.
+**Tests:** 769 API tests pass (39 in registry file). Web build and Compose validation pass.

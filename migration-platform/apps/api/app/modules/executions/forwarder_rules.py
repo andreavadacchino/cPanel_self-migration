@@ -74,4 +74,34 @@ def decide_forwarder(item: EmailItem, live: list | None) -> ItemDecision:
     return ItemDecision(WriteAction.create)
 
 
-__all__ = ["decide_forwarder", "parse_live_pairs"]
+CONTRACT_VERSION = 1
+SUCCEEDED = "succeeded"
+FAILED = "failed"
+UNAVAILABLE = "unavailable"
+FRESH_READ_STRATEGY = "list_forwarders_exact_pair"
+
+
+def is_write_eligible(envelope: object) -> bool:
+    if not isinstance(envelope, dict) or envelope.get("version") != CONTRACT_VERSION:
+        return False
+    if envelope.get("status") != SUCCEEDED:
+        return False
+    mappings = envelope.get("mappings")
+    if not isinstance(mappings, list):
+        return False
+    if envelope.get("invalid_sources"):
+        return False
+    seen: set[str] = set()
+    for m in mappings:
+        if not isinstance(m, dict) or not m.get("source") or not m.get("destination"):
+            return False
+        key = f"{m['source']}\0{m['destination']}"
+        if key in seen:
+            return False
+        seen.add(key)
+    if envelope.get("fresh_read_strategy") != FRESH_READ_STRATEGY:
+        return False
+    return True
+
+
+__all__ = ["decide_forwarder", "parse_live_pairs", "CONTRACT_VERSION", "is_write_eligible"]

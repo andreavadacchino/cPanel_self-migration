@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from app.modules.executions import autoresponder_rules
 from app.modules.executions import default_address_rules
 from app.modules.executions import filter_rules
+from app.modules.executions import forwarder_rules
 from app.modules.executions import routing_rules
 
 EMAIL_CATEGORIES = frozenset({
@@ -48,33 +49,43 @@ class ResolvedEvidence:
     blocked: list[dict] = field(default_factory=list)
 
 
-def _forwarder_contract_eligible(source_data: dict) -> bool:
-    coverage = source_data.get("coverage", {}).get("forwarder_contract", {})
-    return isinstance(coverage, dict) and coverage.get("status") == "succeeded"
-
-
-def _forwarder_mappings(source_data: dict) -> list[dict]:
-    contract = source_data.get("forwarder_contract")
-    if not isinstance(contract, dict):
-        return []
-    return contract.get("mappings", [])
+def _forwarder_flat_pairs(data: dict) -> dict[str, list[dict]]:
+    raw = data.get("email_forwarders")
+    if isinstance(raw, dict):
+        raw = raw.get("forwarders", raw.get("data", []))
+    by_key: dict[str, list[dict]] = {}
+    for item in (raw if isinstance(raw, list) else []):
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("dest") or item.get("source") or "").strip().lower()
+        dest = str(item.get("forward") or item.get("destination") or "").strip().lower()
+        if source and dest:
+            by_key.setdefault(f"{source} -> {dest}", []).append({"source": source, "destination": dest})
+    return by_key
 
 
 def resolve_forwarder(source_data: dict, dest_data: dict, selected: list[str]) -> ResolvedEvidence:
-    if not _forwarder_contract_eligible(source_data) or not _forwarder_contract_eligible(dest_data):
-        return ResolvedEvidence("email_forwarders", False, "forwarder_contract_not_eligible")
-    mappings = _forwarder_mappings(source_data)
-    by_key: dict[str, list[dict]] = {}
-    for m in mappings:
-        if isinstance(m, dict) and m.get("source") and m.get("destination"):
-            key = f"{m['source']} -> {m['destination']}"
-            by_key.setdefault(key, []).append(m)
+    src_contract = source_data.get("forwarder_contract")
+    dst_contract = dest_data.get("forwarder_contract")
+    if not forwarder_rules.is_write_eligible(src_contract) or not forwarder_rules.is_write_eligible(dst_contract):
+        side = "source" if not forwarder_rules.is_write_eligible(src_contract) else "destination"
+        return ResolvedEvidence("email_forwarders", False, f"forwarder_contract_{side}_not_eligible")
+    contract_mappings = src_contract.get("mappings", []) if isinstance(src_contract, dict) else []
+    contract_keys = {f"{m['source']} -> {m['destination']}" for m in contract_mappings
+                     if isinstance(m, dict) and m.get("source") and m.get("destination")}
+    flat_pairs = _forwarder_flat_pairs(source_data)
+    for key in flat_pairs:
+        if key not in contract_keys:
+            return ResolvedEvidence("email_forwarders", False, "flat_contract_mismatch")
+    for key in contract_keys:
+        if key not in flat_pairs:
+            return ResolvedEvidence("email_forwarders", False, "flat_contract_mismatch")
     valid_ids: list[str] = []
     verified_pairs: dict[str, dict] = {}
     blocked: list[dict] = []
     for step_id in selected:
         suffix = step_id.split(":", 1)[1] if ":" in step_id else step_id
-        matches = by_key.get(suffix, [])
+        matches = flat_pairs.get(suffix, [])
         if len(matches) != 1:
             reason = "duplicate_in_snapshot" if len(matches) > 1 else "not_in_snapshot"
             blocked.append({"step_id": step_id, "reason": reason})
@@ -139,7 +150,7 @@ def resolve_routing(source_data: dict, dest_data: dict, selected: list[str]) -> 
             source_records[domain] = matches[0]
             valid_ids.append(step_id)
     return ResolvedEvidence("email_routing", True,
-                            kwargs={"step_ids": valid_ids, "source_records": source_records, "policies": {}, "now": 0},
+                            kwargs={"step_ids": valid_ids, "source_records": source_records, "policies": {}},
                             blocked=blocked)
 
 
@@ -212,6 +223,7 @@ def resolve_autoresponders(source_data: dict, dest_data: dict, selected: list[st
                 addr = record["address"].strip()
                 contract_records.setdefault(addr, []).append({**record, "_domain": domain_block.get("domain")})
     by_domain: dict[str, list[dict]] = {}
+    verified_entries: list[dict] = []
     valid_ids: list[str] = []
     blocked: list[dict] = []
     for step_id in selected:
@@ -238,9 +250,11 @@ def resolve_autoresponders(source_data: dict, dest_data: dict, selected: list[st
             continue
         spec = {"step_id": step_id, "address": address, "domain_present": True}
         by_domain.setdefault(domain, []).append(spec)
+        verified_entries.append(entry)
         valid_ids.append(step_id)
+    projected_snapshot = {"email_autoresponders": verified_entries}
     return ResolvedEvidence("email_autoresponders", True,
-                            kwargs={"by_domain": by_domain, "snapshot_data": source_data,
+                            kwargs={"by_domain": by_domain, "snapshot_data": projected_snapshot,
                                     "contract": src_contract},
                             blocked=blocked)
 
