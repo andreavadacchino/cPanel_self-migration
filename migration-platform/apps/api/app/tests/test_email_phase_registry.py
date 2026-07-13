@@ -279,14 +279,14 @@ def test_forwarder_flat_extra_pair_mismatch():
     src["email_forwarders"].append({"dest": "extra@x.test", "forward": "z@y.test"})
     dst = _fwd_snapshot([])
     r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
-    assert not r.resolved and r.reason == "flat_contract_mismatch"
+    assert not r.resolved and "source" in r.reason and "mismatch" in r.reason
 
 def test_forwarder_contract_extra_pair_mismatch():
     src = _fwd_snapshot([("a@x.test", "b@y.test")])
     src["forwarder_contract"]["mappings"].append({"source": "extra@x.test", "destination": "z@y.test"})
     dst = _fwd_snapshot([])
     r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
-    assert not r.resolved and r.reason == "flat_contract_mismatch"
+    assert not r.resolved and "source" in r.reason and "mismatch" in r.reason
 
 # -- routing clock (correction 3) ---------------------------------------------
 
@@ -322,6 +322,229 @@ def test_autoresponder_only_selected_in_projection():
     r = resolve_autoresponders(src, dst, ["email_autoresponders:x@a.test"])
     assert len(r.kwargs["snapshot_data"]["email_autoresponders"]) == 1
     assert r.kwargs["snapshot_data"]["email_autoresponders"][0]["email"] == "x@a.test"
+
+
+# -- invariants ----------------------------------------------------------------
+
+# -- symmetric reconciliation (correction 5) ----------------------------------
+
+def test_forwarder_dest_contract_pair_absent_from_flat():
+    src = _fwd_snapshot([("a@x.test", "b@y.test")])
+    dst = _fwd_snapshot([("c@x.test", "d@y.test")])
+    dst["email_forwarders"] = []
+    r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
+    assert not r.resolved and "destination" in r.reason and "mismatch" in r.reason
+
+def test_forwarder_dest_flat_pair_absent_from_contract():
+    src = _fwd_snapshot([("a@x.test", "b@y.test")])
+    dst = _fwd_snapshot([])
+    dst["email_forwarders"].append({"dest": "extra@x.test", "forward": "z@y.test"})
+    r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
+    assert not r.resolved and "destination" in r.reason and "mismatch" in r.reason
+
+def test_forwarder_source_coherent_dest_malformed():
+    src = _fwd_snapshot([("a@x.test", "b@y.test")])
+    dst = {"email_forwarders": ["not-a-dict"],
+           "forwarder_contract": _fwd_snapshot([])["forwarder_contract"]}
+    r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
+    assert not r.resolved and "destination" in r.reason
+
+def test_forwarder_source_malformed_flat():
+    src = {"email_forwarders": [42],
+           "forwarder_contract": _fwd_snapshot([])["forwarder_contract"]}
+    dst = _fwd_snapshot([])
+    r = resolve_forwarder(src, dst, [])
+    assert not r.resolved and "source" in r.reason
+
+def test_forwarder_flat_item_not_dict_caught():
+    src = _fwd_snapshot([("a@x.test", "b@y.test")])
+    src["email_forwarders"].append("not-a-dict")
+    dst = _fwd_snapshot([])
+    r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
+    assert not r.resolved and "source" in r.reason and "not_dict" in r.reason
+
+def test_forwarder_flat_destination_not_string():
+    src = _fwd_snapshot([("a@x.test", "b@y.test")])
+    src["email_forwarders"][0]["forward"] = 42
+    dst = _fwd_snapshot([])
+    r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
+    assert not r.resolved and "source" in r.reason and "not_string" in r.reason
+
+def test_forwarder_different_pairs_each_coherent():
+    src = _fwd_snapshot([("a@x.test", "b@y.test")])
+    dst = _fwd_snapshot([("c@x.test", "d@y.test")])
+    r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
+    assert r.resolved and r.kwargs["step_ids"] == ["email_forwarders:a@x.test -> b@y.test"]
+
+def test_forwarder_no_sensitive_in_reason():
+    src = _fwd_snapshot([("a@x.test", "b@y.test")])
+    dst = _fwd_snapshot([])
+    dst["forwarder_contract"]["status"] = "failed"
+    r = resolve_forwarder(src, dst, ["email_forwarders:a@x.test -> b@y.test"])
+    assert not r.resolved
+    reason_str = str(r.reason).lower()
+    assert "password" not in reason_str and "secret" not in reason_str
+
+
+# -- is_write_eligible hardening (correction 6) --------------------------------
+
+def test_forwarder_invalid_sources_none_not_eligible():
+    from app.modules.executions.forwarder_rules import is_write_eligible
+    assert not is_write_eligible({"version": 1, "status": "succeeded", "mappings": [],
+                                   "invalid_sources": None, "fresh_read_strategy": "list_forwarders_exact_pair"})
+
+def test_forwarder_invalid_sources_string_not_eligible():
+    from app.modules.executions.forwarder_rules import is_write_eligible
+    assert not is_write_eligible({"version": 1, "status": "succeeded", "mappings": [],
+                                   "invalid_sources": "bad", "fresh_read_strategy": "list_forwarders_exact_pair"})
+
+def test_forwarder_invalid_sources_dict_not_eligible():
+    from app.modules.executions.forwarder_rules import is_write_eligible
+    assert not is_write_eligible({"version": 1, "status": "succeeded", "mappings": [],
+                                   "invalid_sources": {}, "fresh_read_strategy": "list_forwarders_exact_pair"})
+
+def test_forwarder_mapping_source_invalid_not_eligible():
+    from app.modules.executions.forwarder_rules import is_write_eligible
+    assert not is_write_eligible({"version": 1, "status": "succeeded",
+                                   "mappings": [{"source": "not-an-email", "destination": "x@test"}],
+                                   "invalid_sources": [], "fresh_read_strategy": "list_forwarders_exact_pair"})
+
+def test_forwarder_mapping_destination_pipe_not_eligible():
+    from app.modules.executions.forwarder_rules import is_write_eligible
+    assert not is_write_eligible({"version": 1, "status": "succeeded",
+                                   "mappings": [{"source": "a@x.test", "destination": "|/usr/bin/proc"}],
+                                   "invalid_sources": [], "fresh_read_strategy": "list_forwarders_exact_pair"})
+
+
+# -- autoresponder projected contract (correction 7) --------------------------
+
+def test_autoresponder_projected_contract_only_selected_domain():
+    e1, _, _ = _ar_full("x@a.test", "a.test")
+    e2, _, _ = _ar_full("y@b.test", "b.test")
+    from app.modules.executions.autoresponder_rules import build_contract, DomainInput
+    contract = build_contract([
+        DomainInput(domain="a.test", list_ok=True, list_payload=[{"email": "x@a.test"}],
+                    details={"x@a.test": {"ok": True, "payload": e1}}),
+        DomainInput(domain="b.test", list_ok=True, list_payload=[{"email": "y@b.test"}],
+                    details={"y@b.test": {"ok": True, "payload": e2}})])
+    src = {"email_autoresponders": [e1, e2], "autoresponder_contract": contract}
+    dst = {"autoresponder_contract": _ar_contract()}
+    r = resolve_autoresponders(src, dst, ["email_autoresponders:x@a.test"])
+    assert r.resolved
+    pc = r.kwargs["contract"]
+    assert len(pc["domains"]) == 1
+    assert pc["domains"][0]["domain"] == "a.test"
+    assert len(pc["domains"][0]["records"]) == 1
+    assert pc["domains"][0]["records"][0]["address"] == "x@a.test"
+
+def test_autoresponder_unselected_absent_from_projection():
+    e1, _, _ = _ar_full("x@a.test", "a.test")
+    e2, _, _ = _ar_full("y@a.test", "a.test")
+    from app.modules.executions.autoresponder_rules import build_contract, DomainInput
+    contract = build_contract([DomainInput(
+        domain="a.test", list_ok=True,
+        list_payload=[{"email": "x@a.test"}, {"email": "y@a.test"}],
+        details={"x@a.test": {"ok": True, "payload": e1},
+                 "y@a.test": {"ok": True, "payload": e2}})])
+    src = {"email_autoresponders": [e1, e2], "autoresponder_contract": contract}
+    dst = {"autoresponder_contract": _ar_contract()}
+    r = resolve_autoresponders(src, dst, ["email_autoresponders:x@a.test"])
+    assert r.resolved
+    assert len(r.kwargs["snapshot_data"]["email_autoresponders"]) == 1
+    pc = r.kwargs["contract"]
+    all_addrs = [rec["address"] for d in pc["domains"] for rec in d["records"]]
+    assert "y@a.test" not in all_addrs
+
+def test_autoresponder_multi_step_same_domain_preserved():
+    e1, _, _ = _ar_full("x@a.test", "a.test")
+    e2, _, _ = _ar_full("y@a.test", "a.test")
+    from app.modules.executions.autoresponder_rules import build_contract, DomainInput
+    contract = build_contract([DomainInput(
+        domain="a.test", list_ok=True,
+        list_payload=[{"email": "x@a.test"}, {"email": "y@a.test"}],
+        details={"x@a.test": {"ok": True, "payload": e1},
+                 "y@a.test": {"ok": True, "payload": e2}})])
+    src = {"email_autoresponders": [e1, e2], "autoresponder_contract": contract}
+    dst = {"autoresponder_contract": _ar_contract()}
+    r = resolve_autoresponders(src, dst,
+                               ["email_autoresponders:x@a.test", "email_autoresponders:y@a.test"])
+    assert r.resolved
+    assert len(r.kwargs["by_domain"]["a.test"]) == 2
+    pc = r.kwargs["contract"]
+    assert len(pc["domains"]) == 1
+    assert len(pc["domains"][0]["records"]) == 2
+
+def test_autoresponder_no_extraneous_domains():
+    e1, _, _ = _ar_full("x@a.test", "a.test")
+    e2, _, _ = _ar_full("y@b.test", "b.test")
+    from app.modules.executions.autoresponder_rules import build_contract, DomainInput
+    contract = build_contract([
+        DomainInput(domain="a.test", list_ok=True, list_payload=[{"email": "x@a.test"}],
+                    details={"x@a.test": {"ok": True, "payload": e1}}),
+        DomainInput(domain="b.test", list_ok=True, list_payload=[{"email": "y@b.test"}],
+                    details={"y@b.test": {"ok": True, "payload": e2}})])
+    src = {"email_autoresponders": [e1, e2], "autoresponder_contract": contract}
+    dst = {"autoresponder_contract": _ar_contract()}
+    r = resolve_autoresponders(src, dst, ["email_autoresponders:x@a.test"])
+    pc = r.kwargs["contract"]
+    domain_names = [d["domain"] for d in pc["domains"]]
+    assert "b.test" not in domain_names
+
+def test_autoresponder_duplicate_step_id_blocked():
+    e1, _, _ = _ar_full("x@a.test", "a.test")
+    from app.modules.executions.autoresponder_rules import build_contract, DomainInput
+    contract = build_contract([DomainInput(
+        domain="a.test", list_ok=True, list_payload=[{"email": "x@a.test"}],
+        details={"x@a.test": {"ok": True, "payload": e1}})])
+    src = {"email_autoresponders": [e1], "autoresponder_contract": contract}
+    dst = {"autoresponder_contract": _ar_contract()}
+    r = resolve_autoresponders(src, dst,
+                               ["email_autoresponders:x@a.test", "email_autoresponders:x@a.test"])
+    assert r.resolved
+    assert len(r.kwargs["snapshot_data"]["email_autoresponders"]) == 1
+    assert any(b["reason"] == "duplicate_step_id" for b in r.blocked)
+
+def test_autoresponder_incomplete_record_blocked():
+    empty_entry = {"email": "x@a.test", "_domain": "a.test", "_detail_status": "succeeded"}
+    from app.modules.executions import autoresponder_rules
+    fp = autoresponder_rules.fingerprint("x@a.test", empty_entry)
+    contract = {"version": 1, "status": "succeeded",
+                "domains": [{"domain": "a.test", "status": "succeeded", "records": [{
+                    "domain": "a.test", "address": "x@a.test", "fingerprint": fp,
+                    "metadata": {}, "completeness": "incomplete", "issue": "detail_unavailable",
+                    "method": "test"}], "message": None}]}
+    src = {"email_autoresponders": [empty_entry], "autoresponder_contract": contract}
+    dst = {"autoresponder_contract": _ar_contract()}
+    r = resolve_autoresponders(src, dst, ["email_autoresponders:x@a.test"])
+    assert r.blocked and r.blocked[0]["reason"] == "record_incomplete"
+
+def test_autoresponder_domain_mismatch_blocked():
+    e1, _, _ = _ar_full("x@a.test", "a.test")
+    e1_wrong = {**e1, "_domain": "wrong.test"}
+    from app.modules.executions.autoresponder_rules import build_contract, DomainInput
+    contract = build_contract([DomainInput(
+        domain="a.test", list_ok=True, list_payload=[{"email": "x@a.test"}],
+        details={"x@a.test": {"ok": True, "payload": e1}})])
+    src = {"email_autoresponders": [e1_wrong], "autoresponder_contract": contract}
+    dst = {"autoresponder_contract": _ar_contract()}
+    r = resolve_autoresponders(src, dst, ["email_autoresponders:x@a.test"])
+    assert r.blocked and r.blocked[0]["reason"] == "domain_mismatch"
+
+def test_autoresponder_projection_accepted_by_engine():
+    e1, _, _ = _ar_full("x@a.test", "a.test")
+    from app.modules.executions.autoresponder_rules import build_contract, DomainInput
+    contract = build_contract([DomainInput(
+        domain="a.test", list_ok=True, list_payload=[{"email": "x@a.test"}],
+        details={"x@a.test": {"ok": True, "payload": e1}})])
+    src = {"email_autoresponders": [e1], "autoresponder_contract": contract}
+    dst = {"autoresponder_contract": _ar_contract()}
+    r = resolve_autoresponders(src, dst, ["email_autoresponders:x@a.test"])
+    assert r.resolved
+    from app.modules.executions.real_autoresponder_writer import resolve_autoresponder_items
+    specs = r.kwargs["by_domain"]["a.test"]
+    items = resolve_autoresponder_items(r.kwargs["snapshot_data"], r.kwargs["contract"], specs)
+    assert len(items) == 1
+    assert items[0].payload["source_status"] == "verified"
 
 
 # -- invariants ----------------------------------------------------------------

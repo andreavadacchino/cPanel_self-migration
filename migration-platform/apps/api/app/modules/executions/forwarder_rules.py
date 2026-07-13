@@ -89,13 +89,20 @@ def is_write_eligible(envelope: object) -> bool:
     mappings = envelope.get("mappings")
     if not isinstance(mappings, list):
         return False
-    if envelope.get("invalid_sources"):
+    invalid = envelope.get("invalid_sources")
+    if not isinstance(invalid, list) or invalid:
         return False
     seen: set[str] = set()
     for m in mappings:
-        if not isinstance(m, dict) or not m.get("source") or not m.get("destination"):
+        if not isinstance(m, dict):
             return False
-        key = f"{m['source']}\0{m['destination']}"
+        src = m.get("source")
+        dst = m.get("destination")
+        if not isinstance(src, str) or not _is_valid_source(src):
+            return False
+        if not isinstance(dst, str) or not _is_plain_forward(dst):
+            return False
+        key = f"{src}\0{dst}"
         if key in seen:
             return False
         seen.add(key)

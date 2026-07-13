@@ -64,22 +64,55 @@ def _forwarder_flat_pairs(data: dict) -> dict[str, list[dict]]:
     return by_key
 
 
+def _reconcile_endpoint(data: dict, side: str) -> tuple[bool, str | None]:
+    contract = data.get("forwarder_contract")
+    if not forwarder_rules.is_write_eligible(contract):
+        return False, f"forwarder_contract_{side}_not_eligible"
+    raw = data.get("email_forwarders")
+    if isinstance(raw, dict):
+        raw = raw.get("forwarders", raw.get("data", []))
+    if raw is None:
+        raw = []
+    elif not isinstance(raw, list):
+        return False, f"forwarder_contract_{side}_flat_malformed"
+    flat_keys: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            return False, f"forwarder_contract_{side}_flat_item_not_dict"
+        s_raw = item.get("dest") or item.get("source")
+        d_raw = item.get("forward") or item.get("destination")
+        if s_raw is not None and not isinstance(s_raw, str):
+            return False, f"forwarder_contract_{side}_flat_source_invalid"
+        if d_raw is not None and not isinstance(d_raw, str):
+            return False, f"forwarder_contract_{side}_flat_destination_not_string"
+        s = str(s_raw or "").strip().lower()
+        d = str(d_raw or "").strip().lower()
+        if not s or not d:
+            return False, f"forwarder_contract_{side}_flat_item_incomplete"
+        if not forwarder_rules._is_valid_source(s):
+            return False, f"forwarder_contract_{side}_flat_source_invalid"
+        key = f"{s} -> {d}"
+        if key in flat_keys:
+            return False, f"forwarder_contract_{side}_flat_duplicate"
+        flat_keys.add(key)
+    contract_mappings = contract.get("mappings", []) if isinstance(contract, dict) else []
+    contract_keys: set[str] = set()
+    for m in contract_mappings:
+        if isinstance(m, dict) and isinstance(m.get("source"), str) and isinstance(m.get("destination"), str):
+            contract_keys.add(f"{m['source'].strip().lower()} -> {m['destination'].strip().lower()}")
+    if flat_keys != contract_keys:
+        return False, f"forwarder_contract_{side}_flat_contract_mismatch"
+    return True, None
+
+
 def resolve_forwarder(source_data: dict, dest_data: dict, selected: list[str]) -> ResolvedEvidence:
-    src_contract = source_data.get("forwarder_contract")
-    dst_contract = dest_data.get("forwarder_contract")
-    if not forwarder_rules.is_write_eligible(src_contract) or not forwarder_rules.is_write_eligible(dst_contract):
-        side = "source" if not forwarder_rules.is_write_eligible(src_contract) else "destination"
-        return ResolvedEvidence("email_forwarders", False, f"forwarder_contract_{side}_not_eligible")
-    contract_mappings = src_contract.get("mappings", []) if isinstance(src_contract, dict) else []
-    contract_keys = {f"{m['source']} -> {m['destination']}" for m in contract_mappings
-                     if isinstance(m, dict) and m.get("source") and m.get("destination")}
+    src_ok, src_reason = _reconcile_endpoint(source_data, "source")
+    if not src_ok:
+        return ResolvedEvidence("email_forwarders", False, src_reason)
+    dst_ok, dst_reason = _reconcile_endpoint(dest_data, "destination")
+    if not dst_ok:
+        return ResolvedEvidence("email_forwarders", False, dst_reason)
     flat_pairs = _forwarder_flat_pairs(source_data)
-    for key in flat_pairs:
-        if key not in contract_keys:
-            return ResolvedEvidence("email_forwarders", False, "flat_contract_mismatch")
-    for key in contract_keys:
-        if key not in flat_pairs:
-            return ResolvedEvidence("email_forwarders", False, "flat_contract_mismatch")
     valid_ids: list[str] = []
     verified_pairs: dict[str, dict] = {}
     blocked: list[dict] = []
@@ -226,14 +259,22 @@ def resolve_autoresponders(source_data: dict, dest_data: dict, selected: list[st
     verified_entries: list[dict] = []
     valid_ids: list[str] = []
     blocked: list[dict] = []
+    seen_addresses: set[str] = set()
     for step_id in selected:
         address = (step_id.split(":", 1)[1] if ":" in step_id else step_id).strip()
+        if address in seen_addresses:
+            blocked.append({"step_id": step_id, "reason": "duplicate_step_id"})
+            continue
+        seen_addresses.add(address)
         cr_matches = contract_records.get(address, [])
         if len(cr_matches) != 1:
             reason = "duplicate_in_contract" if len(cr_matches) > 1 else "not_in_contract"
             blocked.append({"step_id": step_id, "reason": reason})
             continue
         cr = cr_matches[0]
+        if cr.get("completeness") != autoresponder_rules.COMPLETE or cr.get("issue") is not None:
+            blocked.append({"step_id": step_id, "reason": "record_incomplete"})
+            continue
         snapshot_matches = [e for e in flat if isinstance(e, dict) and (e.get("email") or "").strip() == address]
         if len(snapshot_matches) != 1 or snapshot_matches[0].get("_detail_status") != "succeeded":
             reason = "duplicate_in_snapshot" if len(snapshot_matches) > 1 else "not_in_snapshot"
@@ -248,14 +289,33 @@ def resolve_autoresponders(source_data: dict, dest_data: dict, selected: list[st
         if not domain:
             blocked.append({"step_id": step_id, "reason": "domain_missing"})
             continue
+        if entry.get("_domain") != domain:
+            blocked.append({"step_id": step_id, "reason": "domain_mismatch"})
+            continue
         spec = {"step_id": step_id, "address": address, "domain_present": True}
         by_domain.setdefault(domain, []).append(spec)
         verified_entries.append(entry)
         valid_ids.append(step_id)
+    projected_domains: dict[str, list[dict]] = {}
+    for sid in valid_ids:
+        addr = (sid.split(":", 1)[1] if ":" in sid else sid).strip()
+        cr_list = contract_records.get(addr, [])
+        if cr_list:
+            cr = cr_list[0]
+            dom = cr.get("_domain")
+            if dom:
+                projected_domains.setdefault(dom, []).append(
+                    {k: v for k, v in cr.items() if k != "_domain"})
+    projected_contract = {
+        "version": (src_contract or {}).get("version"),
+        "status": (src_contract or {}).get("status"),
+        "domains": [{"domain": d, "status": "succeeded", "records": recs, "message": None}
+                     for d, recs in projected_domains.items()],
+    }
     projected_snapshot = {"email_autoresponders": verified_entries}
     return ResolvedEvidence("email_autoresponders", True,
                             kwargs={"by_domain": by_domain, "snapshot_data": projected_snapshot,
-                                    "contract": src_contract},
+                                    "contract": projected_contract},
                             blocked=blocked)
 
 

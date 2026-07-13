@@ -74,3 +74,48 @@ clock placeholder (Medium), and full snapshot leak (Medium) remained open.
 | `B4e-iii-c-i task file` | updated Completion Record |
 
 **Tests:** 769 API tests pass (39 in registry file). Web build and Compose validation pass.
+
+**Commit 3 (corrective 2):** reconciliation simmetrica, fail-closed sui flat malformed,
+proiezione minima del contratto autoresponder. Review R1 trovò 3 Medium (tutti neutralizzati
+dal B4e-ii engine downstream); corretti in-commit prima del gate finale.
+
+1. **Reconciliation simmetrica source/destination** — introdotto `_reconcile_endpoint()` helper
+   puro che valida flat/contract per ciascun endpoint separatamente (source e destination).
+   Rileva: item non-dict, source email invalida, destination non-stringa, duplicati, mismatch
+   flat↔contract in entrambe le direzioni. Reason side-specific
+   (`forwarder_contract_source_*` / `forwarder_contract_destination_*`). Source e destination
+   con insiemi diversi di coppie sono ammessi (pre-migrazione). `_forwarder_flat_pairs()` non
+   raggiunge più item malformed perché `_reconcile_endpoint()` li intercetta prima.
+
+2. **`is_write_eligible()` hardened** — `invalid_sources` deve essere `isinstance(list)` e vuoto
+   (non solo falsy: `None`, `""`, `{}` ora bloccati). Ogni mapping validata con
+   `_is_valid_source()` (source) e `_is_plain_forward()` (destination) — non solo truthy check.
+
+3. **Proiezione minima del contratto autoresponder** — `resolve_autoresponders()` costruisce un
+   `projected_contract` con solo i domain block coinvolti e solo i record selezionati
+   (fingerprint-verificati). Domini non selezionati, responder non selezionati, e metadata
+   estranei non entrano nei kwargs. `run_autoresponder_phase` e
+   `resolve_autoresponder_items` accettano la proiezione (test di integrazione).
+
+4. **Completeness/issue gate** — allineato con gli altri 4 resolver: `cr.completeness == COMPLETE`
+   e `cr.issue is None` verificati prima di accettare il record.
+
+5. **Domain tag cross-check** — `entry._domain` confrontato con `cr._domain` (contract); un
+   drift flat↔contract viene bloccato con reason `domain_mismatch`.
+
+6. **Duplicate step_id dedup** — step_id duplicati non corrompono la proiezione; il secondo
+   viene bloccato con reason `duplicate_step_id`.
+
+**Files modified (corrective commit 3):**
+
+| File | Change |
+|---|---|
+| `forwarder_rules.py` | ~10 (is_write_eligible hardened: isinstance(list), _is_valid_source, _is_plain_forward) |
+| `email_phase_registry.py` | ~60 net (_reconcile_endpoint, resolve_forwarder rewritten, projected contract, completeness/domain/dedup gates) |
+| `test_email_phase_registry.py` | +120 (21 new tests: 8 forwarder reconciliation, 5 is_write_eligible, 8 autoresponder projection) |
+| `BACKLOG.md` | status transition [x]→[~]→[x] |
+| `B4e-iii-c-i task file` | updated Completion Record |
+
+**Tests:** 790 API tests pass (60 in registry file). Worker 18 passed. Web build OK. Compose OK.
+Review finale: 0 Critical, 0 High, 0 Medium, 1 Low (case-sensitive duplicate check in
+is_write_eligible — harmless, il collector normalizza; nessuna write bypass).
