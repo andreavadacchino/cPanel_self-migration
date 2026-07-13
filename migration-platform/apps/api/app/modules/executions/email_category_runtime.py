@@ -26,7 +26,7 @@ from app.modules.endpoints.models import Endpoint
 from app.modules.executions.email_backup import persist_email_backup
 from app.modules.executions.email_phase_registry import REGISTRY, ResolvedEvidence
 from app.modules.executions.email_write import EmailPhaseResult
-from app.modules.executions.models import ExecutionAttempt, ExecutionRun
+from app.modules.executions.models import ExecutionAttempt, ExecutionRun, ExecutionStatus
 
 
 def is_category_enabled(category: str) -> bool:
@@ -170,10 +170,21 @@ def run_email_category(
 ) -> EmailPhaseResult:
     if category not in REGISTRY:
         return EmailPhaseResult(ok=False, reason="unknown_category")
+    if not isinstance(resolved, ResolvedEvidence) or resolved.category != category:
+        return EmailPhaseResult(ok=False, reason="category_evidence_mismatch")
     if run.dry_run:
         return EmailPhaseResult(ok=False, reason="dry_run_not_writable")
     if before_write is None:
         return EmailPhaseResult(ok=False, reason="before_write_required")
+    _RUNNING = ExecutionStatus.running.value
+    if getattr(run, "status", None) != _RUNNING:
+        return EmailPhaseResult(ok=False, reason="run_not_running")
+    if getattr(attempt, "status", None) != _RUNNING:
+        return EmailPhaseResult(ok=False, reason="attempt_not_running")
+    if getattr(attempt, "execution_run_id", None) != run.id:
+        return EmailPhaseResult(ok=False, reason="attempt_run_mismatch")
+    if not isinstance(getattr(attempt, "fencing_token", None), int):
+        return EmailPhaseResult(ok=False, reason="fencing_token_invalid")
     if not resolved.resolved:
         return EmailPhaseResult(ok=False, reason="evidence_not_resolved")
     if resolved.blocked:
