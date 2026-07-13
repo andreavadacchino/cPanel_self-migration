@@ -11,7 +11,7 @@ from app.modules.migrations.models import Migration
 from app.modules.plans.models import MigrationPlan
 
 
-CATEGORIES = ("domains", "databases", "mysql_users", "email_forwarders", "cron_jobs", "ftp_accounts", "mailing_lists", "dns_records", "email_autoresponders")
+CATEGORIES = ("domains", "databases", "mysql_users", "email_forwarders", "cron_jobs", "ftp_accounts", "mailing_lists", "dns_records", "email_autoresponders", "default_address", "email_routing", "email_filters")
 
 _LIST_DOMAINS = {"main_domain": "example.test", "addon_domains": ["demo.example.test"], "sub_domains": [], "parked_domains": []}
 _DETAIL = [DomainRecord(name="example.test", type=DomainType.main, docroot="/home/u/public_html"),
@@ -59,7 +59,7 @@ def test_report_covers_all_writers_steps_operator_gaps_and_redacts(client: TestC
     body = response.json()
     assert body["status"] == "not_ready"
     assert {item["category"] for item in body["categories"]} == set(CATEGORIES) | {"php_settings"}
-    assert body["summary"]["categories_total"] == 10
+    assert body["summary"]["categories_total"] == 13
     assert body["summary"]["steps_total"] == 5
     steps = {item["step_id"]: item for item in body["steps"]}
     assert any(gap["code"] == "new_secret_required" for gap in steps["mysql_users:user"]["gaps"])

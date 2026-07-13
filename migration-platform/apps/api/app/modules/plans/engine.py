@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 AUTO = {"domains", "databases", "email_forwarders"}
-APPROVAL = {"cron_jobs", "dns_records"}
+APPROVAL = {"cron_jobs", "dns_records", "default_address", "email_routing", "email_autoresponders", "email_filters"}
 SECRET = {"ftp_accounts", "mailing_lists", "mysql_users"}
-MANUAL = {"email_autoresponders", "php_settings"}
+MANUAL = {"php_settings"}
 
 
 def build_steps(entries: list[dict]) -> tuple[list[dict], dict]:
@@ -21,7 +21,7 @@ def build_steps(entries: list[dict]) -> tuple[list[dict], dict]:
         category, key = entry["category"], entry["key"]
         if category in {"database_contract", "mysql_grant_contract"}:
             mode, reason = "excluded", "Evidenza di quota/restrizioni per il passo database; non è una risorsa autonoma da accodare."
-        elif category in {"ftp_contract", "mailing_list_contract", "forwarder_contract", "autoresponder_contract", "dns_contract"}:
+        elif category in {"ftp_contract", "mailing_list_contract", "forwarder_contract", "autoresponder_contract", "dns_contract", "default_address_contract", "email_routing_contract", "email_filters_contract"}:
             mode, reason = "excluded", "Evidenza read-only per il writer; non è una risorsa autonoma da accodare."
         elif category == "mysql_grants":
             mode, reason = "excluded", "Evidenza di supporto per il passo utente MySQL; non è una risorsa autonoma da accodare."
@@ -42,7 +42,7 @@ def build_steps(entries: list[dict]) -> tuple[list[dict], dict]:
         else:
             mode, reason = "manual", "Nessun writer automatico sicuro disponibile."
         dependencies: list[str] = []
-        if category in {"php_settings", "ssl", "dns_records"}:
+        if category in {"php_settings", "ssl", "dns_records", "default_address", "email_routing"}:
             dependencies = ["domains"]
         if category in {"mysql_users"}:
             dependencies = ["databases"]
@@ -53,8 +53,9 @@ def build_steps(entries: list[dict]) -> tuple[list[dict], dict]:
             "depends_on_categories": dependencies,
         })
     order = {"domains": 10, "databases": 20, "mysql_users": 30, "ftp_accounts": 40, "subaccounts": 41,
-             "email_forwarders": 50, "email_autoresponders": 51, "mailing_lists": 52, "cron_jobs": 60,
-             "php_settings": 70, "ssl": 80, "dns_records": 90}
+             "default_address": 45, "email_routing": 46,
+             "email_forwarders": 50, "email_autoresponders": 51, "mailing_lists": 52, "email_filters": 53,
+             "cron_jobs": 60, "php_settings": 70, "ssl": 80, "dns_records": 90}
     steps.sort(key=lambda step: (order.get(step["category"], 999), step["key"]))
     counts = {mode: sum(step["mode"] == mode for step in steps) for mode in ("automatic", "approval", "secret_required", "manual", "excluded")}
     counts["total"] = len(steps)

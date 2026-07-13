@@ -31,19 +31,20 @@
 this task is itself expected to exceed the 8-file/500-line guardrails and will be **further
 split** (formalized after B4e-ii, with an updated measurement) into:
 
-- **B4e-iii-a — Durable email backup store** (dep: B4a; enables B4b-ii/B4c-ii wiring): a
+- **B4e-iii-a — Durable email backup store** (dep: B4b-ii, B4c-ii): a
   durable PostgreSQL backup store (a new table + Alembic migration + model + a real
   `persist_backup`) so the compensable default-address/routing writers can persist a protected
   backup **before** the write (backup-or-nothing). **AD2 (confirmed):** no compensable
   default-address/routing write may be wired until this store is complete.
-- **B4e-iii-b — Email categories pipeline integration** (dep: B4e-iii-a, B4e-ii): make
+- **B4e-iii-b — Email categories pipeline integration** (dep: B4e-i, B4d-i, B4b-i, B4c-i): make
   `default_address`, `email_routing` and the autoresponder explicit **evidence-bound**
   categories across comparison, plan, preview and readiness (extend `_normalize`,
   `build_steps`, `WRITER_CATEGORIES`, `CALLS`, the eligibility gaps). **AD1 (confirmed):**
   extend the pipeline — these must not stay unreachable writers or optional follow-ups. Keep
   each category evidence-bound and disabled by default; do not create a generic `email`
   category that hides distinct states.
-- **B4e-iii-c — Email runtime registry and dispatch** (dep: B4e-iii-b): a uniform per-category
+- **B4e-iii-c — Email runtime registry and dispatch** (dep: B4e-iii-a, B4e-iii-b, B4e-ii, B4a,
+  B4b-ii, B4c-ii, B4d-ii): a uniform per-category
   engine registry driving forwarder (B4a), default-address (B4b-ii), routing (B4c-ii), filters
   (B4d-ii) and autoresponder (B4e-ii); per-category + per-write (`before_write`) + post-phase
   `authorize`/lease/fencing re-validation; destination-only gateways; source payloads loaded

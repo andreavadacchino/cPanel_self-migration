@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+from app.modules.executions import default_address_rules, routing_rules, filter_rules, autoresponder_rules
 from app.modules.inventory import domain_contract
 
 WRITER_CATEGORIES = (
     "domains", "databases", "mysql_users", "email_forwarders", "cron_jobs",
     "ftp_accounts", "mailing_lists", "dns_records", "email_autoresponders",
+    "default_address", "email_routing", "email_filters",
 )
 READABLE = {"succeeded", "empty"}
+_CONTRACT_COVERAGE = {
+    "default_address": "default_address_contract",
+    "email_routing": "email_routing_contract",
+    "email_filters": "email_filters_contract",
+    "email_autoresponders": "autoresponder_contract",
+}
 EVIDENCE_CATEGORIES = {
     "database_contract", "mysql_grant_contract", "mysql_grants",
     "ftp_contract", "mailing_list_contract", "forwarder_contract",
     "autoresponder_contract", "dns_contract", "domains_contract",
+    "default_address_contract", "email_routing_contract", "email_filters_contract",
 }
 PRIORITY = {
     "not_ready": 0, "needs_inventory": 1, "needs_contract_test": 2,
@@ -27,12 +36,21 @@ GAPS = {
     "mailing_lists": [("needs_inventory", "private_visibility", "Il campo private può non essere verificato dall'inventario corrente.")],
     "dns_records": [("not_ready", "collision_and_zone_verification", "Servono gestione collisioni/record differenti e verifica fresca dell'intera zona.")],
     "email_autoresponders": [("needs_contract_test", "fresh_uapi", "Serve una fresh UAPI reale anti-upsert prima della scrittura additiva.")],
+    "default_address": [("needs_contract_test", "default_address_fresh", "Serve una lettura default-address fresca e verificata su entrambi gli endpoint.")],
+    "email_routing": [("not_ready", "routing_no_policy", "La futura write richiede una RoutingSetPolicy evidence-bound esatta; in assenza di policy source la write resta bloccata.")],
+    "email_filters": [("needs_contract_test", "filter_fresh", "Serve una lettura filtri fresca e verificata su entrambi gli endpoint.")],
 }
 
 
 def _coverage(snapshot_data: dict | None, category: str) -> str:
-    value = (snapshot_data or {}).get("coverage", {}).get(category, {})
-    return value.get("status", "unverified") if isinstance(value, dict) else "unverified"
+    data = snapshot_data or {}
+    value = data.get("coverage", {}).get(category, {})
+    status = value.get("status", "unverified") if isinstance(value, dict) else "unverified"
+    if status == "unverified" and category in _CONTRACT_COVERAGE:
+        contract = data.get(_CONTRACT_COVERAGE[category])
+        if isinstance(contract, dict) and isinstance(contract.get("version"), int):
+            status = contract.get("status", "unverified")
+    return status
 
 
 def _domains_gaps(source_data: dict | None, destination_data: dict | None) -> list[tuple[str, str, str]]:
@@ -56,8 +74,17 @@ def _category_gaps(category: str, source_data: dict | None, destination_data: di
         return _domains_gaps(source_data, destination_data)
     if category == "email_forwarders" and _coverage(data, "forwarder_contract") == "succeeded" and _coverage(destination_data or {}, "forwarder_contract") == "succeeded":
         return [("eligible_for_real_design", "forwarder_contract_verified", "La fresh read per coppia completa è supportata da evidenze read-only correnti su entrambi gli endpoint.")]
-    if category == "email_autoresponders" and _coverage(data, "autoresponder_contract") in {"succeeded", "empty"} and _coverage(destination_data or {}, "autoresponder_contract") in {"succeeded", "empty"}:
-        return [("eligible_for_real_design", "autoresponder_contract_verified", "Lista e dettaglio per indirizzo (contratto versionato B4e-i) supportano il futuro controllo anti-upsert su entrambi gli endpoint.")]
+    if category == "email_autoresponders":
+        src_contract = data.get("autoresponder_contract")
+        dst_contract = (destination_data or {}).get("autoresponder_contract")
+        if autoresponder_rules.is_write_eligible(src_contract) and autoresponder_rules.is_write_eligible(dst_contract):
+            return [("eligible_for_real_design", "autoresponder_contract_verified", "Lista e dettaglio per indirizzo (contratto versionato B4e-i) supportano il futuro controllo anti-upsert su entrambi gli endpoint.")]
+        gaps: list[tuple[str, str, str]] = []
+        for side, contract in (("source", src_contract), ("destination", dst_contract)):
+            if not autoresponder_rules.is_write_eligible(contract):
+                status = contract.get("status", "absent") if isinstance(contract, dict) else "absent"
+                gaps.append(("not_ready", f"autoresponder_contract_{side}_{status}", f"Contratto autoresponder {side} non eleggibile ({status})."))
+        return gaps or GAPS[category]
     if category == "dns_records" and _coverage(data, "dns_contract") == "succeeded" and _coverage(destination_data or {}, "dns_contract") == "succeeded":
         return [("eligible_for_real_design", "dns_contract_verified", "Zone proprietarie, collisioni e strategia di fresh read sono censite su entrambi gli endpoint.")]
     if category == "databases" and _coverage(data, "database_contract") == "succeeded" and _coverage(destination_data or {}, "database_contract") == "succeeded":
@@ -79,6 +106,39 @@ def _category_gaps(category: str, source_data: dict | None, destination_data: di
         items = data.get("mailing_lists", [])
         if all(isinstance(item, dict) and item.get("_privacy_status") == "succeeded" for item in items):
             return [("needs_contract_test", "mailing_list_contract", "La privacy è verificata; serve un contract test account-level del writer.")]
+    if category == "default_address":
+        src_contract = data.get("default_address_contract")
+        dst_contract = (destination_data or {}).get("default_address_contract")
+        if default_address_rules.is_write_eligible(src_contract) and default_address_rules.is_write_eligible(dst_contract):
+            return [("eligible_for_real_design", "default_address_contract_verified", "Contratto default-address versionato e succeeded su entrambi gli endpoint.")]
+        gaps = []
+        for side, contract in (("source", src_contract), ("destination", dst_contract)):
+            if not default_address_rules.is_write_eligible(contract):
+                status = contract.get("status", "absent") if isinstance(contract, dict) else "absent"
+                gaps.append(("not_ready", f"default_address_contract_{side}_{status}", f"Contratto default-address {side} non eleggibile ({status})."))
+        return gaps or GAPS[category]
+    if category == "email_routing":
+        src_contract = data.get("email_routing_contract")
+        dst_contract = (destination_data or {}).get("email_routing_contract")
+        if routing_rules.is_write_eligible(src_contract) and routing_rules.is_write_eligible(dst_contract):
+            return [("needs_contract_test", "routing_policy_required", "Contratto routing valido su entrambi gli endpoint ma manca una RoutingSetPolicy evidence-bound; la write resta bloccata senza una policy source esatta (limitazione documentata per B4e-iii-c).")]
+        gaps = []
+        for side, contract in (("source", src_contract), ("destination", dst_contract)):
+            if not routing_rules.is_write_eligible(contract):
+                status = contract.get("status", "absent") if isinstance(contract, dict) else "absent"
+                gaps.append(("not_ready", f"routing_contract_{side}_{status}", f"Contratto routing {side} non eleggibile ({status})."))
+        return gaps or GAPS[category]
+    if category == "email_filters":
+        src_contract = data.get("email_filters_contract")
+        dst_contract = (destination_data or {}).get("email_filters_contract")
+        if filter_rules.is_write_eligible(src_contract) and filter_rules.is_write_eligible(dst_contract):
+            return [("eligible_for_real_design", "filter_contract_verified", "Contratto filtri versionato e completo su entrambi gli endpoint.")]
+        gaps = []
+        for side, contract in (("source", src_contract), ("destination", dst_contract)):
+            if not filter_rules.is_write_eligible(contract):
+                status = contract.get("status", "absent") if isinstance(contract, dict) else "absent"
+                gaps.append(("not_ready", f"filter_contract_{side}_{status}", f"Contratto filtri {side} non eleggibile ({status})."))
+        return gaps or GAPS[category]
     return GAPS[category]
 
 

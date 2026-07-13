@@ -8,6 +8,7 @@ import base64
 
 READABLE = {"succeeded", "empty", "partial"}
 IDENTITY_FIELDS = ("email", "login", "database", "user", "username", "domain", "domain_name", "name", "id")
+_CONTRACT_PROJECTIONS = {"default_address": "default_address_contract", "email_routing": "email_routing_contract"}
 IGNORED_FIELDS = {"diskused", "disk_usage", "humandiskused", "mtime", "last_login"}
 
 
@@ -30,6 +31,11 @@ def _flatten(value: object) -> list[object]:
 
 
 def _normalize(category: str, value: object) -> list[object]:
+    if category in _CONTRACT_PROJECTIONS:
+        if isinstance(value, dict):
+            return [{"domain": r.get("domain"), "class": r.get("class"), "completeness": r.get("completeness")}
+                    for r in value.get("records", []) if isinstance(r, dict) and r.get("domain")]
+        return []
     if category == "account" and isinstance(value, dict):
         fields = (
             "user", "domain", "maximum_databases", "maximum_mail_accounts",
@@ -157,16 +163,45 @@ def _index(category: str, value: object) -> dict[str, str]:
     return result
 
 
+def _data_key(category: str) -> str:
+    return _CONTRACT_PROJECTIONS.get(category, category)
+
+
+_CONTRACT_VERSIONS = {"default_address": 1, "email_routing": 1}
+
+
+def _contract_status(snapshot: dict, category: str) -> str | None:
+    contract_key = _CONTRACT_PROJECTIONS.get(category)
+    if contract_key is None:
+        return None
+    contract = snapshot.get(contract_key)
+    if not isinstance(contract, dict):
+        return None
+    if contract.get("version") != _CONTRACT_VERSIONS.get(category):
+        return "unverified"
+    return contract.get("status", "unverified")
+
+
 def compare(source: dict, destination: dict) -> tuple[list[dict], dict]:
     entries: list[dict] = []
     by_category: dict[str, dict] = {}
     source_coverage = source.get("coverage", {})
     destination_coverage = destination.get("coverage", {})
-    categories = sorted(set(source_coverage) | set(destination_coverage))
+    projected = set()
+    for cat in _CONTRACT_PROJECTIONS:
+        if cat not in source_coverage and cat not in destination_coverage:
+            if _contract_status(source, cat) is not None or _contract_status(destination, cat) is not None:
+                projected.add(cat)
+    categories = sorted(set(source_coverage) | set(destination_coverage) | projected)
     for category in categories:
-        src_status = source_coverage.get(category, {}).get("status", "unverified")
-        dst_status = destination_coverage.get(category, {}).get("status", "unverified")
-        if src_status not in READABLE or dst_status not in READABLE:
+        if category in projected:
+            src_status = _contract_status(source, category) or "unverified"
+            dst_status = _contract_status(destination, category) or "unverified"
+        else:
+            src_status = source_coverage.get(category, {}).get("status", "unverified")
+            dst_status = destination_coverage.get(category, {}).get("status", "unverified")
+        readable = {"succeeded", "empty"} if category in _CONTRACT_PROJECTIONS else READABLE
+        if src_status not in readable or dst_status not in readable:
             by_category[category] = {"source": 0, "destination": 0, "match": 0, "blocker": 0, "warning": 0, "info": 0, "skipped": True}
             if src_status == "unsupported" and dst_status == "unsupported":
                 continue
@@ -178,12 +213,13 @@ def compare(source: dict, destination: dict) -> tuple[list[dict], dict]:
                 "destination": {"exists": dst_status in READABLE, "fingerprint": None},
             })
             continue
-        src = _index(category, source.get(category, []))
-        dst = _index(category, destination.get(category, []))
+        dk = _data_key(category)
+        src = _index(category, source.get(dk, []))
+        dst = _index(category, destination.get(dk, []))
         stats = {"source": len(src), "destination": len(dst), "match": 0, "blocker": 0, "warning": 0, "info": 0, "skipped": False}
         for key in sorted(set(src) | set(dst)):
             if key not in dst:
-                severity = "warning" if category in {"ssl", "dns_records"} else "blocker"
+                severity = "warning" if category in {"ssl", "dns_records", "default_address", "email_routing"} else "blocker"
                 state, message = "missing_on_destination", "Presente sul sorgente e assente sulla destinazione."
             elif key not in src:
                 state, severity, message = "only_on_destination", "info", "Presente solo sulla destinazione; controllare prima di sovrascrivere."

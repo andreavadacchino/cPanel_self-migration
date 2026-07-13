@@ -553,8 +553,10 @@ stesso login FTP viene escluso come duplicato.
 
 Gli utenti MySQL, FTP e mailing list richiedono nuove password. PHP resta manuale
 perché la funzione ufficiale di scrittura è WHM-level; SSL viene escluso dalla
-copia e rigenerato con AutoSSL dopo domini/DNS. Gli autoresponder restano manuali
-finché il relativo writer e i guardrail anti-upsert non saranno implementati.
+copia e rigenerato con AutoSSL dopo domini/DNS. Autoresponder, filtri,
+default-address e routing richiedono conferma esplicita (`approval`); il
+readiness report ne valida i contratti evidence-bound su entrambi gli endpoint
+prima di dichiararli eleggibili. Nessun engine email è collegato al dispatch.
 
 ### Inventario autoresponder dettagliato
 
