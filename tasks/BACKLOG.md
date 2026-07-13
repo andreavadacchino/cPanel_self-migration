@@ -58,7 +58,10 @@
 | `[/]` | `B4e-iii` | [Email phases pipeline and dispatch integration](B4e-iii-email-dispatch-integration.md) (split → iii-a/b/c) | High | L | B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[x]` | `B4e-iii-a` | [Durable email backup store](B4e-iii-a-durable-email-backup-store.md) | High | M | B4b-ii, B4c-ii |
 | `[x]` | `B4e-iii-b` | [Email categories pipeline integration](B4e-iii-b-email-categories-pipeline.md) | High | M | B4e-i, B4d-i, B4b-i, B4c-i |
-| `[ ]` | `B4e-iii-c` | [Email runtime registry and dispatch](B4e-iii-c-email-runtime-registry-dispatch.md) | High | L | B4e-iii-a, B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
+| `[/]` | `B4e-iii-c` | [Email runtime registry and dispatch](B4e-iii-c-email-runtime-registry-dispatch.md) (split → c-i/c-ii/c-iii) | High | L | B4e-iii-a, B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
+| `[x]` | `B4e-iii-c-i` | [Email registry and evidence resolvers](B4e-iii-c-i-email-registry-resolvers.md) | High | M | B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
+| `[ ]` | `B4e-iii-c-ii` | [Destination gateways and durable backup bindings](B4e-iii-c-ii-email-gateways-backups.md) | High | M | B4e-iii-c-i, B4e-iii-a |
+| `[ ]` | `B4e-iii-c-iii` | [Worker email dispatch and terminal semantics](B4e-iii-c-iii-email-worker-dispatch.md) | High | M | B4e-iii-c-ii |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
@@ -240,7 +243,7 @@
 
 | `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2b-ii, B3c-ii |
 | `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2b-ii, B6 |
-| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e-iii-c |
+| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e-iii-c-iii |
 | `[ ]` | `C4` | [Transfer checkpoint resume](C4-transfer-checkpoint-resume.md) | High | L | C1, C2, C3 |
 
 ### Wave D — Verification and recovery
@@ -274,11 +277,13 @@ graph LR
   B4a-->B4e-i-->B4e-ii-->B4e-iii-c
   B4b-ii-->B4e-iii-a-->B4e-iii-c
   B4c-ii-->B4e-iii-a
-  B4e-i-->B4e-iii-b-->B4e-iii-c
+  B4e-i-->B4e-iii-b-->B4e-iii-c-i
   B4d-i-->B4e-iii-b
   B4b-i-->B4e-iii-b
   B4c-i-->B4e-iii-b
-  B4d-ii-->B4e-iii-c
+  B4d-ii-->B4e-iii-c-i
+  B4e-iii-c-i-->B4e-iii-c-ii-->B4e-iii-c-iii
+  B4e-iii-a-->B4e-iii-c-ii
   B1-->B5
   B2a-->B5
   B3c-ii-->B5
@@ -291,7 +296,7 @@ graph LR
   B2b-ii-->C2
   B6-->C2
   B2b-ii-->C3
-  B4e-iii-c-->C3
+  B4e-iii-c-iii-->C3
   C1-->C4
   C2-->C4
   C3-->C4

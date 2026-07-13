@@ -1,13 +1,34 @@
-# Task B4e-iii-c: Email runtime registry and dispatch
+# Task B4e-iii-c: Email runtime registry and dispatch (aggregator)
 
 | Field | Value |
 |---|---|
 | **ID** | `B4e-iii-c` |
-| **Status** | `[ ]` |
+| **Status** | `[/]` (retired — split into c-i/c-ii/c-iii) |
 | **Priority** | High |
 | **Size** | L |
 | **Dependencies** | B4e-iii-a, B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | **Branch** | `feat/b4e-iii-c-email-runtime-registry-dispatch` |
+
+> **Split record (2026-07-14, formalized after B4e-iii-b analysis).** This aggregator is retired
+> `[/]` and replaced by three effective sub-tasks, each ≤8 files / ≤500 lines:
+>
+> - **B4e-iii-c-i — Email registry and evidence resolvers** (dep: B4e-iii-b, B4e-ii, B4a,
+>   B4b-ii, B4c-ii, B4d-ii) →
+>   [B4e-iii-c-i-email-registry-resolvers.md](B4e-iii-c-i-email-registry-resolvers.md): typed
+>   registry and evidence-bound source payload resolvers for all 5 email categories. No gateway,
+>   no dispatch wiring, no backup binding.
+> - **B4e-iii-c-ii — Destination gateways and durable backup bindings** (dep: B4e-iii-c-i,
+>   B4e-iii-a) →
+>   [B4e-iii-c-ii-email-gateways-backups.md](B4e-iii-c-ii-email-gateways-backups.md): real
+>   destination-only gateway builders, backup store binding for default-address/routing,
+>   per-category flag checking. Not wired to worker.
+> - **B4e-iii-c-iii — Worker email dispatch and terminal semantics** (dep: B4e-iii-c-ii) →
+>   [B4e-iii-c-iii-email-worker-dispatch.md](B4e-iii-c-iii-email-worker-dispatch.md): wires
+>   to `worker_start`, authorize per-category/per-write/post-phase, cancellation, terminal
+>   semantics, atomic run+attempt commit. Unblocks `C3`.
+>
+> `C3` now depends on **B4e-iii-c-iii**. Crash/resume recovery stays with **C4**. The
+> requirements below are preserved as the umbrella spec the three sub-tasks jointly satisfy.
 
 **Origin:** third sub-task of the scope split of `B4e-iii` (see
 [B4e-iii-email-dispatch-integration.md](B4e-iii-email-dispatch-integration.md), split record).
@@ -33,15 +54,12 @@ enabled; disabled by default; no source write; no real contact in tests; mock/dr
 **Notes:** routing needs an evidence-bound `RoutingSetPolicy` source (empty by default → every
 set blocked); provisioning policies is out of scope (routing stays inert until a policy source
 exists — record as an open limitation). Crash/resume recovery stays with **C4**; this task must
-not declare production-ready recovery. Completing this task **unblocks `C3`**.
+not declare production-ready recovery. Completing **B4e-iii-c-iii** unblocks `C3`.
 
-**Acceptance Criteria:**
+**Acceptance Criteria (aggregator):**
 
-- [ ] A uniform registry dispatches the wired email categories under per-category/per-write/
-      post-phase authorize+lease+fencing, atomic run+attempt commit, durable backups for
-      default-address/routing, and explicit terminal semantics; disabled by default; no source
-      write; mock/dry-run intact.
-- [ ] No test, typecheck, Compose, or coverage regression; `C3` unblocked.
+- [ ] B4e-iii-c-i, B4e-iii-c-ii, B4e-iii-c-iii formalized, each ≤8 files / ≤500 lines,
+      landed and verified; `C3` unblocked once B4e-iii-c-iii completes.
 
 **Verification Commands:**
 
