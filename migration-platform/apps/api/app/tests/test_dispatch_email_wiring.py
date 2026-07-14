@@ -21,6 +21,7 @@ from app.modules.plans.models import MigrationPlan
 from app.modules.readiness.models import WriterReadinessReport
 
 _CANCELLED = ExecutionStatus.cancelled.value
+_RUNNING = ExecutionStatus.running.value
 
 _FWD = {"id": "email_forwarders:a->b", "category": "email_forwarders",
         "key": "a->b", "mode": "automatic", "depends_on_categories": []}
@@ -77,7 +78,6 @@ def _dispatch_and_get_attempt(db, env, monkeypatch):
     from app.modules.executions.dispatch import dispatch
     dispatch(db, env.run.id)
     return db.query(ExecutionAttempt).first()
-
 # ── Implemented categories ────────────────────────────────────────────────────
 
 def test_six_categories():
@@ -279,29 +279,29 @@ def test_progress_sensitive_comp_rejected(real_on, fwd_on, db_session, monkeypat
     with pytest.raises(ConflictError):
         p({"categories": [], "completed_step_ids": []}, {"email_forwarders": [{"password": "x"}]})
 
-# ── R1: finalize_terminal atomicity ──────────────────────────────────────────
+# ── R1/R1-bis: finalize_terminal atomicity ───────────────────────────────────
+
+_TCP = {"domains": [], "email": [], "pending_categories": []}
 
 def test_finalize_succeeded_atomic(real_on, fwd_on, db_session, monkeypatch):
     from app.modules.executions.dispatch_terminal import finalize_terminal
     e, att = _running_env(db_session, monkeypatch)
     run = finalize_terminal(db_session, e.run, att, ExecutionStatus.succeeded.value,
-        phase="test", checkpoint={"done": True})
+        phase="test", checkpoint=_TCP)
     assert run.status == ExecutionStatus.succeeded.value
-    db_session.refresh(att)
-    assert att.status == ExecutionStatus.succeeded.value
+    db_session.refresh(att); assert att.status == ExecutionStatus.succeeded.value
 
 def test_finalize_fresh_cancelled_preserves(real_on, fwd_on, db_session, monkeypatch):
     from app.modules.executions.dispatch_terminal import finalize_terminal
     e, att = _running_env(db_session, monkeypatch)
-    att.checkpoint = {"prior": True}; att.compensation = {"old": [1]}; db_session.commit()
+    att.checkpoint = {"domains": ["d:1"]}; att.compensation = {"domains": [{"action": "a"}]}
+    db_session.commit()
     e.run.status = _CANCELLED; db_session.commit()
     run = finalize_terminal(db_session, e.run, att, ExecutionStatus.succeeded.value,
-        phase="test", checkpoint={"new": True}, compensation={"new": [2]})
+        phase="test", checkpoint=_TCP)
     assert run.status == _CANCELLED
-    db_session.refresh(att)
-    assert att.status == _CANCELLED
-    assert att.checkpoint == {"prior": True}
-    assert "old" in att.compensation
+    db_session.refresh(att); assert att.status == _CANCELLED
+    assert att.checkpoint == {"domains": ["d:1"]}
 
 def test_finalize_rollback_on_error(real_on, fwd_on, db_session, monkeypatch):
     from app.modules.executions.dispatch_terminal import finalize_terminal
@@ -310,12 +310,24 @@ def test_finalize_rollback_on_error(real_on, fwd_on, db_session, monkeypatch):
     with mp.object(service, "finalize_attempt", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError):
             finalize_terminal(db_session, e.run, att, ExecutionStatus.succeeded.value,
-                phase="test", checkpoint={})
+                phase="test", checkpoint=_TCP)
     db_session.rollback()
-    run = db_session.get(ExecutionRun, e.run.id)
-    assert run.status == ExecutionStatus.running.value
+    assert db_session.get(ExecutionRun, e.run.id).status == _RUNNING
 
-# ── R1: compensation preservation ────────────────────────────────────────────
+def test_finalize_cancel_target_on_running_rejected(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import finalize_terminal
+    e, att = _running_env(db_session, monkeypatch)
+    with pytest.raises(ConflictError, match="non autorizzato"):
+        finalize_terminal(db_session, e.run, att, _CANCELLED, phase="test", checkpoint=_TCP)
+
+def test_finalize_arbitrary_checkpoint_rejected(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import finalize_terminal
+    e, att = _running_env(db_session, monkeypatch)
+    with pytest.raises(ConflictError):
+        finalize_terminal(db_session, e.run, att, ExecutionStatus.succeeded.value,
+            phase="test", checkpoint={"done": True})
+
+# ── R1/R1-bis: compensation preservation ─────────────────────────────────────
 
 @patch.object(dm, "coordinate_email_categories")
 def test_email_failure_preserves_comp(m_coord, real_on, fwd_on, db_session, monkeypatch):
@@ -325,12 +337,11 @@ def test_email_failure_preserves_comp(m_coord, real_on, fwd_on, db_session, monk
     from app.modules.executions.email_worker_coordinator import EmailCoordinationResult
     m_coord.return_value = EmailCoordinationResult(
         ok=False, reason="category_phase_failed",
-        completed_step_ids=[], compensation={"email_forwarders": [{"backup_ref": "bk1"}]})
+        completed_step_ids=[], compensation={"email_forwarders": [{"action": "add_forwarder", "item": "a", "reverse": "manual"}]})
     run = worker_start(db_session, e.run.id, att.id)
     assert run.status == ExecutionStatus.failed.value
     db_session.refresh(att)
-    assert att.compensation is not None
-    assert "email_forwarders" in att.compensation
+    assert att.compensation is not None and "email_forwarders" in att.compensation
 
 @patch.object(dm, "_run_domain_phase")
 @patch.object(dm, "_build_domain_gateway")
@@ -338,9 +349,53 @@ def test_domain_failure_preserves_comp(m_gw, m_dom, real_on, dom_on, db_session,
     e = _env(db_session)
     att = _dispatch_and_get_attempt(db_session, e, monkeypatch)
     m_dom.return_value = SimpleNamespace(ok=False, pending=False, completed=[],
-                                         compensation=[{"action": "created", "domain": "d.test"}], reason="blocked")
+        compensation=[{"action": "created", "domain": "d.test"}], reason="blocked")
     run = worker_start(db_session, e.run.id, att.id)
     assert run.status == ExecutionStatus.failed.value
     db_session.refresh(att)
-    assert att.compensation is not None
-    assert "domains" in att.compensation
+    assert att.compensation is not None and "domains" in att.compensation
+
+# ── R1-bis: validation ────────────────────────────────────────────────────────
+
+from app.modules.executions.dispatch_validation import (
+    validate_progress_checkpoint as _vpc, validate_compensation as _vc,
+    assert_strict_json as _sj)
+from app.modules.executions.dispatch_terminal import merge_compensation as _mc
+
+@pytest.mark.parametrize("cp", [
+    {"categories": [], "completed_step_ids": [], "extra": 1},
+    {"completed_step_ids": []},
+    {"categories": [{"category": "bogus", "status": "completed", "completed": []}], "completed_step_ids": []},
+    {"categories": [{"category": "email_forwarders", "status": "completed", "completed": ["a"]}],
+     "completed_step_ids": ["a", "b"]},
+])
+def test_v_checkpoint_invalid(cp):
+    with pytest.raises(ConflictError): _vpc(cp)
+
+def test_v_checkpoint_dup_cat():
+    e = {"category": "email_forwarders", "status": "completed", "completed": []}
+    with pytest.raises(ConflictError): _vpc({"categories": [e, e], "completed_step_ids": []})
+
+def test_v_checkpoint_valid():
+    _vpc({"categories": [{"category": "email_forwarders", "status": "completed", "completed": ["fwd:a"]}],
+          "completed_step_ids": ["fwd:a"]})
+
+@pytest.mark.parametrize("comp", [
+    {"bogus": [{"action": "x"}]},
+    {"email_forwarders": [{"password": "x"}]},
+    {"email_forwarders": [{"action": "a", "backup_ref": "r"}]},
+])
+def test_v_comp_invalid(comp):
+    with pytest.raises(ConflictError): _vc(comp)
+
+def test_v_comp_valid():
+    _vc({"email_forwarders": [{"action": "add_forwarder", "item": "a->b", "reverse": "manual"}]})
+
+def test_v_strict_json_rejects():
+    with pytest.raises(ConflictError): _sj((1, 2))
+    with pytest.raises(ConflictError): _sj(float("nan"))
+
+def test_v_merge_dedup():
+    a = {"email_forwarders": [{"action": "add", "item": "x"}]}
+    b = {"email_forwarders": [{"action": "add", "item": "x"}, {"action": "add", "item": "y"}]}
+    assert len(_mc(a, b)["email_forwarders"]) == 2

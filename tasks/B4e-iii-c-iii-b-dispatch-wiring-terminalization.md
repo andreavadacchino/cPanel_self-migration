@@ -112,6 +112,44 @@ Guardrail deviation: 20 files (limit 8), 631 lines (limit 500).
 
 **R1 budget:** 5 files, 313 ins / 68 del = 381 modified. Within 8/500.
 
+## Correction Record R1-bis
+
+**Date:** 2026-07-14
+
+**Issues corrected:**
+1. `_fresh_read` used ORM `select(ExecutionRun)` returning identity-map cached objects
+   → replaced with scalar column queries (`select(Run.id, Run.status, ...)`) that
+   bypass the identity map and always return persisted DB state.
+2. `_validate_checkpoint` accepted arbitrary top-level keys, missing required keys,
+   empty entries, unvalidated completed lists → extracted to `dispatch_validation.py`
+   with exact-shape enforcement: required keys, EMAIL_CATEGORIES whitelist, reason
+   code whitelist, step-id union check, duplicate detection.
+3. `json.dumps(default=str)` silently serialized non-JSON types → `assert_strict_json`
+   recursive type checker: only None/bool/int/float(finite)/str/list/dict allowed.
+4. `_validate_compensation` only checked forbidden keys → per-category schema with
+   allowed-key sets derived from actual `compensation_*` functions, backup_ref
+   restricted to default_address/routing, scalar-only values enforced.
+5. `_merge_compensation` used `id()` dedup → canonical JSON dedup with `json.dumps
+   (sort_keys=True)`, deep-copy, shape-conflict detection.
+6. Terminal checkpoints not validated → `validate_terminal_checkpoint` with closed
+   key set, forbidden-key scan, applied before `finalize_attempt`.
+7. `finalize_terminal(terminal=cancelled)` on a fresh-running run → rejected with
+   ConflictError; cancellation accepted only when DB already shows cancelled.
+
+**Files modified (R1-bis):**
+- `dispatch_validation.py` — NEW (188 lines): strict JSON, checkpoint/compensation/terminal validators
+- `dispatch_terminal.py` — rewritten (172 lines): scalar column fresh reads, deterministic merge
+- `test_dispatch_email_wiring.py` — 401 lines (39 tests): parametrized validation tests
+- `tasks/B4e-iii-c-iii-b-*` — Correction Record R1-bis
+
+**Tests/commands run (R1-bis):**
+- API: 940 passed, 0 failed
+- Worker: 18 passed
+- Frontend build: OK
+- Compose: valid
+
+**R1-bis budget:** 4 files, 188 new + 175 ins / 152 del = ~363 net. Within 6/500.
+
 **Residual for R2:**
 - domain_result.pending does not block email execution
 - No exact selected-step completeness check before succeeded
