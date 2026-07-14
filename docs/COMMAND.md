@@ -598,3 +598,53 @@ exit 2.
 
 Exit codes: `0` success, `1` operational error (session not found,
 transition not allowed), `2` usage error (bad flags, unknown kind/status).
+
+## Subcommand: `execute`
+
+The **platform → executor bridge** (ADR-001 §D5). Consumes an
+`execution-spec-v1` JSON document and runs a **governed dry-run** — it
+never writes to the destination. It emits the versioned executor →
+platform output: `execution-event-v1` lines to `events.jsonl` and a final
+`execution-result-v1` `report.json`.
+
+```bash
+cpanel-self-migration execute \
+  --spec ./execution-spec.json \
+  [--config ./host.yaml] \
+  [--output-dir ./out]
+```
+
+The spec carries only **non-secret references** (`plan_id`,
+`source_snapshot_id`, `destination_snapshot_id`, `comparison_report_id`,
+`mode`, `scope`); the connection details and credentials come from
+`host.yaml`, resolved at run time and never taken from the spec. `mode`
+must be `dry_run` and `scope` must select at least one of
+`mail`/`files`/`databases` — both enforced by the contract parser; an
+invalid spec is rejected before any connection.
+
+`Apply` is always false: this command cannot write to the destination
+regardless of the spec.
+
+**One execution = one workspace.** `--output-dir` must not already contain
+`events.jsonl` or `report.json`: the bridge refuses a directory a previous
+execution used, and writes nothing. The orchestrator gives every run a
+directory of its own — including a retry, which is a new run. Without this
+the two artifacts would disagree after a retry: `events.jsonl` is opened in
+append mode, so a second run's events would be interleaved with the first's
+under the same `run_id` (every line still a valid `execution-event-v1`, so
+no consumer could detect it), while `report.json` is truncated and would
+describe only the last attempt.
+
+Exit codes: `0` dry-run completed, `1` input/runtime failure (the
+`report.json` is still written when the run reached it), `2` flag/usage
+error, `130` interrupted — the signal contract the platform maps to the
+`interrupted` status: on `SIGINT`/`SIGTERM` the run stops and still writes
+a `report.json` whose `exit_status` is `interrupted`.
+
+An exit of `1` alone does not say whether the spec was rejected or the run
+failed. Given a **fresh** workspace, the artifacts do: a rejected spec or an
+unreadable config fail before anything is written, so the directory stays
+empty; a run that genuinely failed leaves a `report.json` carrying its
+`errors`. The one case that breaks the rule is a workspace that was already
+used — there a `report.json` is present that *this* run did not write, which
+is the second reason every run gets a directory of its own.

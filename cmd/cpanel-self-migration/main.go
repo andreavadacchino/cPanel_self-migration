@@ -110,6 +110,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: cpanel-self-migration email <apply|verify> … (each has its own --help)")
 		os.Exit(2)
 	}
+	// The `execute` command is the platform → executor bridge: it runs a governed
+	// DRY-RUN from an execution-spec-v1 document (never writes), emitting the
+	// versioned events.jsonl + report.json. Like the other namespaces it never
+	// falls through to the flag-driven migration flow.
+	if len(os.Args) >= 2 && os.Args[1] == "execute" {
+		os.Exit(runExecuteCmd(os.Args[2:]))
+	}
 
 	var (
 		apply            = flag.Bool("apply", false, "create missing domains + migrate the selected data (default: dry-run)")
@@ -257,27 +264,14 @@ func main() {
 
 	// The emitter always feeds the phase collector (report.json's
 	// phases_completed works with --report-json alone) and tees to the JSONL
-	// writer only when --json-events is set.
-	collector := newPhaseCollector()
-	em := events.Emitter{Emit: collector.observe}
-	if *jsonEvents {
-		evPath := filepath.Join(outDir, "events.jsonl")
-		ew, err := events.NewWriter(evPath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "error: cannot create events file:", err)
-			os.Exit(1)
-		}
-		defer ew.Close()
-		var evWriteErr sync.Once
-		em = events.Emitter{Emit: func(e events.Event) {
-			collector.observe(e)
-			if err := ew.Write(e); err != nil {
-				evWriteErr.Do(func() {
-					fmt.Fprintln(os.Stderr, "warning: events.jsonl write error:", err)
-				})
-			}
-		}}
+	// writer only when --json-events is set. Shared with the `execute` bridge via
+	// buildEmitter so both produce byte-identical events.jsonl.
+	em, collector, closeEv, err := buildEmitter(outDir, *jsonEvents)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: cannot create events file:", err)
+		os.Exit(1)
 	}
+	defer func() { _ = closeEv() }()
 
 	if *accountInventory {
 		rid := *runID
@@ -308,28 +302,73 @@ func main() {
 		Events:          em,
 		Now:             startedAt,
 	}
+	// runMigrationAndReport returns the process exit code. On a non-zero code we
+	// os.Exit (matching the pre-refactor behavior); on success we RETURN so the
+	// deferred cleanups (cancel, events writer close) run.
+	if code := runMigrationAndReport(ctx, cfg, opts, collector, startedAt, outDir, *jsonEvents, *reportJSON); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// buildEmitter wires the phase collector and (when jsonEvents) the events.jsonl
+// writer at outDir into an events.Emitter. It is shared by the flag-driven
+// migration flow and the `execute` bridge so both emit byte-identical events. The
+// returned close func flushes/closes the writer (a no-op when jsonEvents is
+// false); the caller must defer it. An error means the events file could not be
+// created.
+func buildEmitter(outDir string, jsonEvents bool) (events.Emitter, *phaseCollector, func() error, error) {
+	collector := newPhaseCollector()
+	em := events.Emitter{Emit: collector.observe}
+	closeFn := func() error { return nil }
+	if jsonEvents {
+		ew, err := events.NewWriter(filepath.Join(outDir, "events.jsonl"))
+		if err != nil {
+			return em, collector, closeFn, err
+		}
+		var evWriteErr sync.Once
+		em = events.Emitter{Emit: func(e events.Event) {
+			collector.observe(e)
+			if werr := ew.Write(e); werr != nil {
+				evWriteErr.Do(func() {
+					fmt.Fprintln(os.Stderr, "warning: events.jsonl write error:", werr)
+				})
+			}
+		}}
+		closeFn = ew.Close
+	}
+	return em, collector, closeFn, nil
+}
+
+// runMigrationAndReport runs the migration/dry-run for opts, writes report.json
+// (when reportJSON) from the collected phases + on-disk artifacts, and returns the
+// process exit code: 0 ok, 1 failure, 130 interrupted. It is the single shared
+// tail of both the flag-driven flow and the `execute` bridge, so report.json is
+// produced identically by both. It does NOT os.Exit — the caller decides, so a
+// successful run can still run its deferred cleanups.
+func runMigrationAndReport(ctx context.Context, cfg config.Config, opts migrate.Options, collector *phaseCollector, startedAt time.Time, outDir string, jsonEvents, reportJSON bool) int {
 	runErr := migrate.Run(ctx, cfg, opts)
 	finishedAt := time.Now()
 
-	if *reportJSON {
+	if reportJSON {
 		rpt := buildRunReport(opts, cfg, startedAt, finishedAt, runErr, ctx.Err(),
-			collector.completed(), runArtifacts(outDir, collector.applyPhaseSeen(), *jsonEvents))
+			collector.completed(), runArtifacts(outDir, collector.applyPhaseSeen(), jsonEvents))
 		rptPath := filepath.Join(outDir, "report.json")
 		if werr := events.WriteReport(rptPath, rpt); werr != nil {
 			fmt.Fprintln(os.Stderr, "warning: could not write report.json:", werr)
 		}
 	}
 
-	if err := runErr; err != nil {
+	if runErr != nil {
 		if ctx.Err() != nil {
 			// Interrupted: report cleanly with a distinct exit code (130 =
 			// terminated by Ctrl-C, the shell convention).
 			fmt.Fprintln(os.Stderr, "\ninterrupted — stopped; no further changes will be made.")
-			os.Exit(130)
+			return 130
 		}
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "error:", runErr)
+		return 1
 	}
+	return 0
 }
 
 func runAccountInventory(ctx context.Context, cfg config.Config, outDir, runID string, em events.Emitter, writeReportJSON bool) error {
