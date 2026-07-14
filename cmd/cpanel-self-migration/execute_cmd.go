@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -81,6 +83,10 @@ func runExecuteCmd(args []string) int {
 	if *outputDir != "" {
 		outDir = *outputDir
 	}
+	if err := requireUnusedWorkspace(outDir); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		return 1
+	}
 
 	// A dry-run can be long; a Ctrl-C cancels it cleanly (the SOURCE is read-only,
 	// so there is nothing to roll back), matching the migration flow's handler.
@@ -101,6 +107,37 @@ func runExecuteCmd(args []string) int {
 	opts := specToOptions(spec, outDir, startedAt)
 	opts.Events = em
 	return runMigrationAndReport(ctx, cfg, opts, collector, startedAt, outDir, true, true)
+}
+
+// bridgeArtifacts are the files an execution produces. Their presence in the
+// output directory means a previous execution already claimed it.
+var bridgeArtifacts = [...]string{"events.jsonl", "report.json"}
+
+// requireUnusedWorkspace fails unless outDir is free of the artifacts of a
+// previous execution. ONE EXECUTION = ONE ARTIFACT SET; the orchestrator hands a
+// private workspace per run.
+//
+// This is not tidiness. events.jsonl is opened O_APPEND — the right behavior for
+// the flag-driven flow, where an operator re-running in the same directory is
+// making that choice — but for the bridge it is a silent-corruption path: a
+// re-used workspace interleaves the events of two runs into one stream, under the
+// SAME run_id, and EVERY line stays a valid execution-event-v1, so nothing
+// downstream can detect it. A worker retrying a transient dial failure into the
+// same directory is exactly that. report.json, written with truncation, would
+// meanwhile describe only the last attempt: the two files would disagree about
+// what happened. Refuse instead, and touch nothing — the previous run's artifacts
+// are evidence.
+func requireUnusedWorkspace(outDir string) error {
+	for _, name := range bridgeArtifacts {
+		switch _, err := os.Stat(filepath.Join(outDir, name)); {
+		case err == nil:
+			return fmt.Errorf("output directory %s already holds %s from a previous execution: "+
+				"the bridge needs a workspace of its own per run (one execution = one events.jsonl)", outDir, name)
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("cannot inspect the output directory %s: %w", outDir, err)
+		}
+	}
+	return nil
 }
 
 // specToOptions maps a validated execution-spec into migrate.Options for a
