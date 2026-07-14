@@ -16,6 +16,7 @@ from app.modules.endpoints.schemas import (
     EndpointCredentialUpdate,
     EndpointRead,
     EndpointUpdate,
+    SshCredentialBundle,
 )
 
 # Nested under a migration.
@@ -99,3 +100,20 @@ def update_credentials(
     db: Session = Depends(get_db),
 ) -> EndpointRead:
     return service.update_endpoint_credentials(db, endpoint_id, payload.token)
+
+
+@endpoints_router.put(
+    "/{endpoint_id}/ssh-credentials", response_model=EndpointRead
+)
+def set_ssh_credentials(
+    endpoint_id: int,
+    payload: SshCredentialBundle,
+    db: Session = Depends(get_db),
+) -> EndpointRead:
+    """Set (or clear, with ``auth_method: none``) the endpoint's SSH credential.
+
+    A capability distinct from the cPanel token; PUT because the bundle replaces
+    the SSH credential as a whole. Persistence only — nothing here connects or
+    resolves a ref. The response never carries a secret, only the has_* flags.
+    """
+    return service.set_ssh_credentials(db, endpoint_id, payload)

@@ -16,8 +16,18 @@ from adapters.credentials import (
 from adapters.crypto import SecretDecryptError, SecretKeyError, decrypt_secret, encrypt_secret
 from adapters.inventory import build_inventory_source
 from app.core.errors import ConflictError, NotFoundError, UnprocessableError
-from app.modules.endpoints.models import AuthType, ConnectionStatus, Endpoint
-from app.modules.endpoints.schemas import EndpointCreate, EndpointUpdate
+from app.modules.endpoints.models import (
+    AuthType,
+    ConnectionStatus,
+    Endpoint,
+    SshAuthMethod,
+    SshSecretSource,
+)
+from app.modules.endpoints.schemas import (
+    EndpointCreate,
+    EndpointUpdate,
+    SshCredentialBundle,
+)
 from app.modules.migrations.service import get_migration
 
 
@@ -64,6 +74,83 @@ def _encrypt_token(token: str) -> str:
         # Misconfiguration (no master key) → 422, not a silent 500. Never echoes
         # the token.
         raise UnprocessableError(str(exc)) from exc
+
+
+# The SSH secret columns, so a method/source change clears every one that no
+# longer applies. Listed once, cleared as a set — a stray leftover ciphertext
+# would be a credential nobody can see but the worker would still use.
+_SSH_SECRET_COLUMNS = (
+    "ssh_password_enc",
+    "ssh_private_key_enc",
+    "ssh_key_passphrase_enc",
+    "ssh_password_ref",
+    "ssh_private_key_ref",
+    "ssh_key_passphrase_ref",
+)
+
+
+def set_ssh_credentials(
+    db: Session, endpoint_id: int, bundle: SshCredentialBundle
+) -> Endpoint:
+    """Replace an endpoint's SSH credential as a unit.
+
+    Distinct from the cPanel token: this touches only the ssh_* columns and
+    leaves auth_type/auth_secret_enc alone. The bundle is validated whole, so the
+    method and its one secret are always consistent; here we only encrypt the
+    direct secrets and store the refs verbatim. Every ssh_* column not used by
+    the chosen method is cleared, so a switch never leaves an orphan ciphertext.
+
+    Changing how we authenticate invalidates the previous connection verdict, so
+    the endpoint's status is reset — it must be re-tested.
+    """
+    endpoint = get_endpoint(db, endpoint_id)  # 404 if missing
+
+    # Clear the slate: every SSH secret column, plus source. Coordinates
+    # (username/port) are set below only when a method is chosen.
+    for column in _SSH_SECRET_COLUMNS:
+        setattr(endpoint, column, None)
+    endpoint.ssh_auth_method = bundle.auth_method.value
+    endpoint.ssh_secret_source = (
+        bundle.secret_source.value if bundle.secret_source is not None else None
+    )
+    endpoint.ssh_username = bundle.username
+    endpoint.ssh_port = None
+
+    if bundle.auth_method != SshAuthMethod.NONE:
+        endpoint.ssh_port = bundle.port if bundle.port is not None else 22
+        if bundle.secret_source == SshSecretSource.DIRECT:
+            _apply_direct_ssh_secret(endpoint, bundle)
+        else:  # REF
+            _apply_ref_ssh_secret(endpoint, bundle)
+
+    endpoint.connection_status = ConnectionStatus.UNKNOWN.value
+    endpoint.last_error = None
+    endpoint.capabilities = None
+    endpoint.last_checked_at = None
+    db.add(endpoint)
+    db.commit()
+    db.refresh(endpoint)
+    return endpoint
+
+
+def _apply_direct_ssh_secret(endpoint: Endpoint, bundle: SshCredentialBundle) -> None:
+    """Encrypt the direct secret(s) at rest. The plaintext is dropped here — it
+    reaches neither the DB nor a log; only the ciphertext is assigned."""
+    if bundle.auth_method == SshAuthMethod.PASSWORD:
+        endpoint.ssh_password_enc = _encrypt_token(bundle.password or "")
+    else:  # PRIVATE_KEY
+        endpoint.ssh_private_key_enc = _encrypt_token(bundle.private_key or "")
+        if bundle.key_passphrase:
+            endpoint.ssh_key_passphrase_enc = _encrypt_token(bundle.key_passphrase)
+
+
+def _apply_ref_ssh_secret(endpoint: Endpoint, bundle: SshCredentialBundle) -> None:
+    """Store the opaque reference(s) verbatim — a pointer, never a value."""
+    if bundle.auth_method == SshAuthMethod.PASSWORD:
+        endpoint.ssh_password_ref = bundle.password_ref
+    else:  # PRIVATE_KEY
+        endpoint.ssh_private_key_ref = bundle.private_key_ref
+        endpoint.ssh_key_passphrase_ref = bundle.key_passphrase_ref
 
 
 def get_endpoint(db: Session, endpoint_id: int) -> Endpoint:
