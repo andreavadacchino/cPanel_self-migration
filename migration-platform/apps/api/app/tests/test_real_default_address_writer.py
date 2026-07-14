@@ -119,7 +119,7 @@ def test_flag_disabled_by_default_and_unreachable_from_dispatch() -> None:
     assert settings.default_address_real_writer_enabled is False
     both = Settings(default_address_writer_mode="enabled", real_execution_mode="enabled")
     assert both.default_address_real_writer_enabled is True
-    assert "default_address" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "default_address" in IMPLEMENTED_REAL_CATEGORIES
 
 
 # -- no-write decisions: zero backup, zero write ------------------------------

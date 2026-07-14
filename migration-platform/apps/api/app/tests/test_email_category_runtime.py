@@ -380,4 +380,7 @@ def test_no_dispatch_import():
 
 def test_impl_categories_unchanged():
     from app.modules.executions.dispatch import IMPLEMENTED_REAL_CATEGORIES
-    assert IMPLEMENTED_REAL_CATEGORIES == frozenset({"domains"})
+    assert IMPLEMENTED_REAL_CATEGORIES == frozenset({
+        "domains", "email_forwarders", "default_address",
+        "email_routing", "email_filters", "email_autoresponders",
+    })

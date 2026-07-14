@@ -353,7 +353,10 @@ def test_no_sensitive_payload_in_readiness_gaps():
 # -- invariant: IMPLEMENTED_REAL_CATEGORIES unchanged ------------------------
 
 def test_implemented_real_categories_unchanged():
-    assert IMPLEMENTED_REAL_CATEGORIES == frozenset({"domains"})
+    assert IMPLEMENTED_REAL_CATEGORIES == frozenset({
+        "domains", "email_forwarders", "default_address",
+        "email_routing", "email_filters", "email_autoresponders",
+    })
 
 
 # -- invariant: no generic email category ------------------------------------

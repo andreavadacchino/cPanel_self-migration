@@ -52,7 +52,8 @@ def test_ops_use_uapi_read_and_api2_write() -> None:
 
 
 def test_routing_is_unreachable_from_runtime_dispatch() -> None:
-    assert "email_routing" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "email_routing" in IMPLEMENTED_REAL_CATEGORIES
+    assert not settings.routing_real_writer_enabled
     assert "email_routing_contract" not in IMPLEMENTED_REAL_CATEGORIES
 
 

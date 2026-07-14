@@ -271,8 +271,9 @@ paramiko di streaming sono in **B2b-ii**.
 | Email category pipeline (B4e-iii-b) | Readiness/comparazione evidence-bound per le 5 categorie email |
 | Email phase registry (B4e-iii-c-i) | Typed registry e resolver evidence-bound per le 5 categorie |
 | Email gateway runtime (B4e-iii-c-ii) | Client factory, gateway, executor, backup binding — non cablato al worker |
-| Email worker coordinator (B4e-iii-c-iii-a) | Orchestratore deterministico categorie email, terminal-agnostic — non cablato al worker |
-| Migrazione dati/configurazioni | Writer reali non abilitati |
+| Email worker coordinator (B4e-iii-c-iii-a) | Orchestratore deterministico categorie email, terminal-agnostic |
+| Email dispatch wiring (B4e-iii-c-iii-b) | Coordinatore cablato a `worker_start`, terminazione atomica, 6 categorie implementate, C3 sbloccato |
+| Migrazione dati/configurazioni | Writer reali non abilitati di default; crash/resume attempt `running` resta in C4 |
 
 ## Copertura del preflight
 

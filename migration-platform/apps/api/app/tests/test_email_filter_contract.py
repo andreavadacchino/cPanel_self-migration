@@ -71,7 +71,9 @@ def test_typed_ops_shape_and_unreachable() -> None:
     assert so.function == "store_filter" and so.is_write is True and so.api_version == "api2"
     assert so.params["part1"] == "p" and so.params["match1"] == "is" and so.params["val1"] == "v"
     assert so.params["action1"] == "deliver" and so.params["dest1"] == "d"
-    assert "filters" not in IMPLEMENTED_REAL_CATEGORIES and "email_filters" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "filters" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "email_filters" in IMPLEMENTED_REAL_CATEGORIES
+    assert not settings.filter_real_writer_enabled
     assert not hasattr(rules, "delete_filter_op")
 
 

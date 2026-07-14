@@ -101,9 +101,9 @@ def test_unknown_forwarder_writer_mode_is_rejected() -> None:
 
 
 def test_email_forwarder_is_unreachable_from_runtime_dispatch() -> None:
-    # B4a must not register any email category as runnable; the runtime still halts
-    # on email-only runs until B4e wires it.
-    assert "email_forwarders" not in IMPLEMENTED_REAL_CATEGORIES
+    # B4e-iii-c-ii wired email categories; writer flag defaults to disabled.
+    assert "email_forwarders" in IMPLEMENTED_REAL_CATEGORIES
+    assert not settings.forwarder_real_writer_enabled
 
 
 # -- rules (pure) ----------------------------------------------------------

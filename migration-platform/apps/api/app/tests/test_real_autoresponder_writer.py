@@ -135,7 +135,7 @@ def test_flag_disabled_by_default_and_unreachable_from_dispatch() -> None:
     both = Settings(autoresponder_writer_mode="enabled", real_execution_mode="enabled")
     assert both.autoresponder_real_writer_enabled is True
     assert "autoresponders" not in IMPLEMENTED_REAL_CATEGORIES
-    assert "email_autoresponders" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "email_autoresponders" in IMPLEMENTED_REAL_CATEGORIES
 
 
 # -- address_absent guard primitive -------------------------------------------

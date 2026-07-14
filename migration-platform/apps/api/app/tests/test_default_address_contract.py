@@ -15,7 +15,7 @@ import pytest
 
 from adapters.cpanel.contract import DestinationWrite, SafeRead
 from adapters.cpanel.errors import CpanelConnectionError
-from app.core.config import Settings
+from app.core.config import Settings, settings
 from app.modules.executions import default_address_rules as rules
 from app.modules.executions.default_address_rules import (
     DefaultAddressAction,
@@ -53,7 +53,8 @@ def test_set_op_shapes_fwdopt_from_value_and_is_not_idempotent() -> None:
 
 
 def test_default_address_is_unreachable_from_runtime_dispatch() -> None:
-    assert "default_address" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "default_address" in IMPLEMENTED_REAL_CATEGORIES
+    assert not settings.default_address_real_writer_enabled
     assert "default_address_contract" not in IMPLEMENTED_REAL_CATEGORIES
 
 

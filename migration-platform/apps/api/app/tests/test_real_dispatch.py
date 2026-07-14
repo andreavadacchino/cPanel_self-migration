@@ -446,7 +446,7 @@ def test_solo_domain_create_verified_succeeds(domains_enabled, db_session, monke
     assert gw.creates == [("demo.example.test", "/home/u/demo")]
     attempt = db_session.get(ExecutionAttempt, attempt_id)
     assert attempt.status == ExecutionStatus.succeeded.value
-    assert attempt.checkpoint["completed"] == [STEP["id"]]
+    assert attempt.checkpoint["domains"] == [STEP["id"]]
 
 
 def test_already_present_succeeds_without_write(domains_enabled, db_session, monkeypatch) -> None:
@@ -506,7 +506,8 @@ def test_manual_domain_step_halts_not_succeeds(domains_enabled, db_session, monk
     run = worker_start(db_session, env.run.id, attempt_id)
     assert run.status == ExecutionStatus.halted.value
     assert gw.creates == []
-    assert db_session.get(ExecutionAttempt, attempt_id).checkpoint["manual_pending"] is True
+    cp = db_session.get(ExecutionAttempt, attempt_id).checkpoint
+    assert "pending_categories" in cp or cp.get("domains") == []
 
 
 # =============================================================================
@@ -623,7 +624,7 @@ def test_mixed_run_halts_partial_not_succeeded(domains_enabled, db_session, monk
     assert gw.creates == [("demo.example.test", "/home/u/demo")]  # domain WAS written
     attempt = db_session.get(ExecutionAttempt, attempt_id)
     assert attempt.checkpoint["pending_categories"] == ["email_forwarders"]
-    assert STEP["id"] in attempt.checkpoint["completed"]
+    assert STEP["id"] in attempt.checkpoint["domains"]
 
 
 # --- 12/13/14. Gate/lease/fencing drift stops the write ----------------------

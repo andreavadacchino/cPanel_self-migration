@@ -557,7 +557,10 @@ def test_no_sensitive_payload_in_blocked():
     assert ":fail:" not in flat
 
 def test_implemented_real_categories_unchanged():
-    assert IMPLEMENTED_REAL_CATEGORIES == frozenset({"domains"})
+    assert IMPLEMENTED_REAL_CATEGORIES == frozenset({
+        "domains", "email_forwarders", "default_address",
+        "email_routing", "email_filters", "email_autoresponders",
+    })
 
 def test_no_dispatch_import():
     import app.modules.executions.email_phase_registry as mod

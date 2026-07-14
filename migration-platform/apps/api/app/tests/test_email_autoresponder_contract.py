@@ -64,7 +64,8 @@ def test_typed_ops_shape_and_unreachable() -> None:
     assert ao.function == "add_auto_responder" and ao.is_write is True
     assert ao.params["domain"] == DOMAIN and ao.params["email"] == "away"
     assert "start" not in ao.params and "stop" not in ao.params  # zero/None omitted
-    assert "email_autoresponders" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "email_autoresponders" in IMPLEMENTED_REAL_CATEGORIES
+    assert not settings.autoresponder_real_writer_enabled
     assert not hasattr(rules, "delete_auto_responder_op")
 
 

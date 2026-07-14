@@ -1,33 +1,8 @@
-"""Durable real execution dispatch (task A3).
+"""Durable real execution dispatch (A3) with domains (B3b-ii) and email (B4e-iii-c-iii-b).
 
-Wires the real path API -> PostgreSQL -> Dramatiq -> worker, reusing — never
-duplicating — the A2 state machine/``ExecutionAttempt``, the A4 lease/fencing,
-and the A5 ``authorize`` safety gate.
-
-Ordering guarantees:
-
-* the endpoint ``dispatch`` acquires the account lease and runs ``authorize``
-  *before* it creates and **commits** a ``queued`` attempt, and only then sends
-  the message — so a broker failure after the commit leaves a recoverable,
-  re-enqueueable attempt and never a duplicate;
-* the queue message carries only ``execution_run_id`` and ``attempt_id`` — never
-  a token, password, ciphertext, snapshot, or operational payload;
-* the worker (``worker_start``) re-reads everything from PostgreSQL, re-runs
-  ``authorize`` (which re-checks the lease/fencing), and legally moves the run
-  ``queued`` -> ``running``; a fenced-out worker mutates nothing.
-
-Real domain phase (task B3b-ii): under the double gate
-(``settings.domain_real_writer_enabled``), the worker resolves the source
-evidence, builds a destination-only gateway, and drives the B3b-i additive
-domains engine, re-authorizing (lease + fencing + fresh evidence) before the
-phase, immediately before each create (via ``before_write``), and after the
-write before persisting. Terminal-state selection: solo verified domains →
-``succeeded``; any manual/unsupported/unresolved step or any unimplemented
-category → ``halted`` with explicit pending metadata (never a false full
-success); a blocked/unverified step → ``failed``. With no executable category
-(all writer flags off, or only unimplemented categories) the worker halts
-without any mutation. Everything is gated by ``REAL_EXECUTION_MODE`` (disabled by
-default); the domain create additionally needs ``DOMAIN_WRITER_MODE=enabled``.
+Commit-before-enqueue ordering; queue carries only run_id/attempt_id. Worker
+re-reads from PostgreSQL, re-validates, runs domains then email categories,
+computes terminal state atomically. Disabled by default.
 """
 
 from __future__ import annotations
@@ -45,6 +20,10 @@ from app.modules.executions import lease as lease_service
 from app.modules.executions import real_domain_writer
 from app.modules.executions import safety_gates
 from app.modules.executions import service
+from app.modules.executions.dispatch_terminal import finalize_terminal, make_progress_persister
+from app.modules.executions.email_category_runtime import is_category_enabled
+from app.modules.executions.email_phase_registry import EMAIL_CATEGORIES
+from app.modules.executions.email_worker_coordinator import coordinate_email_categories
 from app.modules.executions.models import (
     AccountExecutionLease,
     ExecutionAttempt,
@@ -55,10 +34,10 @@ from app.modules.executions.models import (
 )
 from app.modules.inventory.models import InventorySnapshot
 
-# Real write categories that Wave B actually implements a real writer for. A
-# category outside this set (email, dns, ...) has no real writer yet, so a run
-# containing only such steps still halts safely without any mutation.
-IMPLEMENTED_REAL_CATEGORIES = frozenset({"domains"})
+IMPLEMENTED_REAL_CATEGORIES = frozenset({
+    "domains", "email_forwarders", "default_address",
+    "email_routing", "email_filters", "email_autoresponders",
+})
 
 _ACTIVE_ATTEMPT_STATUSES = {ExecutionStatus.queued.value, ExecutionStatus.running.value}
 
@@ -163,16 +142,14 @@ def _preview_categories(run: ExecutionRun) -> list[str]:
 
 
 def _executable_categories(run: ExecutionRun) -> list[str]:
-    """Categories with a real writer that is *enabled by its flags* for this run.
-
-    ``domains`` becomes executable only under the double gate
-    (``settings.domain_real_writer_enabled`` = real master switch AND domain
-    writer switch); otherwise it is treated as not-runnable and the run halts, so
-    real writes stay disabled by default.
-    """
+    """Implemented categories whose per-category flag is enabled, in preview order."""
     executable: list[str] = []
     for category in _preview_categories(run):
-        if category in IMPLEMENTED_REAL_CATEGORIES and settings.domain_real_writer_enabled:
+        if category not in IMPLEMENTED_REAL_CATEGORIES:
+            continue
+        if category == "domains" and settings.domain_real_writer_enabled:
+            executable.append(category)
+        elif category in EMAIL_CATEGORIES and is_category_enabled(category):
             executable.append(category)
     return executable
 
@@ -281,33 +258,8 @@ def _run_domain_phase(
         run, requested, gateway, dest_home, before_write=before_write)
 
 
-def _halt(db: Session, run: ExecutionRun, attempt: ExecutionAttempt) -> ExecutionRun:
-    """Terminal, mutation-free halt when no real category is executable."""
-    now = datetime.now(timezone.utc)
-    assert_transition(run.status, ExecutionStatus.halted.value)
-    assert_transition(attempt.status, ExecutionStatus.halted.value)
-    run.status = ExecutionStatus.halted.value
-    run.finished_at = now
-    attempt.status = ExecutionStatus.halted.value
-    attempt.finished_at = now
-    run.events.append(ExecutionEvent(
-        phase="worker_halt",
-        message="Nessuna categoria reale eseguibile: run fermato in stato sicuro, nessuna scrittura eseguita.",
-        result={"attempt_id": attempt.id},
-        verification={"status": "not_applicable", "reason": "no_executable_real_category"},
-    ))
-    db.commit()
-    db.refresh(run)
-    return run
-
-
 def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
-    """Worker entry point: re-read from PostgreSQL, re-validate, advance legally.
-
-    Fail-closed and idempotent. Re-runs ``authorize`` (which re-checks lease and
-    fencing) before advancing; a fenced-out or stale worker mutates nothing. With
-    no real phase to run it stops in the explicit, safe ``halted`` state.
-    """
+    """Worker entry point: re-read, re-validate, run domains then email, finalize."""
     if not settings.real_execution_enabled:
         raise ConflictError("L'esecuzione reale è disabilitata")
     run = db.get(ExecutionRun, run_id)
@@ -315,11 +267,8 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
     if run is None or attempt is None or attempt.execution_run_id != run.id:
         raise ConflictError("Run o tentativo di dispatch non validi")
     if attempt.status != ExecutionStatus.queued.value:
-        # Already picked up or terminal: do not reprocess (idempotent redelivery).
         return run
 
-    # Re-validate before touching state: raises without mutating on a stale gate
-    # or a fenced-out worker.
     safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token)
 
     now = datetime.now(timezone.utc)
@@ -332,73 +281,88 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
     attempt.started_at = now
     run.events.append(ExecutionEvent(
         phase="worker_start",
-        message="Worker: stato riletto, gate/lease/fencing rivalidati, run avviato.",
+        message="Worker: gate/lease/fencing rivalidati, run avviato.",
         result={"attempt_id": attempt.id, "attempt_number": attempt.attempt_number},
     ))
     db.commit()
 
-    # A run with no executable real category (none implemented, or the domain
-    # writer flag is off) halts safely without any mutation.
     executable = _executable_categories(run)
     if not executable:
-        return _halt(db, run, attempt)
+        return finalize_terminal(
+            db, run, attempt, ExecutionStatus.halted.value, phase="worker_halt",
+            message="Nessuna categoria reale eseguibile: halt sicuro.",
+            checkpoint={"attempt_id": attempt.id})
 
-    # Per-phase gate before the phase; the engine re-authorizes (via before_write)
-    # immediately before each real create, so an intervening drift stops it.
-    safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token, categories=("domains",))
-    result = _run_domain_phase(db, run, attempt)
+    domain_result = None
+    email_result = None
 
-    now = datetime.now(timezone.utc)
-    if not result.ok:
-        # Fail closed: a blocked/unverified step never yields a success state. Run
-        # and attempt are mutated first, then persisted by finalize_attempt's single
-        # commit (which re-checks fencing) — no split commit, and a fenced-out
-        # worker records nothing.
-        assert_transition(run.status, ExecutionStatus.failed.value)
-        run.status = ExecutionStatus.failed.value
-        run.finished_at = now
-        run.error = result.reason
-        run.events.append(ExecutionEvent(
-            level="error", phase="worker_domains",
-            message="Fase domini fallita fail-closed; nessuno stato di successo.",
-            result={"completed": result.completed}))
-        service.finalize_attempt(db, attempt.id, status=ExecutionStatus.failed.value,
-                                 checkpoint={"completed": result.completed}, error=result.reason)
-        db.refresh(run)
-        return run
+    if "domains" in executable:
+        safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token,
+                               categories=("domains",))
+        domain_result = _run_domain_phase(db, run, attempt)
+        if not domain_result.ok:
+            return finalize_terminal(
+                db, run, attempt, ExecutionStatus.failed.value, phase="worker_domains",
+                error=domain_result.reason,
+                checkpoint={"completed": domain_result.completed})
+        lease_service.assert_fencing_current(
+            db, destination_endpoint_id=run.destination_endpoint_id,
+            fencing_token=attempt.fencing_token)
 
-    # Never claim full success while selected categories remain unexecuted: a
-    # manual/unsupported/unresolved domain step, or any unimplemented category,
-    # halts with explicit pending metadata instead of succeeding.
-    pending_categories = sorted(c for c in _preview_categories(run) if c not in executable)
-    pending = result.pending or bool(pending_categories)
-    terminal = ExecutionStatus.halted.value if pending else ExecutionStatus.succeeded.value
+    email_executable = [c for c in executable if c in EMAIL_CATEGORIES]
+    if email_executable:
+        try:
+            email_result = coordinate_email_categories(
+                db, run, attempt,
+                persist_progress=make_progress_persister(db, run, attempt))
+        except ConflictError:
+            db.rollback()
+            raise
+        if email_result.cancelled:
+            with db.no_autoflush:
+                fresh = db.scalar(
+                    select(ExecutionRun.status).where(ExecutionRun.id == run.id))
+            if fresh == ExecutionStatus.cancelled.value:
+                cp = {"domains": domain_result.completed if domain_result else [],
+                      "email": email_result.completed_step_ids}
+                service.finalize_attempt(db, attempt.id,
+                    status=ExecutionStatus.cancelled.value, checkpoint=cp)
+                db.refresh(run)
+                return run
+        if email_result and not email_result.ok and not email_result.cancelled:
+            return finalize_terminal(
+                db, run, attempt, ExecutionStatus.failed.value, phase="worker_email",
+                error=email_result.reason,
+                checkpoint={"domains": domain_result.completed if domain_result else [],
+                            "email": email_result.completed_step_ids})
 
-    # After the write, before persisting: re-validate FENCING only (task point 8).
-    # It must be scoped to the lease, not a full authorize() over unrelated
-    # categories: the write already happened and was verified live, so an unrelated
-    # category's readiness or an aged confirmation must not be able to strand a
-    # completed mutation in a non-terminal run. finalize_attempt re-checks fencing
-    # again and commits run + attempt atomically, so a worker fenced out after the
-    # write cannot record success or a completed halt.
+    pending_cats = sorted(c for c in _preview_categories(run) if c not in executable)
+    has_pending = bool(pending_cats)
+    if domain_result and domain_result.pending:
+        has_pending = True
+    if email_result and email_result.pending:
+        has_pending = True
+    terminal = ExecutionStatus.halted.value if has_pending else ExecutionStatus.succeeded.value
+
     lease_service.assert_fencing_current(
         db, destination_endpoint_id=run.destination_endpoint_id,
         fencing_token=attempt.fencing_token)
-    assert_transition(run.status, terminal)
-    run.status = terminal
-    run.finished_at = now
-    run.events.append(ExecutionEvent(
-        phase="worker_domains",
-        message=("Fase domini completata e verificata; run riuscito."
-                 if terminal == ExecutionStatus.succeeded.value
-                 else "Fase domini completata; passi manuali o categorie non implementate restano in sospeso."),
-        result={"completed": result.completed, "pending_categories": pending_categories,
-                "manual_pending": result.pending},
-        verification={"status": "verified", "evidence": "destination_fresh_read"}))
-    service.finalize_attempt(
-        db, attempt.id, status=terminal,
-        checkpoint={"completed": result.completed, "pending_categories": pending_categories,
-                    "manual_pending": result.pending},
-        compensation={"domains": result.compensation})
-    db.refresh(run)
-    return run
+    with db.no_autoflush:
+        final_status = db.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run.id))
+    if final_status == ExecutionStatus.cancelled.value:
+        service.finalize_attempt(db, attempt.id, status=ExecutionStatus.cancelled.value,
+            checkpoint={"domains": domain_result.completed if domain_result else [],
+                        "email": email_result.completed_step_ids if email_result else []})
+        db.refresh(run)
+        return run
+    comp = {}
+    if domain_result:
+        comp["domains"] = domain_result.compensation
+    if email_result:
+        comp.update(email_result.compensation)
+    return finalize_terminal(
+        db, run, attempt, terminal, phase="worker_complete",
+        checkpoint={"domains": domain_result.completed if domain_result else [],
+                    "email": email_result.completed_step_ids if email_result else [],
+                    "pending_categories": pending_cats},
+        compensation=comp)

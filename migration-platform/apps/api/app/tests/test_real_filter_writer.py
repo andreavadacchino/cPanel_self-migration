@@ -115,7 +115,8 @@ def test_flag_disabled_by_default_and_unreachable_from_dispatch() -> None:
     assert settings.filter_real_writer_enabled is False
     both = Settings(filter_writer_mode="enabled", real_execution_mode="enabled")
     assert both.filter_real_writer_enabled is True
-    assert "filters" not in IMPLEMENTED_REAL_CATEGORIES and "email_filters" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "filters" not in IMPLEMENTED_REAL_CATEGORIES
+    assert "email_filters" in IMPLEMENTED_REAL_CATEGORIES
 
 
 # -- name_absent guard primitive ---------------------------------------------
