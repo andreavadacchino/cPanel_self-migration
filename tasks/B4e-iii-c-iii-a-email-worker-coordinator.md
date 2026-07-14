@@ -45,38 +45,42 @@ cd ../.. && docker compose config -q
 
 **Date:** 2026-07-14
 
-**Implementation summary:** Created `email_worker_coordinator.py` (160 lines) with
-`EmailCoordinationResult` dataclass and `coordinate_email_categories()` function. The
-coordinator: derives categories and step IDs from the run's preview in plan order with
-dedup; checks fresh persisted run status (no-autoflush, column-only query) before each
-category; validates per-category authorize/fencing; loads source/destination snapshots
-with role verification; calls c-i `resolve_category()` then c-ii `run_email_category()`
-with an injected `before_write` callback (fresh status + scoped authorize + fencing);
-performs post-phase fencing-only check (no full authorize); invokes injected
-`persist_progress` callback only after successful fencing; aggregates results with
-fail-closed semantics (failure stops subsequent categories, pending never produces
-success, disabled/unknown categories appear in result). Routing is handled by the
-existing authorize gate rejection (`needs_contract_test` readiness) — result is
-pending/blocked, never a false skip-success.
+### Commit 1 (a8504b4): initial implementation
 
-**Files modified:**
-- `app/modules/executions/email_worker_coordinator.py` — NEW (160 lines)
-- `app/tests/test_email_worker_coordinator.py` — NEW (29 tests)
-- `tasks/B4e-iii-c-iii-a-email-worker-coordinator.md` — NEW task file
-- `tasks/B4e-iii-c-iii-b-dispatch-wiring-terminalization.md` — NEW task file
-- `tasks/B4e-iii-c-iii-email-worker-dispatch.md` — status → `[/]`
-- `tasks/BACKLOG.md` — split formalized, C3 dep → iii-b, graph updated
+- `email_worker_coordinator.py`: 231 lines (NOT 160 as initially stated)
+- `test_email_worker_coordinator.py`: 343 lines, 29 tests
+- Total: 744 insertions / 12 deletions / 7 files
+- **Guardrail deviation:** 744 total lines exceeds 500-line budget; production code
+  (231 lines) within single-file limit; test file (343 lines) within 400-line limit.
+- Adversarial review 11/11 PASS (initial cycle)
 
-**Tests/commands run:**
-- API: 891 passed (862 baseline + 29 new), 7 warnings
+### Commit 2 (corrective): 7 verified issues fixed
+
+**Issues corrected:**
+1. Pre-phase authorize rejection continued loop → now sets `stopped=True` (Correction E)
+2. Post-phase fencing loss caught and returned result → now propagates `ConflictError` (Correction D)
+3. All ConflictError classified as cancellation → typed `_CoordinationCancelled` / `_CategoryGateRejected` with fresh-status re-read for ConflictError from runner (Correction B/C)
+4. Non-email categories (domains) marked unknown/pending → `_select_email_categories()` filters to `EMAIL_CATEGORIES` only (Correction A)
+5. Raw `phase_result.reason` leaked step IDs/addresses → stable reason codes only (Correction F)
+6. Post-phase test `assert call_count >= 1` insufficient → exact authorize count tests (Correction G)
+7. Completion Record line counts incorrect → corrected above
+
+**Files modified (corrective):**
+- `app/modules/executions/email_worker_coordinator.py` — rewritten (269 lines)
+- `app/tests/test_email_worker_coordinator.py` — rewritten (305 lines, 39 tests)
+- `tasks/B4e-iii-c-iii-a-email-worker-coordinator.md` — Completion Record corrected
+- `tasks/BACKLOG.md` — status restored `[x]`
+
+**Tests/commands run (corrective):**
+- API: 901 passed (862 baseline + 39 new), 7 warnings
 - Worker: 18 passed (unchanged)
-- Frontend build: OK (352ms)
+- Frontend build: OK
 - Docker compose: valid
 
-**Review outcome:** Adversarial review 11/11 PASS (identity-map stale, autoflush,
-disabled ignored, resolver mismatch, full authorize post-write, fenced-out progress,
-checkpoint sensitive, categories after failure/cancel, routing false success, mutation
-run/attempt, import dispatch/actor).
+**Review outcome (corrective):** Adversarial review 8/8 PASS (gate-rejection stop-all,
+post-phase fencing propagation, ConflictError classification, email-only filtering,
+reason redaction, before_write typed exceptions, no run/attempt mutation, no
+dispatch/actor import). 0 Critical/High/Medium residui.
 
 **Residual limitations:**
 - Coordinator is not wired to `worker_start` or dispatch — `B4e-iii-c-iii-b` will

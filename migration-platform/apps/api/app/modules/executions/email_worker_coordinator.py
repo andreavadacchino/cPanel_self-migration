@@ -1,11 +1,12 @@
 """Deterministic email category coordinator (B4e-iii-c-iii-a).
 
-Orchestrates the selected email categories from a run's preview in plan order,
-returning a terminal-agnostic, redacted EmailCoordinationResult. Reuses the c-i
-registry/resolvers, c-ii single-category executor, safety_gates.authorize, A4
-fencing, and persisted snapshots. NOT imported by dispatch/actor/router; does NOT
-modify run/attempt terminal state, call finalize_attempt, or update
-IMPLEMENTED_REAL_CATEGORIES.
+Orchestrates exclusively the EMAIL_CATEGORIES from a run's preview in plan
+order, returning a terminal-agnostic, redacted EmailCoordinationResult. Non-email
+categories (domains, etc.) are silently skipped — iii-b computes global pending
+across the full preview. Reuses c-i registry/resolvers, c-ii single-category
+executor, safety_gates.authorize, A4 fencing, and persisted snapshots. NOT
+imported by dispatch/actor/router; does NOT modify run/attempt terminal state,
+call finalize_attempt, or update IMPLEMENTED_REAL_CATEGORIES.
 """
 
 from __future__ import annotations
@@ -31,6 +32,14 @@ from app.modules.executions.models import ExecutionAttempt, ExecutionRun
 from app.modules.inventory.models import InventorySnapshot
 
 
+class _CoordinationCancelled(Exception):
+    pass
+
+
+class _CategoryGateRejected(Exception):
+    pass
+
+
 @dataclass
 class EmailCoordinationResult:
     ok: bool = False
@@ -51,12 +60,12 @@ class EmailCoordinationResult:
                 f"reason={self.reason!r})")
 
 
-def _select_categories(preview: list[dict]) -> list[tuple[str, list[str]]]:
+def _select_email_categories(preview: list[dict]) -> list[tuple[str, list[str]]]:
     ordered: list[str] = []
     steps_by_cat: dict[str, list[str]] = {}
     for item in preview:
         cat = item.get("category")
-        if not cat:
+        if not cat or cat not in EMAIL_CATEGORIES:
             continue
         if cat not in steps_by_cat:
             ordered.append(cat)
@@ -74,6 +83,39 @@ def _fresh_run_status(db: Session, run_id: int) -> str | None:
         )
 
 
+def _assert_running(db: Session, run_id: int) -> None:
+    if _fresh_run_status(db, run_id) != "running":
+        raise _CoordinationCancelled()
+
+
+def _assert_fencing(db: Session, dest_ep_id: int, fencing_token: int) -> None:
+    lease_service.assert_fencing_current(
+        db, destination_endpoint_id=dest_ep_id,
+        fencing_token=fencing_token,
+    )
+
+
+def _scoped_authorize(db, run, attempt, category):
+    try:
+        safety_gates.authorize(
+            db, run.id, fencing_token=attempt.fencing_token,
+            categories=(category,),
+        )
+    except ConflictError:
+        try:
+            _assert_fencing(db, run.destination_endpoint_id, attempt.fencing_token)
+        except ConflictError:
+            raise
+        raise _CategoryGateRejected()
+
+
+def _cat_entry(category: str, status: str, completed=None, reason=None) -> dict:
+    e: dict = {"category": category, "status": status, "completed": completed or []}
+    if reason:
+        e["reason"] = reason
+    return e
+
+
 def coordinate_email_categories(
     db: Session,
     run: ExecutionRun,
@@ -82,7 +124,7 @@ def coordinate_email_categories(
     persist_progress: Callable | None = None,
 ) -> EmailCoordinationResult:
     result = EmailCoordinationResult()
-    selected = _select_categories(run.preview)
+    selected = _select_email_categories(run.preview)
     if not selected:
         result.ok = True
         return result
@@ -93,49 +135,38 @@ def coordinate_email_categories(
 
     for category, step_ids in selected:
         if stopped:
-            result.categories.append({"category": category, "status": "pending",
-                                       "completed": [], "reason": "stopped_by_prior"})
-            result.pending = True
-            continue
-
-        fresh = _fresh_run_status(db, run.id)
-        if fresh != "running":
-            result.cancelled = True
-            result.categories.append({"category": category, "status": "pending",
-                                       "completed": [], "reason": "cancelled"})
-            result.pending = True
-            stopped = True
-            continue
-
-        if category not in EMAIL_CATEGORIES:
-            result.categories.append({"category": category, "status": "pending",
-                                       "completed": [], "reason": "unknown_category"})
-            result.pending = True
-            continue
-
-        if not is_category_enabled(category):
-            result.categories.append({"category": category, "status": "pending",
-                                       "completed": [], "reason": "disabled"})
+            result.categories.append(_cat_entry(category, "pending", reason="stopped_by_prior"))
             result.pending = True
             continue
 
         try:
-            safety_gates.authorize(
-                db, run.id, fencing_token=attempt.fencing_token,
-                categories=(category,),
-            )
-        except ConflictError:
-            result.categories.append({"category": category, "status": "pending",
-                                       "completed": [], "reason": "authorize_rejected"})
+            _assert_running(db, run.id)
+        except _CoordinationCancelled:
+            result.cancelled = True
+            result.categories.append(_cat_entry(category, "pending", reason="cancelled"))
+            result.pending = True
+            stopped = True
+            continue
+
+        if not is_category_enabled(category):
+            result.categories.append(_cat_entry(category, "pending", reason="disabled"))
             result.pending = True
             continue
+
+        try:
+            _scoped_authorize(db, run, attempt, category)
+        except _CategoryGateRejected:
+            result.categories.append(_cat_entry(category, "pending", reason="category_gate_rejected"))
+            result.pending = True
+            stopped = True
+            continue
+        # ConflictError from fencing loss propagates unhandled
 
         source_snap = db.get(InventorySnapshot, run.source_snapshot_id)
         dest_snap = db.get(InventorySnapshot, run.destination_snapshot_id)
         if (source_snap is None or source_snap.endpoint_role != "source"
                 or dest_snap is None or dest_snap.endpoint_role != "destination"):
-            result.categories.append({"category": category, "status": "failed",
-                                       "completed": [], "reason": "snapshot_invalid"})
+            result.categories.append(_cat_entry(category, "failed", reason="snapshot_invalid"))
             result.ok = False
             result.reason = "snapshot_invalid"
             result.failed_category = category
@@ -145,29 +176,27 @@ def coordinate_email_categories(
         resolved = resolve_category(
             category, source_snap.data or {}, dest_snap.data or {}, step_ids)
 
-        if not resolved.resolved or resolved.blocked:
-            reason = resolved.reason or "blocked_items"
-            result.categories.append({"category": category, "status": "failed",
-                                       "completed": [], "reason": reason})
+        if not resolved.resolved:
+            result.categories.append(_cat_entry(category, "failed", reason="evidence_unresolved"))
             result.ok = False
-            result.reason = reason
+            result.reason = "evidence_unresolved"
+            result.failed_category = category
+            stopped = True
+            continue
+
+        if resolved.blocked:
+            result.categories.append(_cat_entry(category, "failed", reason="blocked_items"))
+            result.ok = False
+            result.reason = "blocked_items"
             result.failed_category = category
             stopped = True
             continue
 
         def _make_before_write(cat: str):
             def before_write():
-                bw_status = _fresh_run_status(db, run.id)
-                if bw_status != "running":
-                    raise ConflictError("Run non più in esecuzione")
-                safety_gates.authorize(
-                    db, run.id, fencing_token=attempt.fencing_token,
-                    categories=(cat,),
-                )
-                lease_service.assert_fencing_current(
-                    db, destination_endpoint_id=run.destination_endpoint_id,
-                    fencing_token=attempt.fencing_token,
-                )
+                _assert_running(db, run.id)
+                _scoped_authorize(db, run, attempt, cat)
+                _assert_fencing(db, run.destination_endpoint_id, attempt.fencing_token)
             return before_write
 
         try:
@@ -175,42 +204,51 @@ def coordinate_email_categories(
                 db, run, attempt, category, resolved,
                 before_write=_make_before_write(category),
             )
-        except ConflictError:
-            result.categories.append({"category": category, "status": "failed",
-                                       "completed": [], "reason": "execution_error"})
+        except _CoordinationCancelled:
+            result.categories.append(_cat_entry(category, "pending", reason="cancelled"))
             result.cancelled = True
             result.pending = True
             stopped = True
             continue
-
-        # Post-phase: fencing-only, no full authorize
-        try:
-            lease_service.assert_fencing_current(
-                db, destination_endpoint_id=run.destination_endpoint_id,
-                fencing_token=attempt.fencing_token,
-            )
+        except _CategoryGateRejected:
+            result.categories.append(_cat_entry(category, "pending", reason="category_gate_rejected"))
+            result.pending = True
+            stopped = True
+            continue
         except ConflictError:
-            result.categories.append({"category": category, "status": "failed",
-                                       "completed": [], "reason": "fenced_out_post_phase"})
+            fresh = _fresh_run_status(db, run.id)
+            if fresh != "running":
+                result.categories.append(_cat_entry(category, "pending", reason="cancelled"))
+                result.cancelled = True
+                result.pending = True
+                stopped = True
+                continue
+            try:
+                _assert_fencing(db, run.destination_endpoint_id, attempt.fencing_token)
+            except ConflictError:
+                raise
+            result.categories.append(_cat_entry(category, "failed", reason="category_execution_conflict"))
             result.ok = False
-            result.reason = "fenced_out"
+            result.reason = "category_execution_conflict"
             result.failed_category = category
             stopped = True
             continue
 
-        cat_entry: dict = {"category": category, "completed": list(phase_result.completed)}
+        # Post-phase: fencing-only — propagate on loss, no result for iii-b
+        _assert_fencing(db, run.destination_endpoint_id, attempt.fencing_token)
+
+        cat_entry = _cat_entry(category, "completed", completed=list(phase_result.completed))
         if not phase_result.ok:
             cat_entry["status"] = "failed"
-            cat_entry["reason"] = phase_result.reason
+            cat_entry["reason"] = "category_phase_failed"
             result.ok = False
-            result.reason = phase_result.reason
+            result.reason = "category_phase_failed"
             result.failed_category = category
             stopped = True
         elif phase_result.pending:
             cat_entry["status"] = "pending"
+            cat_entry["reason"] = "category_pending"
             result.pending = True
-        else:
-            cat_entry["status"] = "completed"
 
         result.categories.append(cat_entry)
         all_completed.extend(phase_result.completed)

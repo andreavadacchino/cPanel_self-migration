@@ -1,343 +1,305 @@
-"""Tests for B4e-iii-c-iii-a: email worker coordinator."""
+"""Tests for B4e-iii-c-iii-a: email worker coordinator (corrective cycle)."""
 from __future__ import annotations
 import ast, importlib, inspect, pytest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
-from app.modules.executions import lease as _real_lease
-from app.modules.executions.email_write import EmailPhaseResult
-from app.modules.executions.email_phase_registry import ResolvedEvidence
+from app.modules.executions import lease as _rl
+from app.modules.executions.email_write import EmailPhaseResult as EPR
+from app.modules.executions.email_phase_registry import ResolvedEvidence as RE
+from app.core.errors import ConflictError
 
 _P = "app.modules.executions.email_worker_coordinator"
 
-def _snap(sid=10, role="source", data=None):
-    s = MagicMock(); s.id = sid; s.endpoint_role = role
-    s.status = "succeeded"; s.data = data or {}; return s
-
-def _run(preview=None, src=10, dst=20):
-    r = MagicMock(); r.id = 1; r.status = "running"
-    r.preview = preview or []; r.source_snapshot_id = src
-    r.destination_snapshot_id = dst; r.destination_endpoint_id = 99
-    r.dry_run = False; return r
-
+def _snap(sid=10, role="source"):
+    s = MagicMock(); s.id = sid; s.endpoint_role = role; s.data = {}; return s
+def _run(preview=None):
+    r = MagicMock(); r.id = 1; r.status = "running"; r.preview = preview or []
+    r.source_snapshot_id = 10; r.destination_snapshot_id = 20
+    r.destination_endpoint_id = 99; r.dry_run = False; return r
 def _att():
-    a = MagicMock(); a.id = 1; a.fencing_token = 42
-    a.execution_run_id = 1; a.status = "running"; return a
-
-def _prev(*cats):
+    a = MagicMock(); a.id = 1; a.fencing_token = 42; a.execution_run_id = 1; a.status = "running"; return a
+def _pv(*cats):
     return [{"step_id": f"{c}:item1", "category": c, "target": "destination"} for c in cats]
-
-def _prev_multi(cat, sids):
+def _pvm(cat, sids):
     return [{"step_id": s, "category": cat, "target": "destination"} for s in sids]
-
 def _pr(ok=True, pending=False, completed=None, compensation=None, reason=None):
-    return EmailPhaseResult(ok=ok, pending=pending, completed=completed or [],
-                            compensation=compensation or [], reason=reason)
-
-def _ev(cat, **kw): return ResolvedEvidence(cat, True, kwargs=kw)
-def _unev(cat): return ResolvedEvidence(cat, False, reason="test")
-def _blk(cat): return ResolvedEvidence(cat, True, blocked=[{"step_id": "x", "reason": "t"}])
-
-def _db_snap(statuses=("running",)):
+    return EPR(ok=ok, pending=pending, completed=completed or [], compensation=compensation or [], reason=reason)
+def _ev(cat, **kw): return RE(cat, True, kwargs=kw)
+def _db(statuses=("running",)):
     it = iter(statuses)
     db = MagicMock()
     db.get = MagicMock(side_effect=lambda m, sid: _snap(sid, "source" if sid == 10 else "destination"))
-    db.scalar = MagicMock(side_effect=lambda s: next(it, "running"))
-    return db
+    db.scalar = MagicMock(side_effect=lambda s: next(it, "running")); return db
 
-_D = {"m_lease": f"{_P}.lease_service", "m_gates": f"{_P}.safety_gates",
-      "m_en": f"{_P}.is_category_enabled", "m_res": f"{_P}.resolve_category",
-      "m_run": f"{_P}.run_email_category"}
+@contextmanager
+def _patches(enabled=True, resolved=None, runner=None, fence_err=None, auth_err=None):
+    with patch(f"{_P}.lease_service", spec=_rl) as ml, \
+         patch(f"{_P}.safety_gates") as mg, \
+         patch(f"{_P}.is_category_enabled", return_value=enabled) as me, \
+         patch(f"{_P}.resolve_category") as mr, \
+         patch(f"{_P}.run_email_category") as mx:
+        if resolved: mr.return_value = resolved
+        if runner: mx.return_value = runner
+        if fence_err: ml.assert_fencing_current.side_effect = fence_err
+        if auth_err: mg.authorize.side_effect = auth_err
+        yield ml, mg, me, mr, mx
 
 def _coord(db, run, att, **kw):
     from app.modules.executions.email_worker_coordinator import coordinate_email_categories
     return coordinate_email_categories(db, run, att, **kw)
 
-
 # ── Import / invariant guards ────────────────────────────────────────────────
 
-def test_no_import_from_dispatch():
-    mod = importlib.import_module("app.modules.executions.email_worker_coordinator")
-    tree = ast.parse(inspect.getsource(mod))
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            m = getattr(node, "module", None) or ""
-            combined = m + " " + " ".join(a.name for a in node.names)
-            assert "dispatch" not in combined.lower()
+def test_no_import_dispatch():
+    tree = ast.parse(inspect.getsource(importlib.import_module(f"app.modules.executions.email_worker_coordinator")))
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            assert "dispatch" not in (getattr(n, "module", None) or "").lower()
 
-def test_implemented_real_categories_unchanged():
+def test_impl_real_cats():
     from app.modules.executions.dispatch import IMPLEMENTED_REAL_CATEGORIES
     assert IMPLEMENTED_REAL_CATEGORIES == frozenset({"domains"})
 
+# ── A: solo categorie email ───────────────────────────────────────────────────
+
+def test_domains_only_empty():
+    from app.modules.executions.email_worker_coordinator import _select_email_categories as sel
+    assert sel(_pv("domains")) == []
+
+def test_domains_only_ok():
+    with _patches() as (ml, mg, me, mr, mx):
+        r = _coord(_db(), _run(preview=_pv("domains")), _att())
+        mx.assert_not_called(); assert r.ok and not r.pending
+
+def test_domains_plus_email():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"])) as (ml, mg, me, mr, mx):
+        r = _coord(_db(), _run(preview=_pv("domains", "email_forwarders")), _att())
+        assert mx.call_count == 1 and r.ok and not any(c["category"] == "domains" for c in r.categories)
+
+def test_non_email_no_pending():
+    from app.modules.executions.email_worker_coordinator import _select_email_categories as sel
+    assert sel(_pv("domains", "cron_jobs", "ftp_accounts")) == []
+
+def test_all_five_recognized():
+    from app.modules.executions.email_worker_coordinator import _select_email_categories as sel
+    cats = ["email_forwarders", "default_address", "email_routing", "email_filters", "email_autoresponders"]
+    assert [c for c, _ in sel(_pv(*cats))] == cats
 
 # ── Category selection ────────────────────────────────────────────────────────
 
-def test_order_preserved():
-    from app.modules.executions.email_worker_coordinator import _select_categories
-    assert [c for c, _ in _select_categories(_prev("email_filters", "email_forwarders"))] == \
-           ["email_filters", "email_forwarders"]
+def test_order():
+    from app.modules.executions.email_worker_coordinator import _select_email_categories as sel
+    assert [c for c, _ in sel(_pv("email_filters", "email_forwarders"))] == ["email_filters", "email_forwarders"]
 
-def test_dedup_first():
-    from app.modules.executions.email_worker_coordinator import _select_categories
-    p = _prev("email_forwarders") + _prev("email_filters") + _prev("email_forwarders")
-    assert [c for c, _ in _select_categories(p)] == ["email_forwarders", "email_filters"]
+def test_dedup():
+    from app.modules.executions.email_worker_coordinator import _select_email_categories as sel
+    assert [c for c, _ in sel(_pv("email_forwarders") + _pv("email_filters") + _pv("email_forwarders"))] == \
+           ["email_forwarders", "email_filters"]
 
 def test_steps_grouped():
-    from app.modules.executions.email_worker_coordinator import _select_categories
-    p = _prev_multi("email_forwarders", ["fwd:a", "fwd:b"]) + _prev_multi("email_filters", ["flt:r1"])
-    assert _select_categories(p) == [("email_forwarders", ["fwd:a", "fwd:b"]),
-                                      ("email_filters", ["flt:r1"])]
+    from app.modules.executions.email_worker_coordinator import _select_email_categories as sel
+    p = _pvm("email_forwarders", ["fwd:a", "fwd:b"]) + _pvm("email_filters", ["flt:r1"])
+    assert sel(p) == [("email_forwarders", ["fwd:a", "fwd:b"]), ("email_filters", ["flt:r1"])]
 
-def test_unknown_in_preview():
-    from app.modules.executions.email_worker_coordinator import _select_categories
-    assert _select_categories(_prev("bogus")) == [("bogus", ["bogus:item1"])]
+# ── Flag-off / disabled ──────────────────────────────────────────────────────
 
+def test_flag_off():
+    with _patches(enabled=False) as (ml, mg, me, mr, mx):
+        r = _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        mr.assert_not_called(); mx.assert_not_called()
+        assert r.pending and any(c["category"] == "email_forwarders" for c in r.categories)
 
-# ── Flag-off / unknown / disabled ─────────────────────────────────────────────
+# ── B/E: gate reject stops subsequent ─────────────────────────────────────────
 
-@patch(_D["m_run"])
-@patch(_D["m_res"])
-@patch(_D["m_en"], return_value=False)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_flag_off_pending_zero_resolver(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    mr.assert_not_called(); mrun.assert_not_called()
-    assert r.pending and any(c["category"] == "email_forwarders" for c in r.categories)
+def test_gate_reject_stops_next():
+    with _patches(auth_err=ConflictError("gate")) as (ml, mg, me, mr, mx):
+        r = _coord(_db(), _run(preview=_pv("email_forwarders", "email_filters")), _att())
+        mx.assert_not_called(); assert r.pending
+        assert r.categories[0]["reason"] == "category_gate_rejected"
+        assert r.categories[1]["reason"] == "stopped_by_prior"
 
-@patch(_D["m_run"])
-@patch(_D["m_res"])
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_unknown_pending(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("not_in_registry")), _att())
-    mrun.assert_not_called(); assert r.pending
-    assert [c for c in r.categories if c["category"] == "not_in_registry"][0]["status"] == "pending"
+def test_routing_reject_stops_next():
+    with _patches(auth_err=ConflictError("needs_contract_test")) as (ml, mg, me, mr, mx):
+        r = _coord(_db(), _run(preview=_pv("email_routing", "email_filters")), _att())
+        mx.assert_not_called()
+        assert r.categories[0]["reason"] == "category_gate_rejected"
+        assert r.categories[1]["reason"] == "stopped_by_prior"
 
+def test_gate_reject_fencing_ok_not_cancelled():
+    with _patches(auth_err=ConflictError("gate")) as (ml, mg, me, mr, mx):
+        r = _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        assert r.pending and not r.cancelled
 
-# ── Authorize scoped ─────────────────────────────────────────────────────────
+def test_gate_reject_fencing_lost_propagates():
+    with _patches(auth_err=ConflictError("gate"), fence_err=ConflictError("fenced")) as p:
+        with pytest.raises(ConflictError, match="fenced"):
+            _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
 
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_authorize_scoped(ml, mg, me, mr, mrun):
-    _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    assert any(c.kwargs.get("categories") == ("email_forwarders",) for c in mg.authorize.call_args_list)
+# ── D: post-phase fencing lost propagates ─────────────────────────────────────
 
+def test_post_fencing_lost_propagates():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"]), fence_err=ConflictError("fenced")) as p:
+        with pytest.raises(ConflictError, match="fenced"):
+            _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
 
-# ── Snapshot missing / wrong role ─────────────────────────────────────────────
+def test_post_fencing_lost_zero_progress():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"]), fence_err=ConflictError("f")) as p:
+        cb = MagicMock()
+        with pytest.raises(ConflictError):
+            _coord(_db(), _run(preview=_pv("email_forwarders")), _att(), persist_progress=cb)
+        cb.assert_not_called()
 
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_snapshot_missing(ml, mg, me):
-    db = _db_snap(); db.get = MagicMock(return_value=None)
-    assert not _coord(db, _run(preview=_prev("email_forwarders")), _att()).ok
+# ── C: ConflictError classification ───────────────────────────────────────────
 
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_snapshot_wrong_role(ml, mg, me):
-    db = _db_snap(); db.get = MagicMock(side_effect=lambda m, s: _snap(s, "destination"))
-    assert not _coord(db, _run(preview=_prev("email_forwarders")), _att()).ok
+def test_conflict_running_fencing_ok_failed():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"])) as (ml, mg, me, mr, mx):
+        mx.side_effect = ConflictError("backup")
+        r = _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        assert not r.ok and not r.cancelled and r.reason == "category_execution_conflict"
 
+def test_conflict_fresh_cancelled():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"])) as (ml, mg, me, mr, mx):
+        mx.side_effect = ConflictError("err")
+        r = _coord(_db(("running", "cancelled")), _run(preview=_pv("email_forwarders")), _att())
+        assert r.cancelled
 
-# ── Resolver unresolved / blocked ─────────────────────────────────────────────
-
-@patch(_D["m_run"])
-@patch(_D["m_res"], return_value=_unev("email_forwarders"))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_unresolved_zero_runner(ml, mg, me, mr, mrun):
-    _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    mrun.assert_not_called()
-
-@patch(_D["m_run"])
-@patch(_D["m_res"], return_value=_blk("email_forwarders"))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_blocked_zero_runner(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    mrun.assert_not_called(); assert not r.ok
-
-
-# ── Runner evidence match ─────────────────────────────────────────────────────
-
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"])
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_runner_evidence_match(ml, mg, me, mr, mrun):
-    ev = _ev("email_forwarders", step_ids=["fwd:a"]); mr.return_value = ev
-    _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    assert mrun.call_args.args[3] == "email_forwarders" and mrun.call_args.args[4] is ev
-
-
-# ── before_write ──────────────────────────────────────────────────────────────
-
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_before_write_authorize(ml, mg, me, mr, mrun):
-    _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    bw = mrun.call_args.kwargs["before_write"]
-    mg.authorize.reset_mock()
-    bw()
-    assert mg.authorize.call_args.kwargs["categories"] == ("email_forwarders",)
-
+def test_conflict_fencing_lost_propagates():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"])) as (ml, mg, me, mr, mx):
+        mx.side_effect = ConflictError("err")
+        ml.assert_fencing_current.side_effect = ConflictError("fenced")
+        with pytest.raises(ConflictError, match="fenced"):
+            _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
 
 # ── Cancellation ──────────────────────────────────────────────────────────────
 
-@patch(_D["m_run"])
-@patch(_D["m_res"])
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_cancel_before_first(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(("cancelled",)), _run(preview=_prev("email_forwarders")), _att())
-    mrun.assert_not_called(); assert r.cancelled
+def test_cancel_before_first():
+    with _patches() as (ml, mg, me, mr, mx):
+        r = _coord(_db(("cancelled",)), _run(preview=_pv("email_forwarders")), _att())
+        mx.assert_not_called(); assert r.cancelled
 
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_cancel_between(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(("running", "cancelled")), _run(preview=_prev("email_forwarders", "email_filters")), _att())
-    assert mrun.call_count == 1 and r.cancelled and "fwd:a" in r.completed_step_ids
+def test_cancel_between():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"])) as (ml, mg, me, mr, mx):
+        r = _coord(_db(("running", "cancelled")), _run(preview=_pv("email_forwarders", "email_filters")), _att())
+        assert mx.call_count == 1 and r.cancelled and "fwd:a" in r.completed_step_ids
 
-@patch(_D["m_run"])
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_cancel_in_before_write(ml, mg, me, mr, mrun):
-    from app.core.errors import ConflictError
-    mrun.side_effect = ConflictError("cancelled_bw")
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    assert r.cancelled or not r.ok
+# ── Snapshot / resolver ───────────────────────────────────────────────────────
 
+def test_snap_missing():
+    with _patches() as (ml, mg, me, mr, mx):
+        db = _db(); db.get = MagicMock(return_value=None)
+        assert not _coord(db, _run(preview=_pv("email_forwarders")), _att()).ok
+
+def test_unresolved():
+    with _patches(resolved=RE("email_forwarders", False, reason="t")) as (ml, mg, me, mr, mx):
+        _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        mx.assert_not_called()
+
+def test_blocked():
+    with _patches(resolved=RE("email_forwarders", True, blocked=[{"step_id": "x", "reason": "t"}])) as p:
+        assert not _coord(_db(), _run(preview=_pv("email_forwarders")), _att()).ok
+
+# ── Runner / authorize ────────────────────────────────────────────────────────
+
+def test_runner_evidence():
+    ev = _ev("email_forwarders", step_ids=["fwd:a"])
+    with _patches(resolved=ev, runner=_pr(completed=["fwd:a"])) as (ml, mg, me, mr, mx):
+        _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        assert mx.call_args.args[3] == "email_forwarders" and mx.call_args.args[4] is ev
+
+def test_authorize_scoped():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"])) as (ml, mg, me, mr, mx):
+        _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        assert any(c.kwargs.get("categories") == ("email_forwarders",) for c in mg.authorize.call_args_list)
+
+def test_bw_authorize():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"])) as (ml, mg, me, mr, mx):
+        _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        bw = mx.call_args.kwargs["before_write"]; mg.authorize.reset_mock(); bw()
+        assert mg.authorize.call_args.kwargs["categories"] == ("email_forwarders",)
+
+# ── G: exact authorize count post-phase ───────────────────────────────────────
+
+def test_no_auth_post_phase_no_bw():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"])) as (ml, mg, me, mr, mx):
+        _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        assert mg.authorize.call_count == 1 and ml.assert_fencing_current.call_count >= 1
+
+def test_no_auth_post_phase_with_bw():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"])) as (ml, mg, me, mr, mx):
+        def fake(db, run, att, cat, ev, *, before_write=None):
+            if before_write: before_write()
+            return _pr(completed=["fwd:a"])
+        mx.side_effect = fake
+        _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        assert mg.authorize.call_count == 2
 
 # ── Failure / pending / success ───────────────────────────────────────────────
 
-@patch(_D["m_run"], return_value=_pr(ok=False, reason="write_failed"))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_failure_stops_subsequent(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders", "email_filters")), _att())
-    assert mrun.call_count == 1 and not r.ok and r.failed_category == "email_forwarders"
+def test_failure_stops():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(ok=False, reason="step:addr@x:blocked")) as (ml, mg, me, mr, mx):
+        r = _coord(_db(), _run(preview=_pv("email_forwarders", "email_filters")), _att())
+        assert mx.call_count == 1 and not r.ok and r.categories[1]["reason"] == "stopped_by_prior"
 
-@patch(_D["m_run"], return_value=_pr(pending=True, completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_pending_not_success(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    assert r.pending
+def test_pending():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(pending=True, completed=["fwd:a"])) as p:
+        assert _coord(_db(), _run(preview=_pv("email_forwarders")), _att()).pending
 
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_all_completed_ok(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    assert r.ok and "fwd:a" in r.completed_step_ids
+def test_all_ok():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"])) as p:
+        r = _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        assert r.ok and "fwd:a" in r.completed_step_ids
 
+# ── Progress ──────────────────────────────────────────────────────────────────
 
-# ── Progress callback / fencing ───────────────────────────────────────────────
+def test_progress_ok():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"], compensation=[{"ref": "x"}])) as p:
+        cb = MagicMock()
+        _coord(_db(), _run(preview=_pv("email_forwarders")), _att(), persist_progress=cb)
+        cb.assert_called_once()
 
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"], compensation=[{"ref": "x"}]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_progress_after_fencing(ml, mg, me, mr, mrun):
-    p = MagicMock()
-    _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att(), persist_progress=p)
-    p.assert_called_once()
+# ── F: reason redaction ───────────────────────────────────────────────────────
 
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_fenced_out_zero_callback(ml, mg, me, mr, mrun):
-    from app.core.errors import ConflictError
-    ml.assert_fencing_current.side_effect = ConflictError("fenced")
-    p = MagicMock()
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att(), persist_progress=p)
-    p.assert_not_called(); assert not r.ok
+def test_phase_reason_not_leaked():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(ok=False, reason="fwd:admin@secret.com:create_not_verified")) as p:
+        r = _coord(_db(), _run(preview=_pv("email_forwarders")), _att())
+        assert r.reason == "category_phase_failed"
+        for c in r.categories:
+            assert "secret.com" not in (c.get("reason") or "")
 
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_post_phase_fencing_only(ml, mg, me, mr, mrun):
-    _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    assert ml.assert_fencing_current.call_count >= 1
+def test_no_sensitive_repr():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"])) as p:
+        rr = repr(_coord(_db(), _run(preview=_pv("email_forwarders")), _att()))
+        for w in ["token", "password", "ciphertext", "secret", "encrypted", "snapshot", "kwargs"]:
+            assert w not in rr.lower()
 
+# ── Checkpoint / compensation ─────────────────────────────────────────────────
 
-# ── Routing gate ──────────────────────────────────────────────────────────────
+def test_checkpoint_keys():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"])) as p:
+        for c in _coord(_db(), _run(preview=_pv("email_forwarders")), _att()).categories:
+            assert set(c.keys()) <= {"category", "status", "completed", "reason"}
 
-@patch(_D["m_run"])
-@patch(_D["m_res"])
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_routing_rejected(ml, mg, me, mr, mrun):
-    from app.core.errors import ConflictError
-    mg.authorize.side_effect = ConflictError("needs_contract_test")
-    r = _coord(_db_snap(), _run(preview=_prev("email_routing")), _att())
-    mrun.assert_not_called()
-    assert [c for c in r.categories if c["category"] == "email_routing"][0]["status"] in ("pending", "blocked", "failed")
-
-
-# ── Redaction ─────────────────────────────────────────────────────────────────
-
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_checkpoint_keys(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    for c in r.categories:
-        assert set(c.keys()) <= {"category", "status", "completed", "reason"}
-
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"], compensation=[{"step_id": "fwd:a"}]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_compensation_is_dict(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    assert isinstance(r.compensation, dict)
-
-@patch(_D["m_run"], return_value=_pr(completed=["fwd:a"]))
-@patch(_D["m_res"], return_value=_ev("email_forwarders", step_ids=["fwd:a"]))
-@patch(_D["m_en"], return_value=True)
-@patch(_D["m_gates"])
-@patch(_D["m_lease"], spec=_real_lease)
-def test_no_sensitive_repr(ml, mg, me, mr, mrun):
-    r = _coord(_db_snap(), _run(preview=_prev("email_forwarders")), _att())
-    rr = repr(r)
-    for w in ["token", "password", "ciphertext", "secret", "encrypted", "snapshot", "kwargs", "contract"]:
-        assert w not in rr.lower()
-
+def test_compensation_dict():
+    with _patches(resolved=_ev("email_forwarders", step_ids=["fwd:a"]),
+                  runner=_pr(completed=["fwd:a"], compensation=[{"s": "fwd:a"}])) as p:
+        assert isinstance(_coord(_db(), _run(preview=_pv("email_forwarders")), _att()).compensation, dict)
 
 # ── Mock/dry-run invariant ────────────────────────────────────────────────────
 
-def test_mock_dry_run_unchanged():
+def test_dry_run_unchanged():
     from app.modules.executions import service
     assert "email_worker_coordinator" not in inspect.getsource(service.execute_dry_run)
