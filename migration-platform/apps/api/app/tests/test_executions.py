@@ -353,13 +353,31 @@ def test_unknown_execution_is_404(client: TestClient) -> None:
     assert client.get("/api/executions/9999").status_code == 404
 
 
-def test_there_is_no_route_that_starts_or_mutates_an_execution(
+def test_there_is_no_route_that_starts_cancels_or_mutates_an_execution(
     client: TestClient,
 ) -> None:
-    """The absence of a Start button is a property of the API, not of the UI."""
+    """The absence of a Start button is a property of the API, not of the UI.
+
+    Since the create route landed there IS one non-GET verb — a POST that creates
+    a `pending` dry-run row and runs nothing. What must still not exist is any
+    route that starts, cancels, retries or edits one: no PUT, no PATCH, no
+    DELETE, and no POST anywhere except the collection itself. An execution is a
+    record of what happened to the servers, and history is not edited.
+
+    This will fail the day a start/cancel route is added. That is the point: it
+    must fail, be read, and be replaced by the invariant that route is meant to
+    hold — not widened to let it through.
+    """
     paths = client.app.openapi()["paths"]
     execution_paths = {p: v for p, v in paths.items() if "execution" in p}
     assert execution_paths, "the execution routes are not mounted"
 
-    methods = {m for verbs in execution_paths.values() for m in verbs}
-    assert methods == {"get"}, f"a non-GET execution route exists: {methods}"
+    for path, verbs in execution_paths.items():
+        for verb in verbs:
+            if verb == "get":
+                continue
+            assert verb == "post", f"{verb.upper()} {path}: executions are never mutated"
+            assert path.endswith("/executions"), (
+                f"POST {path}: the only POST may be the collection create; a route "
+                "under an execution id would be a start/cancel/retry"
+            )

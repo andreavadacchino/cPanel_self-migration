@@ -52,7 +52,8 @@ def create_app() -> FastAPI:
     app.include_router(capabilities_router)
     app.include_router(comparison_router)
     app.include_router(plan_router)
-    # Read-only: listing and fetching executions. Nothing here starts a run.
+    # List, fetch, and create a dry-run execution. The create lands a `pending`
+    # row and starts nothing — no route here runs, cancels or mutates a run.
     app.include_router(migration_executions_router)
     app.include_router(executions_router)
 
