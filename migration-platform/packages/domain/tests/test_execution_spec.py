@@ -72,6 +72,34 @@ def test_mailbox_filter_without_mail_is_refused() -> None:
         _spec(mail=False, databases=True, mailbox_filter="u@example.com")
 
 
+@pytest.mark.parametrize("blank", ["", " ", "   ", "\t", "\n", " \t \n "])
+def test_a_blank_domain_filter_can_never_become_a_whole_account_run(blank: str) -> None:
+    """The mutation test the whole PR exists for.
+
+    An empty domain_filter reaches the executor as ``OnlyDomain: ""``, which it
+    reads as NO filter — the run covers the entire account instead of the one
+    domain the operator named. The builder must refuse it outright, so no such
+    spec can ever be hashed into an execution and handed to the binary. Refused,
+    not trimmed to absence: an operator who typed spaces asked for a domain, not
+    for "everything".
+    """
+    with pytest.raises(ContractError, match="domain_filter: must not be blank when present"):
+        _spec(files=True, domain_filter=blank)
+
+
+@pytest.mark.parametrize("blank", ["", " ", "\t\t", "\r\n"])
+def test_a_blank_mailbox_filter_is_refused(blank: str) -> None:
+    with pytest.raises(ContractError, match="mailbox_filter: must not be blank when present"):
+        _spec(mailbox_filter=blank)
+
+
+def test_a_present_nonblank_filter_still_passes() -> None:
+    """The bound must not reject a real name: parity check for the negative tests."""
+    spec = _spec(files=True, domain_filter="a.example.com", mailbox_filter="u@example.com")
+    validate_spec_json(canonical_spec_bytes(spec))
+    assert spec["scope"]["domain_filter"] == "a.example.com"
+
+
 def test_invalid_run_id_is_refused() -> None:
     with pytest.raises(ContractError, match="invalid field run_id"):
         _spec(run_id="run/../x")

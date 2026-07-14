@@ -226,7 +226,13 @@ func ParseSpec(raw []byte) (ExecutionSpec, error) {
 	if s.Scope.DomainFilter, err = optionalString(scope, "scope.domain_filter", "domain_filter"); err != nil {
 		return s, err
 	}
+	if err := rejectBlankFilter(scope, "domain_filter", s.Scope.DomainFilter); err != nil {
+		return s, err
+	}
 	if s.Scope.MailboxFilter, err = optionalString(scope, "scope.mailbox_filter", "mailbox_filter"); err != nil {
+		return s, err
+	}
+	if err := rejectBlankFilter(scope, "mailbox_filter", s.Scope.MailboxFilter); err != nil {
 		return s, err
 	}
 	if s.Scope.MailboxFilter != "" && !s.Scope.Mail {
@@ -531,6 +537,33 @@ func optionalString(m map[string]any, label, key string) (string, error) {
 		return "", fmt.Errorf("invalid field %s: expected a string", label)
 	}
 	return s, nil
+}
+
+// filterBlankChars is the cutset for deciding a filter is blank: a FIXED ASCII
+// set, not unicode.IsSpace, so Python's str.strip with the same characters
+// agrees byte for byte. The shared corpus asserts both validators reject the
+// same fixtures.
+const filterBlankChars = " \t\n\v\f\r"
+
+// rejectBlankFilter refuses a domain_filter/mailbox_filter that is PRESENT but
+// empty or whitespace-only.
+//
+// It is the one input that fails OPEN: the executor reads an empty OnlyDomain as
+// NO filter and widens the run to the whole account. (A whitespace-only value
+// matches no domain, so it fails closed — but it is still a corrupted request,
+// never what the operator meant.) The value is checked, not trimmed to absence:
+// normalising it away would silently change the scope the operator asked for.
+//
+// The map key distinguishes ABSENT (fine) from present-but-blank (refused):
+// optionalString returns "" for both, so value alone cannot tell them apart.
+func rejectBlankFilter(scope map[string]any, key, value string) error {
+	if _, present := scope[key]; !present {
+		return nil
+	}
+	if strings.Trim(value, filterBlankChars) == "" {
+		return fmt.Errorf("invalid field %s: must not be blank when present", key)
+	}
+	return nil
 }
 
 // requireBool refuses "true"/1: a scope boolean is explicit or it is nothing.

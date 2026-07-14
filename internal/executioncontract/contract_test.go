@@ -2,6 +2,7 @@ package executioncontract
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -522,6 +523,55 @@ func TestParseSpecReturnsTypedValues(t *testing.T) {
 	}
 	if s.Scope.MailboxFilter != "user@example.com" {
 		t.Errorf("MailboxFilter = %q", s.Scope.MailboxFilter)
+	}
+}
+
+// TestBlankScopeFilterCannotBecomeWholeAccountRun is the mutation test the whole
+// change exists for. A present-but-empty domain_filter reaches migrate.Run as
+// OnlyDomain "", which it reads as NO filter — widening the run from one domain
+// to the whole account. ParseSpec must refuse it before such a spec can exist,
+// and it must refuse both languages' idea of blank identically (the shared
+// corpus asserts the Python half rejects the same bytes).
+func TestBlankScopeFilterCannotBecomeWholeAccountRun(t *testing.T) {
+	base := `{"format_version":1,"run_id":"run-x","plan_id":1,"source_snapshot_id":2,` +
+		`"destination_snapshot_id":3,"comparison_report_id":4,"mode":"dry_run","scope":{` +
+		`"mail":true,"files":true,"databases":false,%s}}`
+
+	cases := []struct {
+		name, scopeTail, wantSubstr string
+	}{
+		{"domain empty", `"domain_filter":""`, "invalid field domain_filter: must not be blank when present"},
+		{"domain spaces", `"domain_filter":"   "`, "invalid field domain_filter: must not be blank when present"},
+		{"domain tab", `"domain_filter":"\t"`, "invalid field domain_filter: must not be blank when present"},
+		{"mailbox empty", `"mailbox_filter":""`, "invalid field mailbox_filter: must not be blank when present"},
+		{"mailbox newline", `"mailbox_filter":"\n"`, "invalid field mailbox_filter: must not be blank when present"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseSpec([]byte(fmt.Sprintf(base, tc.scopeTail)))
+			if err == nil {
+				t.Fatal("a blank filter was accepted — it would widen the run to the whole account")
+			}
+			if !strings.Contains(err.Error(), tc.wantSubstr) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.wantSubstr)
+			}
+		})
+	}
+}
+
+// TestPresentNonBlankFilterIsAccepted is the parity check for the negative test
+// above: the blank rule must not reject a real domain or address.
+func TestPresentNonBlankFilterIsAccepted(t *testing.T) {
+	raw := `{"format_version":1,"run_id":"run-x","plan_id":1,"source_snapshot_id":2,` +
+		`"destination_snapshot_id":3,"comparison_report_id":4,"mode":"dry_run","scope":{` +
+		`"mail":true,"files":true,"databases":false,"domain_filter":"a.example.com",` +
+		`"mailbox_filter":"u@example.com"}}`
+	s, err := ParseSpec([]byte(raw))
+	if err != nil {
+		t.Fatalf("a valid filter was rejected: %v", err)
+	}
+	if s.Scope.DomainFilter != "a.example.com" || s.Scope.MailboxFilter != "u@example.com" {
+		t.Errorf("filters = %q / %q", s.Scope.DomainFilter, s.Scope.MailboxFilter)
 	}
 }
 

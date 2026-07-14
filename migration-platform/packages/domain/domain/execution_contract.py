@@ -263,7 +263,9 @@ def parse_spec(raw: str | bytes) -> ExecutionSpec:
         )
 
     domain_filter = _optional_str(scope, "scope.domain_filter", "domain_filter")
+    _reject_blank_filter(domain_filter, "domain_filter")
     mailbox_filter = _optional_str(scope, "scope.mailbox_filter", "mailbox_filter")
+    _reject_blank_filter(mailbox_filter, "mailbox_filter")
     if mailbox_filter and not mail:
         raise ContractError(
             "invalid field mailbox_filter: allowed only when scope.mail is true"
@@ -480,6 +482,29 @@ def _optional_str(doc: dict[str, Any], label: str, key: str) -> str | None:
     if not isinstance(value, str):
         raise ContractError(f"invalid field {label}: expected a string")
     return value
+
+
+#: The characters trimmed when deciding a filter is blank. A FIXED ASCII set, not
+#: ``str.strip()``'s Unicode whitespace, so Go's ``strings.Trim`` with the same
+#: cutset agrees byte for byte — the corpus asserts both validators reject the
+#: same fixtures.
+_FILTER_BLANK_CHARS: Final = " \t\n\v\f\r"
+
+
+def _reject_blank_filter(value: str | None, key: str) -> None:
+    """A filter that is present must name something.
+
+    An empty or whitespace-only ``domain_filter``/``mailbox_filter`` is the one
+    input that fails OPEN: the executor reads an empty ``OnlyDomain`` as *no
+    filter* and widens the run to the whole account (a whitespace-only one
+    matches no domain, so it fails closed — but it is still a corrupted request,
+    never what the operator meant). Absent is fine; blank is refused. It is NOT
+    trimmed to absence: normalising it away would silently change the scope the
+    operator asked for, which is the same class of surprise, pointed the other
+    way.
+    """
+    if value is not None and value.strip(_FILTER_BLANK_CHARS) == "":
+        raise ContractError(f"invalid field {key}: must not be blank when present")
 
 
 def _require_bool(doc: dict[str, Any], label: str, key: str) -> bool:
