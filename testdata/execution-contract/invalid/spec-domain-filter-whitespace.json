@@ -1,0 +1,1 @@
+{"format_version":1,"run_id":"run-x","plan_id":1,"source_snapshot_id":2,"destination_snapshot_id":3,"comparison_report_id":4,"mode":"dry_run","scope":{"mail":true,"files":false,"databases":false,"domain_filter":"   "}}

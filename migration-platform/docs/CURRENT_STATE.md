@@ -209,12 +209,18 @@ un worktree vecchio produce verde falso: è già successo.
 - Nessun test runner frontend.
 - `ready_steps` del piano sono per-categoria, non per-item.
 - Il prefisso MySQL è derivato dal nome, non dall'username cPanel esplicito nello snapshot.
-- **`execution-spec-v1` accetta un filtro vuoto** (`"domain_filter": ""`) in entrambe le lingue: il
-  contratto ne controlla il tipo, non il contenuto. Il motore legge `OnlyDomain: ""` come *nessun
-  filtro*, quindi uno spec del genere **allarga silenziosamente lo scope all'intero account**. La
-  piattaforma lo rifiuta (`scope_blank_filter`), quindi nessuno spec generato da qui può contenerne
-  uno — ma uno spec scritto a mano e passato al binario no. **Il fix va nel contratto** (Go + Python
-  + corpus `testdata/execution-contract/`): è la prossima PR di contratto.
+- ~~`execution-spec-v1` accetta un filtro vuoto~~ **RISOLTO** (contratto cross-language): un
+  `domain_filter`/`mailbox_filter` **presente** deve essere non vuoto e non whitespace-only, con
+  messaggio identico in Go e Python (`invalid field <campo>: must not be blank when present`) e
+  quattro fixture nel corpus condiviso `testdata/execution-contract/` che entrambi i validatori
+  rifiutano. Nessuna normalizzazione silenziosa: un valore blank è rifiutato, non trimmato ad assente.
+  La difesa della piattaforma (`scope_blank_filter`, 422 prima di costruire lo spec) resta come strato
+  anticipato. Il fix chiude anche uno spec scritto a mano e passato direttamente al binario.
+  *Limite noto, deliberato:* "blank" è definito su un set ASCII fisso (` \t\n\v\f\r`), non su
+  `unicode.IsSpace`/`str.strip()` nudi, che divergerebbero fra Go e Python. Un filtro fatto solo di
+  whitespace Unicode (NBSP, U+3000, …) è quindi accettato — ma è **fail-closed** nel motore (non
+  matcha alcun dominio, run vuoto), non fail-open come la stringa vuota. La parità cross-language è
+  garantita per costruzione (verificata empiricamente su 16+ input, zero divergenze).
 - **Freschezza e INSERT non sono atomici**: `create_dry_run_execution` legge gli anchor correnti e
   poi inserisce, senza lock. Una comparison che atterra in quella finestra (millisecondi) produce
   un'esecuzione ancorata a un piano appena diventato stale. Innocuo per un `dry_run` (non scrive

@@ -1,5 +1,5 @@
 {
-  "description": "Shared fixture corpus for execution-contract v1. Go and Python read this same file; a fixture must be accepted or rejected identically by both, and a rejection must carry the declared error substring. See docs/JSON_EVENTS.md and docs/ADR_V2_GO_EXECUTOR.md. The invalid/ corpus includes regressions for every Go/Python divergence found by differential fuzzing: int64 overflow, non-JSON whitespace, byte-vs-codepoint run_id length, colon in artifact paths, calendar-invalid and year-zero timestamps, and sub-microsecond finished_at ordering.",
+  "description": "Shared fixture corpus for execution-contract v1. Go and Python read this same file; a fixture must be accepted or rejected identically by both, and a rejection must carry the declared error substring. See docs/JSON_EVENTS.md and docs/ADR_V2_GO_EXECUTOR.md. The invalid/ corpus includes regressions for every Go/Python divergence found by differential fuzzing: int64 overflow, non-JSON whitespace, byte-vs-codepoint run_id length, colon in artifact paths, calendar-invalid and year-zero timestamps, sub-microsecond finished_at ordering, and empty/whitespace-only scope filters (which the engine would read as no filter, silently widening the run to the whole account).",
   "format_version": 1,
   "fixtures": [
     {
@@ -100,6 +100,30 @@
       "kind": "spec",
       "expected_valid": false,
       "expected_error_substring": "invalid field mailbox_filter"
+    },
+    {
+      "path": "invalid/spec-domain-filter-empty.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field domain_filter: must not be blank when present"
+    },
+    {
+      "path": "invalid/spec-domain-filter-whitespace.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field domain_filter: must not be blank when present"
+    },
+    {
+      "path": "invalid/spec-mailbox-filter-empty.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field mailbox_filter: must not be blank when present"
+    },
+    {
+      "path": "invalid/spec-mailbox-filter-whitespace.json",
+      "kind": "spec",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field mailbox_filter: must not be blank when present"
     },
     {
       "path": "invalid/spec-invalid-run-id.json",
