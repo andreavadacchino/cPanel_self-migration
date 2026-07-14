@@ -16,12 +16,39 @@ from adapters.cpanel.errors import CpanelConnectionError
 from app.modules.executions.domain_rules import RequestedDomain
 from app.modules.executions.real_domain_writer import (
     _planned,
-    execute_domain_phase,
+    execute_domain_phase as _execute_domain_phase,
     resolve_requested,
 )
 
 HOME = "/home/u"
 TOKEN = "SECRET-TOKEN"
+
+
+class FakeRecorder:
+    """In-memory recorder satisfying the CompensationRecorder protocol for the pure
+    engine tests. Durability is exercised separately in test_domain_journal_crash.py."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def open_intent(self, **kw):
+        self.calls.append(("open_intent", kw))
+        return ("ref", "new")
+
+    def mark_started(self, ref) -> None:
+        self.calls.append(("mark_started",))
+
+    def mark_applied(self, ref, *, observed_result) -> None:
+        self.calls.append(("mark_applied",))
+
+    def mark_reconciliation_required(self, ref, *, failure_code) -> None:
+        self.calls.append(("mark_reconciliation_required", failure_code))
+
+
+def execute_domain_phase(*args, recorder=None, **kwargs):
+    """Inject a default recorder so the existing call sites stay unchanged; the
+    recorder is mandatory on the real engine (R2-b1)."""
+    return _execute_domain_phase(*args, recorder=recorder or FakeRecorder(), **kwargs)
 
 
 class FakeGateway:

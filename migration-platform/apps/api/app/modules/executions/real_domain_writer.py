@@ -47,6 +47,9 @@ _UNVERIFIED = {"status": "failed", "evidence": "destination_fresh_read"}
 _MANUAL = {"status": "manual", "evidence": "not_account_level_supported"}
 
 
+_COMPENSATION_TYPE = "manual_removal_only"
+
+
 class DomainGateway(Protocol):
     """The effectful boundary the phase needs. The real one wraps a B1 client."""
 
@@ -54,6 +57,25 @@ class DomainGateway(Protocol):
     def read_single_domain(self, name: str) -> DomainRecord | None: ...
     def create(self, requested: RequestedDomain, normalized_name: str, docroot: str | None) -> None: ...
     def close(self) -> None: ...
+
+
+class CompensationRecorder(Protocol):
+    """The durable boundary the phase needs (B4e-iii-c-iii-b R2-b1).
+
+    The engine may not complete a compensable side effect on the strength of its own
+    return value: the process can die before the caller ever sees it. So every create
+    is bracketed by recorder calls that must have *committed* before control moves on
+    — the intent before the gateway is touched, the ack immediately after. The engine
+    hands over raw descriptors and stays free of hashing, the database and the
+    session; the concrete recorder (``domain_journal``) owns durability and redaction.
+    """
+
+    def open_intent(self, *, operation_type: str, target_key: str, requested_payload: dict,
+                    precondition_state: str, precondition_evidence: list,
+                    compensation_type: str) -> tuple[object, str]: ...
+    def mark_started(self, ref) -> None: ...
+    def mark_applied(self, ref, *, observed_result: dict) -> None: ...
+    def mark_reconciliation_required(self, ref, *, failure_code: str) -> None: ...
 
 
 @dataclass
@@ -128,53 +150,105 @@ def _planned(requested: RequestedDomain, name: str, docroot: str | None) -> dict
             "module": op.module, "function": op.function}
 
 
-def _verify(gateway: DomainGateway, requested: RequestedDomain, name: str, home: str) -> bool:
-    """Post-write verification: re-read and trust only an equivalent live record."""
+def _verify(
+    gateway: DomainGateway, requested: RequestedDomain, name: str, home: str,
+) -> tuple[bool, dict | None]:
+    """Post-write verification: re-read and trust only an equivalent live record.
+
+    Returns ``(verified, observed)``; ``observed`` is ``None`` when the destination
+    proves the domain absent, which is a different fact from "present but divergent".
+    """
     post = gateway.read_single_domain(name)
     if post is None:
-        return False
-    return decide_additive(requested, [post], home).action is AdditiveAction.already_present
+        return False, None
+    verified = decide_additive(requested, [post], home).action is AdditiveAction.already_present
+    return verified, {"domain": post.name, "type": post.type.value, "docroot": post.docroot}
 
 
 def _do_create(
     run: ExecutionRun, step_id: str, requested: RequestedDomain, decision,
     gateway: DomainGateway, home: str, before_write: Callable[[], None] | None,
+    recorder: CompensationRecorder, live: list[DomainRecord],
 ) -> tuple[bool, dict | None]:
-    """Execute one create with no auto-retry; verify by fresh read. Returns
-    ``(verified, compensation)``. Uses the decision's *normalized* name/docroot so
-    an IDN/case/trailing-dot request writes and verifies the canonical value."""
+    """Execute one create with no auto-retry, bracketed by durable journal writes.
+
+    Returns ``(verified, compensation)``. Uses the decision's *normalized* name/docroot
+    so an IDN/case/trailing-dot request writes and verifies the canonical value.
+
+    The ordering is the safety property: ``mark_started`` has committed before the
+    gateway is touched, so a row still in ``planned`` proves the create never went out
+    (safe to retry), while a row in ``side_effect_started`` means the outcome is
+    unknown and must never be guessed.
+    """
     name = decision.normalized_name
     docroot = decision.normalized_docroot
     # Compute the redacted plan once, before any write, so audit logging can never
     # become a post-mutation crash point.
     planned = _planned(requested, name, docroot)
+    compensation = {"action": "create_domain", "domain": name,
+                    "type": requested.type.value, "docroot": docroot,
+                    "reverse": _COMPENSATION_TYPE}
+    # The intent, with read-only evidence of the destination as we found it. That
+    # evidence records what we *saw*; it can never prove that a domain observed later
+    # was created by us rather than by an operator inside the same window.
+    ref, replay = recorder.open_intent(
+        operation_type="create_domain", target_key=name,
+        requested_payload={"operation": "create_domain", "domain": name,
+                           "type": requested.type.value, "docroot": docroot},
+        precondition_state="absent",
+        precondition_evidence=sorted(record.name for record in live),
+        compensation_type=_COMPENSATION_TYPE)
+    if replay == "applied":
+        # Durably applied by an earlier delivery of this same attempt: calling the
+        # gateway again would be a second, unrecorded create.
+        _event(run, step_id, "Operazione già applicata sul journal: replay idempotente.",
+                {"status": "already_applied", "changed": False, "resolved_by": "journal_replay"},
+                _VERIFIED, planned=planned)
+        return True, compensation
     if before_write is not None:
         before_write()  # wiring seam (B3b-ii re-validates the gate here)
+    recorder.mark_started(ref)  # committed; the gateway call is now imminent
     ambiguous = False
     try:
         gateway.create(requested, name, docroot)
     except CpanelError:
         # Non-idempotent create: never retried. Resolve the outcome by fresh read.
         ambiguous = True
-    verified = _verify(gateway, requested, name, home)
+    try:
+        verified, observed = _verify(gateway, requested, name, home)
+    except Exception:
+        # The write may or may not have landed and the destination is no longer
+        # readable: the outcome is not determinable. Record it and fail closed —
+        # never infer success, never infer absence.
+        recorder.mark_reconciliation_required(ref, failure_code="verify_read_failed")
+        _event(run, step_id, "Esito della create non determinabile: riconciliazione richiesta.",
+                {"status": "reconciliation_required", "changed": None,
+                 "error_type": "verify_read_failed"}, _UNVERIFIED, planned=planned, level="error")
+        return False, None
     if verified:
+        recorder.mark_applied(ref, observed_result=observed)  # the ack, immediately after
         _event(run, step_id, "Dominio creato e verificato sulla destinazione.",
                 {"status": "created", "changed": True,
                  "resolved_by": "fresh_read" if ambiguous else "write"},
                 _VERIFIED, planned=planned)
-        return True, {"action": "create_domain", "domain": name,
-                      "type": requested.type.value, "docroot": docroot,
-                      "reverse": "manual_removal_only"}
-    reason = "ambiguous_write_unconfirmed" if ambiguous else "post_write_not_verified"
+        return True, compensation
+    if ambiguous:
+        failure = "ambiguous_write_unconfirmed"
+    elif observed is None:
+        failure = "post_write_absent"      # proven absent: R2-b2 may allow a retry
+    else:
+        failure = "post_write_mismatch"    # present but divergent: never ours to assume
+    recorder.mark_reconciliation_required(ref, failure_code=failure)
     _event(run, step_id, "Create non verificata dalla rilettura live.",
-            {"status": "failed", "changed": False, "error_type": reason},
+            {"status": "reconciliation_required", "changed": False, "error_type": failure},
             _UNVERIFIED, planned=planned, level="error")
     return False, None
 
 
 def execute_domain_phase(
     run: ExecutionRun, requested_by_step: dict[str, RequestedDomain | None],
-    gateway: DomainGateway, home: str, *, before_write: Callable[[], None] | None = None,
+    gateway: DomainGateway, home: str, *, recorder: CompensationRecorder,
+    before_write: Callable[[], None] | None = None,
 ) -> PhaseResult:
     """Run the additive domains phase over the pre-resolved requested domains.
 
@@ -183,6 +257,12 @@ def execute_domain_phase(
     session, the state machine, or the gate. The caller (dispatch, B3b-ii) selects
     and persists the terminal state under a fresh fencing check, and may pass a
     ``before_write`` hook to re-validate immediately before each mutation.
+
+    ``recorder`` is mandatory and has no default: the returned ``PhaseResult`` is not
+    a durable artefact, so a compensable create may never be issued without a durable
+    intent behind it (B4e-iii-c-iii-b R2-b1). ``run.events`` remains the audit trail
+    and is still only flushed by the caller's commit — the journal, not the event log,
+    is what survives a crash.
     """
     result = PhaseResult()
     for step_id, requested in requested_by_step.items():
@@ -209,18 +289,21 @@ def execute_domain_phase(
             result.reason = f"{step_id}:{decision.reason}"
         else:  # create — the only path to a DestinationWrite
             verified, compensation = _do_create(
-                run, step_id, requested, decision, gateway, home, before_write)
+                run, step_id, requested, decision, gateway, home, before_write, recorder, fresh)
             if verified:
                 result.completed.append(step_id)
                 if compensation is not None:
                     result.compensation.append(compensation)
             else:
+                # The journal now carries a reconciliation_required row for this step;
+                # dispatch fails the run closed and never advances to email.
                 result.ok = False
-                result.reason = f"{step_id}:create_not_verified"
+                result.reason = f"{step_id}:reconciliation_required"
     return result
 
 
 __all__ = [
+    "CompensationRecorder",
     "DomainGateway",
     "PhaseResult",
     "resolve_requested",

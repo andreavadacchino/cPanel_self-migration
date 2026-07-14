@@ -3,7 +3,9 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint, DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint, func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.errors import ConflictError
@@ -212,6 +214,108 @@ class EmailWriteBackup(Base):
     def __repr__(self) -> str:  # never expose ciphertext or any protected value
         return (f"EmailWriteBackup(id={self.id!r}, backup_ref={self.backup_ref!r}, "
                 f"category={self.category!r}, status={self.status!r})")
+
+
+class DomainWriteStatus(str, enum.Enum):
+    """Lifecycle of one durable domain write operation (task B4e-iii-c-iii-b R2-b1).
+
+    R2-b1 only produces ``planned``/``side_effect_started``/``applied``/
+    ``reconciliation_required``; the ``compensation_*`` states are the representable
+    contract the recovery path (R2-b2) will drive. There is no automatic reverse
+    operation for a domain create, so no state here means "deleted".
+    """
+
+    planned = "planned"
+    side_effect_started = "side_effect_started"
+    applied = "applied"
+    reconciliation_required = "reconciliation_required"
+    compensation_started = "compensation_started"
+    compensated = "compensated"
+    compensation_failed = "compensation_failed"
+
+
+DOMAIN_WRITE_OPERATIONS: frozenset[str] = frozenset({"create_domain"})
+
+# An open intent: the process may have issued the side effect and died before the ack.
+# Its real outcome is *not* known from the database alone.
+DOMAIN_WRITE_OPEN_STATUSES: frozenset[str] = frozenset(
+    {DomainWriteStatus.planned.value, DomainWriteStatus.side_effect_started.value}
+)
+
+# Any state that forbids advancing to a later phase (email) or to success.
+DOMAIN_WRITE_BLOCKING_STATUSES: frozenset[str] = DOMAIN_WRITE_OPEN_STATUSES | frozenset(
+    {
+        DomainWriteStatus.reconciliation_required.value,
+        DomainWriteStatus.compensation_started.value,
+        DomainWriteStatus.compensation_failed.value,
+    }
+)
+
+
+class DomainWriteJournal(Base):
+    """Durable intent/ack record for one domain write, written OUTSIDE the lifecycle transaction.
+
+    Before R2-b1 the compensation descriptor for a created domain lived only in a
+    Python list until the run terminalised: a process death between
+    ``gateway.create()`` and ``finalize_terminal`` left the domain live on the
+    destination and *no trace whatsoever* in the database. This table is the fix —
+    one row per logical operation, written and committed by
+    ``domain_journal.DomainJournalRepository`` in its own short transaction, so it
+    survives a rollback (or a crash) of the lifecycle session.
+
+    Shape follows :class:`EmailWriteBackup` (the established durable-pre-write
+    precedent): a single mutable row keyed by a unique idempotency anchor, carrying
+    a typed ``fencing_token`` as ownership evidence. State advances only by
+    compare-and-set (``WHERE id AND status AND fencing_token``), so a fenced or
+    out-of-order writer cannot move it.
+
+    No secret and no credential may ever reach this table: ``target_key`` is the
+    canonical domain name, the ``*_hash``/``*_fingerprint`` columns are opaque
+    SHA-256 digests, and there is no free-form payload column at all.
+    """
+
+    __tablename__ = "domain_write_journal"
+    __table_args__ = (
+        # The idempotency anchor: one logical operation per attempt. A retry that
+        # replays the same operation collides here instead of writing a second row.
+        UniqueConstraint("execution_attempt_id", "operation_key", name="uq_domain_journal_operation"),
+        CheckConstraint(
+            "status IN ('planned','side_effect_started','applied','reconciliation_required',"
+            "'compensation_started','compensated','compensation_failed')",
+            name="ck_domain_journal_status",
+        ),
+        CheckConstraint("operation_type IN ('create_domain')", name="ck_domain_journal_operation_type"),
+        Index("ix_domain_journal_run", "execution_run_id"),
+        Index("ix_domain_journal_attempt", "execution_attempt_id"),
+        Index("ix_domain_journal_status", "status"),
+        Index("ix_domain_journal_target", "target_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    execution_run_id: Mapped[int] = mapped_column(ForeignKey("execution_runs.id", ondelete="CASCADE"), nullable=False)
+    execution_attempt_id: Mapped[int] = mapped_column(ForeignKey("execution_attempts.id", ondelete="CASCADE"), nullable=False)
+    operation_key: Mapped[str] = mapped_column(String(128), nullable=False)   # deterministic: op + canonical target
+    operation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_key: Mapped[str] = mapped_column(String(255), nullable=False)      # canonical (normalized) domain
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(nullable=False)                # ownership evidence
+    contract_version: Mapped[int] = mapped_column(nullable=False, default=1)
+    requested_payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Read-only evidence of the live state observed immediately BEFORE the side effect.
+    # It proves what we saw; it does NOT prove the domain we later observe is ours.
+    precondition_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    precondition_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_result_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    compensation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    def __repr__(self) -> str:
+        return (f"DomainWriteJournal(id={self.id!r}, operation_key={self.operation_key!r}, "
+                f"status={self.status!r}, fencing_token={self.fencing_token!r})")
 
 
 class ExecutionEvent(Base):

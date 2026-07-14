@@ -125,7 +125,7 @@ def test_zero_create_after_cancel(m_src, m_gw, real_on, dom_on, db_session, engi
     gw = _fake_gw(); gw.create = lambda *a, **kw: creates.append(1)
     m_gw.return_value = gw
     s2 = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
-    def cancel_then_exec(run, requested, gateway, home, *, before_write=None):
+    def cancel_then_exec(run, requested, gateway, home, *, recorder=None, before_write=None):
         s2.execute(text(f"UPDATE execution_runs SET status = 'cancelled' WHERE id = {e.run.id}"))
         s2.commit()
         if before_write: before_write()
@@ -142,7 +142,7 @@ def test_cancel_db_authoritative(real_on, dom_on, db_session, engine, monkeypatc
     from app.modules.executions import real_domain_writer
     e = _env(db_session); att = _disp(db_session, e, monkeypatch)
     s2 = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)()
-    def cancel_phase(run, requested, gateway, home, *, before_write=None):
+    def cancel_phase(run, requested, gateway, home, *, recorder=None, before_write=None):
         s2.execute(text(f"UPDATE execution_runs SET status = 'cancelled' WHERE id = {e.run.id}"))
         s2.commit()
         return _ok(["domains:demo.test"])

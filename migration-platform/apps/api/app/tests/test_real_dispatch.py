@@ -490,7 +490,9 @@ def test_post_write_mismatch_fails(domains_enabled, db_session, monkeypatch) -> 
     run = worker_start(db_session, env.run.id, attempt_id)
     assert run.status == ExecutionStatus.failed.value
     assert gw.creates == [("demo.example.test", "/home/u/demo")]
-    assert "create_not_verified" in (run.error or "")
+    # A post-write that cannot be verified is now an explicit reconciliation case
+    # (durably journalled), not a plain failure.
+    assert "reconciliation_required" in (run.error or "")
 
 
 # --- 8/11. Manual/unsupported and only-unimplemented -> halted (no false success)

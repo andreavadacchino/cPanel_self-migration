@@ -167,3 +167,92 @@ Guardrail deviation: 20 files (limit 8), 631 lines (limit 500).
 Draft rejected: 5 tests (vs 24 required), same-session cancel (no fresh read
 proven), close not exactly-once, completeness too simplistic, missing order
 validation, routing artificial, IDs erroneously `[x]`. Status restored.
+
+## R2-b1 — durable domain write journal (2026-07-15)
+
+Verdict: `R2_B1_DOMAIN_SIDE_EFFECT_TRACKING_DURABLE_RECOVERY_STILL_MANUAL`.
+NOT exactly-once, NOT automatic recovery, NOT automatic compensation.
+
+**CRITICAL closed:** before R2-b1 a process death between `gateway.create()` and
+`finalize_terminal` left the domain live on the destination and *zero* durable
+trace (compensation lived only in a RAM list; `run.events` were only flushed by
+the caller's commit). RED proven against `5e4408b`: after a crash the attempt's
+compensation/checkpoint read back `None` from a second session, 0 `domain_write`
+events.
+
+**Result:** DOMAIN_SIDE_EFFECT_NO_LONGER_UNTRACKED — a durable intent exists
+before the side effect; if the process dies after `create()` the DB keeps an
+open (`side_effect_started`) row; the run cannot advance to email or succeed;
+recovery is still manual (R2-b2).
+
+**Model (vs `EmailWriteBackup`):** a single mutable row per logical operation
+(`DomainWriteJournal`), unique anchor `(execution_attempt_id, operation_key)`,
+state advanced by compare-and-set `WHERE id AND status AND fencing_token`. Chosen
+over append-only events because a fold would move state-precedence logic out of
+the DB; the row + CAS put the barrier *in* PostgreSQL. Written by
+`DomainJournalRepository` in its OWN short transaction (separate `Session` on the
+engine), so it survives a lifecycle rollback/crash. Idempotent insert via
+`INSERT ... ON CONFLICT DO NOTHING` (never read-then-insert). No secret column: only
+`target_key` (canonical domain) and opaque SHA-256 digests.
+
+**States:** planned → side_effect_started → applied | reconciliation_required;
+compensation_* reserved for R2-b2. Fencing verified before intent, before the side
+effect (`mark_started` CAS), and before the ack (`mark_applied` CAS).
+
+**Crash timeline (proven with a 2nd DB session on real PostgreSQL):**
+1. before side effect → SAFE_RETRY (nothing persisted / journal fails ⇒ gateway never called)
+2. after intent, before create → SAFE_RETRY (row `planned`, create never issued)
+3. after create, before ack → RECONCILIATION_REQUIRED (row `side_effect_started`, outcome unknown)
+4. after ack, before return → SAFE (row `applied`, durable)
+5. during 2nd side effect → op1 `applied`, op2 `planned` (SAFE_RETRY for op2)
+6. during compensation → deferred to R2-b2
+7. during `close()` → close exactly-once preserved (R2-a), reconciliation path covered
+
+**Retry of a `running` attempt:** no longer a silent no-op — `worker_start`
+detects an open intent and terminalises `failed` / `open_domain_intent_detected`
+without re-running the side effect. A durable blocking row also fails the run
+before email (`domain_reconciliation_required`), independent of the in-memory result.
+
+**Ownership caveat:** the intent records read-only evidence of the destination as
+seen *before* the write; this proves what we observed, never that a domain seen
+later is ours (an operator could have created it in the window). R2-b2 classifies
+applied_confirmed / safe-retry(absent) / reconciliation_required and never deletes
+a domain on name alone.
+
+**Files (9): 7 planned + 2 trivial test-compat.**
+- `models.py` — `DomainWriteJournal` + status enum/sets (+106) — 366 total
+- `alembic/versions/0011_domain_write_journal.py` — NEW (60): unique, 2 CHECK, 4 index, FK cascade
+- `domain_journal.py` — NEW (280): repository (short tx), recorder, CAS transitions, open/blocking queries
+- `real_domain_writer.py` — recorder in the interface, intent/ack around `create()` (+115) — 311 total
+- `dispatch.py` — recorder wiring, open-intent recovery gate, pre-email blocking gate (+26) — 426 total
+- `test_domain_journal_crash.py` — NEW (532): 19 crash/idempotency/fencing/migration tests on real PostgreSQL
+- `test_real_domain_writer.py` — default recorder shim for existing call sites (+29)
+- `test_dispatch_domain_lifecycle.py` — `recorder=None` kwarg on 2 monkeypatch signatures (+4, test-compat)
+- `test_real_dispatch.py` — reason string `create_not_verified` → `reconciliation_required` (+4, test-compat)
+
+**Budget:** applicative raw +571 (< 600). `dispatch.py` 426 total (was already 400
+at baseline; +26 over the 400/file guideline — flagged). 9 files vs 7 planned (the 2
+extra are 4-line test-compat edits forced by the mandatory-recorder + reason-string
+changes). Crash tests non-compressible per mandate.
+
+**Tests:** API 983 passed (was 964; +19). Migration upgrade→head + downgrade→0010
+verified on real PostgreSQL 16 with unique/CHECK constraints asserted.
+
+**Still open (R2-b2):** journal fold, applied/absent/uncertain classification,
+read-only reconciliation via `read_single_domain`, fingerprint comparison,
+running-attempt recovery driver, inverse idempotent compensation, worker restart,
+close+primary-exception parametric, strict `completed` validation.
+
+**C3 remains BLOCKED** — after R2-b2 AND R2-c (see below).
+
+## R2-c (NEW, blocking) — EMAIL_COMPENSATION_IS_RAM_ONLY = CRITICAL_OPEN
+
+Confirmed with evidence during R2-b1 investigation (out of R2-b1 scope, untouched):
+`run_email_category` (`email_category_runtime.py:170-225`) has no `db.commit()`;
+per-item compensation is a RAM list (`email_write.py:229`) flushed only at category
+granularity, and a `failed` category never calls `persist_progress`
+(`email_worker_coordinator.py:258`); `email_forwarders` has no durable backup at all
+(`forwarder_writer.py:186`). A crash after an email side effect can therefore lose
+the compensation exactly as the domain path did pre-R2-b1. Must be fixed (durable
+email journal, same pattern) before C3 can be unblocked. **C3 cannot be declared
+unblocked after R2-b2 while R2-c is open.**

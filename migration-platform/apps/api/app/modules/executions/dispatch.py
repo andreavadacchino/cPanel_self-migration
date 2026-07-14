@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.errors import ConflictError
 from app.modules.endpoints import service as endpoint_service
 from app.modules.endpoints.models import Endpoint
+from app.modules.executions import domain_journal
 from app.modules.executions import lease as lease_service
 from app.modules.executions import real_domain_writer
 from app.modules.executions import safety_gates
@@ -264,10 +265,12 @@ def _run_domain_phase(
         safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token,
                                categories=("domains",))
 
+    recorder = domain_journal.recorder_for(db, run, attempt)
     _has_exc = False
     try:
         return real_domain_writer.execute_domain_phase(
-            run, requested, gateway, dest_home, before_write=before_write)
+            run, requested, gateway, dest_home,
+            recorder=recorder, before_write=before_write)
     except BaseException:
         _has_exc = True
         raise
@@ -287,6 +290,18 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
     if run is None or attempt is None or attempt.execution_run_id != run.id:
         raise ConflictError("Run o tentativo di dispatch non validi")
     if attempt.status != ExecutionStatus.queued.value:
+        # A redelivery of an attempt already taken. Silently returning here used to
+        # strand a crashed run in `running` forever, with a possibly-issued domain
+        # write nobody would ever look at. If the journal holds an open intent the
+        # side effect may or may not have landed, so we never re-run the phase — we
+        # terminalise fail-closed and hand the run to recovery (R2-b2).
+        if attempt.status == _RUNNING:
+            pending = domain_journal.open_operations(db, attempt.id)
+            if pending:
+                return finalize_terminal(
+                    db, run, attempt, ExecutionStatus.failed.value,
+                    phase="worker_recovery", error="open_domain_intent_detected",
+                    checkpoint={"attempt_id": attempt.id, "domains": []})
         return run
 
     _validate_preview(run.preview or [])
@@ -353,6 +368,17 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
         lease_service.assert_fencing_current(
             db, destination_endpoint_id=run.destination_endpoint_id,
             fencing_token=attempt.fencing_token)
+
+    # Durable gate before email: the in-memory PhaseResult is not authoritative. If the
+    # journal holds any open or unreconciled domain intent, a domain side effect's real
+    # outcome is unknown — email must not run and the run must not succeed.
+    blocking = domain_journal.blocking_operations(db, attempt.id)
+    if blocking:
+        return finalize_terminal(
+            db, run, attempt, ExecutionStatus.failed.value, phase="worker_domains",
+            error="domain_reconciliation_required",
+            checkpoint={"domains": domain_result.completed if domain_result else []},
+            compensation=_comp())
 
     email_executable = [c for c in executable if c in EMAIL_CATEGORIES]
     if email_executable:

@@ -64,6 +64,7 @@
 | `[/]` | `B4e-iii-c-iii` | [Worker email dispatch and terminal semantics](B4e-iii-c-iii-email-worker-dispatch.md) (split → iii-a/iii-b) | High | M | B4e-iii-c-ii |
 | `[x]` | `B4e-iii-c-iii-a` | [Email worker coordinator](B4e-iii-c-iii-a-email-worker-coordinator.md) | High | M | B4e-iii-c-ii |
 | `[~]` | `B4e-iii-c-iii-b` | [Dispatch wiring and atomic terminalization](B4e-iii-c-iii-b-dispatch-wiring-terminalization.md) | High | M | B4e-iii-c-iii-a |
+| `[ ]` | `B4e-iii-c-iii-b-R2-c` | EMAIL_COMPENSATION_IS_RAM_ONLY: durable email compensation journal (blocks C3) — see B4e-iii-c-iii-b doc | High | M | B4e-iii-c-iii-b |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
