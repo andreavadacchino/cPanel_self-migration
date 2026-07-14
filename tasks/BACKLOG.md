@@ -61,7 +61,9 @@
 | `[/]` | `B4e-iii-c` | [Email runtime registry and dispatch](B4e-iii-c-email-runtime-registry-dispatch.md) (split → c-i/c-ii/c-iii) | High | L | B4e-iii-a, B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[x]` | `B4e-iii-c-i` | [Email registry and evidence resolvers](B4e-iii-c-i-email-registry-resolvers.md) | High | M | B4e-iii-b, B4e-ii, B4a, B4b-ii, B4c-ii, B4d-ii |
 | `[x]` | `B4e-iii-c-ii` | [Destination gateways and durable backup bindings](B4e-iii-c-ii-email-gateways-backups.md) | High | M | B4e-iii-c-i, B4e-iii-a |
-| `[ ]` | `B4e-iii-c-iii` | [Worker email dispatch and terminal semantics](B4e-iii-c-iii-email-worker-dispatch.md) | High | M | B4e-iii-c-ii |
+| `[/]` | `B4e-iii-c-iii` | [Worker email dispatch and terminal semantics](B4e-iii-c-iii-email-worker-dispatch.md) (split → iii-a/iii-b) | High | M | B4e-iii-c-ii |
+| `[x]` | `B4e-iii-c-iii-a` | [Email worker coordinator](B4e-iii-c-iii-a-email-worker-coordinator.md) | High | M | B4e-iii-c-ii |
+| `[ ]` | `B4e-iii-c-iii-b` | [Dispatch wiring and atomic terminalization](B4e-iii-c-iii-b-dispatch-wiring-terminalization.md) | High | M | B4e-iii-c-iii-a |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
@@ -203,10 +205,13 @@
 >     per-categoria e per-write (`before_write`), commit atomico run+attempt, checkpoint e semantica
 >     terminale esplicita.
 >
-> `C3` dipende ora da `B4e-iii-c-iii` (non più `B4e-iii`); `B4a → B4e-i → B4e-ii → {B4e-iii-a,
-> B4e-iii-b} → B4e-iii-c-i → B4e-iii-c-ii → B4e-iii-c-iii → C3`. Gli ID `B4e`, `B4e-iii` e
-> `B4e-iii-c` sono ritirati per l'implementazione (restano come contenitori documentali dello split).
-> C4 resta responsabile del resume degli attempt `running`.
+> `C3` dipende ora da `B4e-iii-c-iii-b` (non più `B4e-iii-c-iii`); `B4a → B4e-i → B4e-ii →
+> {B4e-iii-a, B4e-iii-b} → B4e-iii-c-i → B4e-iii-c-ii → B4e-iii-c-iii-a → B4e-iii-c-iii-b → C3`.
+> `B4e-iii-c-iii` è ritirato `[/]` (suddiviso in `B4e-iii-c-iii-a` — coordinatore email
+> terminal-agnostic non cablato nel runtime — e `B4e-iii-c-iii-b` — wiring dispatch/actor e
+> terminazione atomica). Gli ID `B4e`, `B4e-iii`, `B4e-iii-c` e `B4e-iii-c-iii` sono ritirati per
+> l'implementazione (restano come contenitori documentali dello split). C4 resta responsabile del
+> resume degli attempt `running`.
 
 > `B4d` (Email filters writer), misurato a **~1365 righe su ~7 file** (`filter_rules.py` op tipizzate +
 > canonical fingerprint ordinato + contratto 2-scope + regole pure ~300, `filter_writer.py` engine +
@@ -244,7 +249,7 @@
 
 | `[ ]` | `C1` | [Website content transfer](C1-website-content-transfer.md) | High | L | B2b-ii, B3c-ii |
 | `[ ]` | `C2` | [Database content transfer](C2-database-content-transfer.md) | High | L | B2b-ii, B6 |
-| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e-iii-c-iii |
+| `[ ]` | `C3` | [Mailbox content transfer](C3-mailbox-content-transfer.md) | High | L | B2b-ii, B4e-iii-c-iii-b |
 | `[ ]` | `C4` | [Transfer checkpoint resume](C4-transfer-checkpoint-resume.md) | High | L | C1, C2, C3 |
 
 ### Wave D — Verification and recovery
@@ -283,7 +288,7 @@ graph LR
   B4b-i-->B4e-iii-b
   B4c-i-->B4e-iii-b
   B4d-ii-->B4e-iii-c-i
-  B4e-iii-c-i-->B4e-iii-c-ii-->B4e-iii-c-iii
+  B4e-iii-c-i-->B4e-iii-c-ii-->B4e-iii-c-iii-a-->B4e-iii-c-iii-b
   B4e-iii-a-->B4e-iii-c-ii
   B1-->B5
   B2a-->B5
@@ -297,7 +302,7 @@ graph LR
   B2b-ii-->C2
   B6-->C2
   B2b-ii-->C3
-  B4e-iii-c-iii-->C3
+  B4e-iii-c-iii-b-->C3
   C1-->C4
   C2-->C4
   C3-->C4

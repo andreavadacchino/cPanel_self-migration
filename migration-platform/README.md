@@ -271,6 +271,7 @@ paramiko di streaming sono in **B2b-ii**.
 | Email category pipeline (B4e-iii-b) | Readiness/comparazione evidence-bound per le 5 categorie email |
 | Email phase registry (B4e-iii-c-i) | Typed registry e resolver evidence-bound per le 5 categorie |
 | Email gateway runtime (B4e-iii-c-ii) | Client factory, gateway, executor, backup binding — non cablato al worker |
+| Email worker coordinator (B4e-iii-c-iii-a) | Orchestratore deterministico categorie email, terminal-agnostic — non cablato al worker |
 | Migrazione dati/configurazioni | Writer reali non abilitati |
 
 ## Copertura del preflight
@@ -1336,13 +1337,43 @@ e backup store (iii-a):
   check locale e la write è inevitabile. Solo fencing PostgreSQL locale è enforced.
 
 Invarianti: `dispatch.py` non importa il modulo; `IMPLEMENTED_REAL_CATEGORIES ==
-frozenset({"domains"})`; nessun payload sensibile in reason/repr/eventi. c-iii (`[ ]`)
-cablierà il dispatch nel worker.
+frozenset({"domains"})`; nessun payload sensibile in reason/repr/eventi. c-iii-a
+(coordinatore) è completo; c-iii-b (`[ ]`) cablierà il dispatch nel worker.
 
 ```bash
 cd apps/api
 PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_email_category_runtime.py \
   --cov=app.modules.executions.email_category_runtime --cov-report=term-missing
+```
+
+### Email worker coordinator (B4e-iii-c-iii-a)
+
+`email_worker_coordinator.py` orchestra deterministicamente le categorie email selezionate
+dalla preview del run e restituisce un `EmailCoordinationResult` redatto e terminal-agnostic
+— **non cablato al worker** fino a c-iii-b:
+
+- **Selezione e ordine** — `_select_categories()` estrae categorie e step ID dalla preview
+  in ordine piano, con dedup preservando il primo.
+- **Fresh cancellation check** — `_fresh_run_status()` usa `db.no_autoflush` con select
+  column-only (mai ORM identity-map) prima di ogni categoria e nel `before_write`.
+- **Preflight per-categoria** — flag → scoped `authorize()` → snapshot (ruolo verificato)
+  → `resolve_category()` c-i → unresolved/blocked → fail-closed. Categoria sconosciuta,
+  disabled, o authorize-rejected → pending, mai falso successo.
+- **before_write** — fresh status + scoped `authorize()` + `assert_fencing_current()`.
+- **Post-phase fencing-only** — `assert_fencing_current()` dopo la fase, nessun full
+  `authorize()` su evidenza/conferma estranea. Fenced-out → zero progress callback.
+- **Progress callback** — `persist_progress(checkpoint, compensation)` iniettata, invocata
+  solo dopo fencing post-fase. c-iii-b collegherà alla persistenza dell'attempt.
+- **Aggregazione** — failure → stop immediato; pending → nessun falso successo; cancelled →
+  zero write successive; tutti gli step selezionati compaiono nel risultato.
+
+Invarianti: `dispatch.py` non importa il modulo; `IMPLEMENTED_REAL_CATEGORIES ==
+frozenset({"domains"})`; nessun payload sensibile in checkpoint/compensation/repr.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_email_worker_coordinator.py \
+  --cov=app.modules.executions.email_worker_coordinator --cov-report=term-missing
 ```
 
 ### Store durevole cifrato dei backup pre-write (B4e-iii-a)
