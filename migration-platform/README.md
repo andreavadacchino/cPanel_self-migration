@@ -268,6 +268,9 @@ paramiko di streaming sono in **B2b-ii**.
 | Boundary SSH (B2a) | Esecuzione comandi verificata host-key; non collegato al dispatch |
 | Motore streaming SSH (B2b-i) | `pump()` backpressured/bounded/cancellabile; wiring sessioni+paramiko in B2b-ii |
 | Sessioni streaming SSH (B2b-ii) | `start_stdout` solo read/source; `start_stdin` solo destination write autorizzata; transport Paramiko incrementale |
+| Email category pipeline (B4e-iii-b) | Readiness/comparazione evidence-bound per le 5 categorie email |
+| Email phase registry (B4e-iii-c-i) | Typed registry e resolver evidence-bound per le 5 categorie |
+| Email gateway runtime (B4e-iii-c-ii) | Client factory, gateway, executor, backup binding — non cablato al worker |
 | Migrazione dati/configurazioni | Writer reali non abilitati |
 
 ## Copertura del preflight
@@ -1266,6 +1269,80 @@ B4e-iii. Coverage: `real_autoresponder_writer.py` 96%.
 cd apps/api
 PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_real_autoresponder_writer.py \
   --cov=app.modules.executions.real_autoresponder_writer --cov-report=term-missing
+```
+
+### Pipeline categorie email nel readiness e nella comparazione (B4e-iii-b)
+
+Le cinque categorie email (`email_forwarders`, `default_address`, `email_routing`,
+`email_filters`, `email_autoresponders`) sono integrate nella pipeline
+comparazione→piano→readiness con gap code evidence-bound. Per ciascuna la readiness
+richiede contratti sorgente e destinazione validi (versionati, `is_write_eligible`)
+e coverage `succeeded`; un contratto assente, legacy, parziale, ambiguo o fallito
+produce un gap code stabile `<category>_<side>_<reason>`. Il planner classifica
+ciascuna come `approval` (non `automatic`); il readiness report la valida come
+`eligible_for_real_design` solo quando entrambi i contratti superano il doppio
+check. Nessun engine email è collegato al dispatch; le categorie restano `MANUAL`
+fino al wiring di B4e-iii-c.
+
+### Typed registry e evidence resolver per categorie email (B4e-iii-c-i)
+
+`email_phase_registry.py` mappa le cinque categorie email a metadata tipizzati
+(`CategoryEntry`: flag property, needs_backup, scope strategy) e fornisce
+resolver evidence-bound (`resolve_category → ResolvedEvidence`) che estraggono
+il payload autoritativo esclusivamente dallo snapshot immutabile e dal suo
+contratto — mai da step ID, preview, eventi o request. Ogni resolver valida il
+contratto con `is_write_eligible()`, riconcilia flat e contratto, e produce
+`kwargs` tipizzati consumabili direttamente dagli engine writer.
+
+Proprietà di sicurezza:
+- Forwarder: `_reconcile_endpoint()` valida flat↔contratto **simmetricamente** su
+  source e destination; item non-dict, source invalida, destination non-stringa,
+  duplicati e mismatch producono reason side-specific redatto.
+- Autoresponder: contratto proiettato con soli domini/record selezionati; gate
+  completeness/issue, cross-check domain tag flat↔contratto, dedup step_id.
+- `is_write_eligible()` (forwarder): `invalid_sources` deve essere `isinstance(list)`;
+  source validata con `_is_valid_source()`; destination con `_is_plain_forward()`.
+- Nessun import in `dispatch.py`; irraggiungibile dal runtime fino a c-ii/c-iii.
+
+### Destination gateway, single-category executor e backup binding (B4e-iii-c-ii)
+
+`email_category_runtime.py` costruisce il boundary effectful — **ancora irraggiungibile
+dal worker** — che collega resolver (c-i), engine writer (B4a/B4b-ii/B4c-ii/B4d-ii/B4e-ii)
+e backup store (iii-a):
+
+- **Client factory destination-only** — `_build_destination_client()` legge
+  `run.destination_endpoint_id`, richiede `role == "destination"`, risolve credenziali
+  dalla destinazione, costruisce `CpanelClient(allow_destination_writes=True)`, chiuso in
+  `finally`. Nessun fallback alla sorgente.
+- **`ForwarderGateway`** — typed `list_forwarders_op()` (SafeRead) e `add_forwarder_op()`
+  (DestinationWrite). Nessun raw `execute()`.
+- **Per-category flag** — `is_category_enabled()` usa `REGISTRY[cat].flag_property` con
+  exact-match `True`; categoria sconosciuta o property mancante → fail-closed.
+- **`run_email_category()`** — single-category executor con pre-gate chain fail-closed:
+  unknown_category → category/evidence mismatch → run_id/attempt_id invalid →
+  dry_run → before_write callable → run/attempt status running → attempt_run_mismatch →
+  fencing_token positive int → destination_endpoint_id → evidence → blocked → flag →
+  client. `_is_positive_int()` (`type(v) is int and v > 0`) esclude bool, 0, negativi.
+- **Multi-scope** — filtri raggruppati per scope (account/mailbox), autoresponder per
+  dominio; un gateway distinto per gruppo; stop dopo il primo gruppo fallito; nessun
+  ampliamento degli step.
+- **Backup binding** — `_make_backup_persister()` produce una callback che chiama
+  `persist_email_backup()` (iii-a) con `run_id`, `attempt_id`, `category`, `item_key`,
+  `fencing_token` e fingerprint deterministico SHA-256 (`efp1:` prefix). Disponibile
+  **solo** per `default_address` e `email_routing` (`REGISTRY[cat].needs_backup`).
+- **Routing inerte** — `policies={}`, clock iniettato, zero write senza policy; la
+  categoria non è mai un falso successo quando blocked.
+- **Limite fencing** — cPanel non supporta fencing token remoto; la finestra tra l'ultimo
+  check locale e la write è inevitabile. Solo fencing PostgreSQL locale è enforced.
+
+Invarianti: `dispatch.py` non importa il modulo; `IMPLEMENTED_REAL_CATEGORIES ==
+frozenset({"domains"})`; nessun payload sensibile in reason/repr/eventi. c-iii (`[ ]`)
+cablierà il dispatch nel worker.
+
+```bash
+cd apps/api
+PYTHONPATH=../../packages/adapters python -m pytest app/tests/test_email_category_runtime.py \
+  --cov=app.modules.executions.email_category_runtime --cov-report=term-missing
 ```
 
 ### Store durevole cifrato dei backup pre-write (B4e-iii-a)
