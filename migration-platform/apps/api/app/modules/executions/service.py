@@ -216,6 +216,13 @@ def _current_anchors(db: Session, migration_id: int) -> Anchors:
 
 
 def _latest_snapshot_id(db: Session, migration_id: int, role: str) -> int | None:
+    # Ordered by (captured_at, id), the SAME "latest" that comparison/service.py
+    # and inventory/service.py use — the comparison a plan is anchored to was
+    # chosen by that order, so freshness must ask the identical question. Ordering
+    # by id alone is a THIRD definition of "latest": if two overlapping preflights
+    # for one role commit out of capture order (a higher id with an older
+    # captured_at), the id-order answer would disagree with the order that built
+    # the plan and report a fresh plan as stale.
     return (
         db.execute(
             select(InventorySnapshot.id)
@@ -224,7 +231,10 @@ def _latest_snapshot_id(db: Session, migration_id: int, role: str) -> int | None
                 InventorySnapshot.endpoint_role == role,
                 InventorySnapshot.status == SnapshotStatus.SUCCEEDED.value,
             )
-            .order_by(InventorySnapshot.id.desc())
+            .order_by(
+                InventorySnapshot.captured_at.desc(),
+                InventorySnapshot.id.desc(),
+            )
         )
         .scalars()
         .first()

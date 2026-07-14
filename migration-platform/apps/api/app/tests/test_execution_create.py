@@ -261,6 +261,47 @@ def test_a_newer_snapshot_or_comparison_makes_the_plan_stale(
     assert "regenerate the plan" in resp.json()["detail"].lower()
 
 
+def test_freshness_follows_capture_order_not_insertion_order(
+    client: TestClient, db_session: Session
+) -> None:
+    """"Latest snapshot" must mean the same thing here as where the plan was born.
+
+    The comparison a plan is anchored to picks its snapshots by (captured_at, id)
+    — so freshness must ask that identical question. If two overlapping preflights
+    for one role commit out of capture order, the plan's own source snapshot can
+    end up with a HIGHER id than a later-inserted-but-earlier-captured one. Asking
+    "is there a newer snapshot?" by id alone would then answer yes and flag a
+    plan that is, by capture time, the freshest there is. Pin the (captured_at,
+    id) order: a higher-id row with an OLDER captured_at is not "newer".
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.modules.inventory.models import InventorySnapshot
+
+    anchors = _chain(db_session)
+    plan_snapshot = db_session.get(InventorySnapshot, anchors["source_snapshot_id"])
+    endpoint_id = plan_snapshot.endpoint_id
+
+    # The plan's snapshot is the freshest by capture time...
+    base = datetime(2026, 7, 15, 12, 0, 0, tzinfo=timezone.utc)
+    plan_snapshot.captured_at = base
+    # ...but a later-inserted row (higher id) captured EARLIER also exists, as an
+    # out-of-order preflight commit would leave behind.
+    db_session.add(
+        InventorySnapshot(
+            migration_id=anchors["migration_id"],
+            endpoint_id=endpoint_id,
+            endpoint_role="source",
+            status="succeeded",
+            captured_at=base - timedelta(minutes=10),
+        )
+    )
+    db_session.commit()
+
+    # By capture time the plan is still current, so the create must succeed.
+    assert _post(client, anchors["migration_id"]).status_code == 201, "id-order false stale"
+
+
 def test_a_running_preflight_does_not_make_the_plan_stale(
     client: TestClient, db_session: Session
 ) -> None:
@@ -390,6 +431,86 @@ def test_a_blank_filter_never_reaches_a_spec(
     resp = _post(client, anchors["migration_id"], {**MAIL_ONLY, field: blank})
     assert resp.status_code == 422, resp.text
     assert db_session.query(MigrationExecution).count() == 0
+
+
+@pytest.mark.parametrize("field", ["domain_filter", "mailbox_filter"])
+@pytest.mark.parametrize(
+    ("value", "why"),
+    [
+        ("ex\x00ample.com", "a NUL byte"),
+        ("ex\nample.com", "a newline"),
+        ("a" * 400, "far longer than any domain or address"),
+    ],
+    ids=["nul", "newline", "too_long"],
+)
+def test_an_unusable_filter_is_a_422_not_a_500(
+    client: TestClient, db_session: Session, field: str, value: str, why: str
+) -> None:
+    """A filter must be a string a domain or an address could actually be.
+
+    A control character (NUL, newline) is a corrupted value no domain or address
+    contains — the contract's own run-id rule already refuses exactly these. The
+    length bound is the same idea one size up: nothing stopped a megabyte of 'a'
+    from being hashed into a spec and persisted forever in the scope, while every
+    other free-text field in this codebase is bounded.
+    """
+    anchors = _chain(db_session)
+    db_session.commit()
+
+    resp = _post(client, anchors["migration_id"], {**MAIL_ONLY, field: value})
+    assert resp.status_code == 422, f"{field} with {why}: got {resp.status_code}"
+    assert db_session.query(MigrationExecution).count() == 0
+
+
+@pytest.mark.parametrize("field", ["domain_filter", "mailbox_filter"])
+def test_a_lone_surrogate_filter_is_a_422_not_a_500(
+    client: TestClient, db_session: Session, field: str
+) -> None:
+    """The one that bites, sent as the raw bytes uvicorn would actually receive.
+
+    JSON's grammar does not require surrogates to be paired, and ``json.loads``
+    decodes ``"\\ud800"`` to a lone surrogate without complaint — but
+    ``canonical_spec_bytes`` serializes with ``.encode("utf-8")``, which raises on
+    it. Unguarded, the platform's most carefully gated write route answered a
+    malformed filter with an unhandled 500 while every other bad scope got a
+    clean 422. The bytes below are a legal JSON document; a browser or a broken
+    client can emit them. (``json=`` cannot: httpx encodes the body to UTF-8
+    client-side and would crash there, hiding the server behaviour — so this
+    posts the raw content, which is the real wire input.)
+    """
+    anchors = _chain(db_session)
+    db_session.commit()
+
+    raw = (
+        '{"mode":"dry_run","scope":{"mail":true,"files":false,"databases":false,'
+        f'"{field}":"\\ud800"}}}}'
+    ).encode("utf-8")
+    resp = client.post(
+        f"/api/migrations/{anchors['migration_id']}/executions",
+        content=raw,
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 422, f"{field}: got {resp.status_code}: {resp.text}"
+    assert db_session.query(MigrationExecution).count() == 0
+
+
+def test_a_filter_at_the_length_limit_is_still_accepted(
+    client: TestClient, db_session: Session
+) -> None:
+    """The bound must admit every real name, not merely reject the absurd ones:
+    253 bytes is a fully qualified domain (RFC 1035)."""
+    anchors = _chain(db_session)
+    db_session.commit()
+
+    longest = ("a" * 49 + ".") * 5 + "a" * 7  # 257... trimmed below to exactly 253
+    longest = longest[:253]
+    resp = _post(
+        client,
+        anchors["migration_id"],
+        {"mail": False, "files": True, "databases": False, "domain_filter": longest},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["scope"]["domain_filter"] == longest
 
 
 def test_an_unknown_scope_key_is_refused(client: TestClient, db_session: Session) -> None:

@@ -55,8 +55,10 @@ def test_a_newer_anchor_makes_the_plan_stale(field: str, code: str) -> None:
     newer = Anchors(**{**FRESH.__dict__, field: getattr(FRESH, field) + 1})
     gates = evaluate_state_gates(plan_status="ready_for_review", plan_anchors=FRESH, latest=newer)
     assert _codes(gates) == {code}
-    assert code.replace("_", " ") or gates[0].message  # a gate always explains itself
-    assert gates[0].message
+    # A gate names both ids: an operator who is told only "stale" cannot tell a
+    # plan one preflight behind from one built against a deleted snapshot.
+    assert str(getattr(FRESH, field)) in gates[0].message
+    assert str(getattr(newer, field)) in gates[0].message
 
 
 def test_every_stale_anchor_is_reported_not_just_the_first() -> None:

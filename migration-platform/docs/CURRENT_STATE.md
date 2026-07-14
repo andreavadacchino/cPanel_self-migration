@@ -186,7 +186,7 @@ un worktree vecchio produce verde falso: è già successo.
 
 | Gate | Esito |
 |---|---|
-| `pytest` API | 345 passed |
+| `pytest` API | 356 passed |
 | `pytest` domain | 132 passed |
 | `pytest` worker (`DRAMATIQ_TESTING=1`) | 15 passed |
 | Alembic up/down/up (SQLite) | OK |
