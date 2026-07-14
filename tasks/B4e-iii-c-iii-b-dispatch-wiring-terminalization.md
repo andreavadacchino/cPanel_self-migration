@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **ID** | `B4e-iii-c-iii-b` |
-| **Status** | `[x]` |
+| **Status** | `[~]` |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B4e-iii-c-iii-a |
@@ -73,8 +73,50 @@ atomic terminalization. Key changes:
 **Review outcome:** Adversarial review 12/12 PASS + 1 MEDIUM hardening applied
 (explicit fresh-status re-check before finalize_terminal).
 
-**Residual limitations:**
-- Crash/resume of `running` attempts stays with C4.
-- Routing is registered but not executable until readiness changes from
-  `needs_contract_test` — no policy provisioning in scope.
-- Not production-ready: E1/E2/E3 still pending.
+**Initial commit measurement (4becb0e):** 20 files, 477 ins / 154 del = 631 modified.
+Guardrail deviation: 20 files (limit 8), 631 lines (limit 500).
+
+## Correction Plan
+
+- **R1**: Atomic persistence, cancellation safety, compensation preservation.
+- **R2**: Global completeness, domain ordering/pending, lifecycle, end-to-end.
+
+## Correction Record R1
+
+**Date:** 2026-07-14
+
+**Issues corrected:**
+1. `finalize_terminal` now fresh-reads run/attempt with `SELECT FOR UPDATE`, validates
+   status, fencing, and rolls back on any error. Concurrent cancellation detected →
+   attempt cancelled, run preserved, checkpoint/compensation kept.
+2. `make_progress_persister` validates fresh run/attempt status, fencing token match,
+   checkpoint shape (categories/step IDs/reason codes), compensation forbidden keys
+   (recursive scan). Rejects oversized payloads. Rolls back on any failure.
+3. All terminal branches in `worker_start` now pass compensation via `_comp()` helper —
+   domain failure, email failure, cancellation all preserve backup refs.
+4. Cancellation branch uses `finalize_terminal` (fresh-aware) instead of raw
+   `service.finalize_attempt`, preserving existing checkpoint on concurrent cancel.
+
+**Files modified (R1):**
+- `dispatch_terminal.py` — rewritten (204 lines): fresh reads, validation, rollback
+- `dispatch.py` — 357 lines: all terminal branches via `finalize_terminal` + `_comp()`
+- `test_dispatch_email_wiring.py` — 346 lines (25 tests): R1 atomicity/progress/compensation
+- `tasks/B4e-iii-c-iii-b-*` — status `[~]`, Correction Record R1
+- `tasks/BACKLOG.md` — status `[~]`
+
+**Tests/commands run (R1):**
+- API: 926 passed (862 baseline + 39 coordinator + 25 wiring), 0 failed
+- Worker: 18 passed
+- Frontend build: OK
+- Compose: valid
+
+**R1 budget:** 5 files, 313 ins / 68 del = 381 modified. Within 8/500.
+
+**Residual for R2:**
+- domain_result.pending does not block email execution
+- No exact selected-step completeness check before succeeded
+- Domain before_write does not detect fresh cancellation
+- Domain client not closed on exception path
+- Crash/resume of `running` attempts stays with C4
+- Routing registered but not executable (needs_contract_test)
+- Not production-ready: E1/E2/E3 pending

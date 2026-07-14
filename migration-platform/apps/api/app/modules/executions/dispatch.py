@@ -296,6 +296,14 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
     domain_result = None
     email_result = None
 
+    def _comp():
+        c = {}
+        if domain_result and domain_result.compensation:
+            c["domains"] = domain_result.compensation
+        if email_result and email_result.compensation:
+            c.update(email_result.compensation)
+        return c or None
+
     if "domains" in executable:
         safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token,
                                categories=("domains",))
@@ -304,7 +312,8 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
             return finalize_terminal(
                 db, run, attempt, ExecutionStatus.failed.value, phase="worker_domains",
                 error=domain_result.reason,
-                checkpoint={"completed": domain_result.completed})
+                checkpoint={"completed": domain_result.completed},
+                compensation=_comp())
         lease_service.assert_fencing_current(
             db, destination_endpoint_id=run.destination_endpoint_id,
             fencing_token=attempt.fencing_token)
@@ -319,22 +328,18 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
             db.rollback()
             raise
         if email_result.cancelled:
-            with db.no_autoflush:
-                fresh = db.scalar(
-                    select(ExecutionRun.status).where(ExecutionRun.id == run.id))
-            if fresh == ExecutionStatus.cancelled.value:
-                cp = {"domains": domain_result.completed if domain_result else [],
-                      "email": email_result.completed_step_ids}
-                service.finalize_attempt(db, attempt.id,
-                    status=ExecutionStatus.cancelled.value, checkpoint=cp)
-                db.refresh(run)
-                return run
+            cp = {"domains": domain_result.completed if domain_result else [],
+                  "email": email_result.completed_step_ids}
+            return finalize_terminal(
+                db, run, attempt, ExecutionStatus.cancelled.value,
+                phase="worker_cancel", checkpoint=cp, compensation=_comp())
         if email_result and not email_result.ok and not email_result.cancelled:
             return finalize_terminal(
                 db, run, attempt, ExecutionStatus.failed.value, phase="worker_email",
                 error=email_result.reason,
                 checkpoint={"domains": domain_result.completed if domain_result else [],
-                            "email": email_result.completed_step_ids})
+                            "email": email_result.completed_step_ids},
+                compensation=_comp())
 
     pending_cats = sorted(c for c in _preview_categories(run) if c not in executable)
     has_pending = bool(pending_cats)
@@ -344,25 +349,9 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
         has_pending = True
     terminal = ExecutionStatus.halted.value if has_pending else ExecutionStatus.succeeded.value
 
-    lease_service.assert_fencing_current(
-        db, destination_endpoint_id=run.destination_endpoint_id,
-        fencing_token=attempt.fencing_token)
-    with db.no_autoflush:
-        final_status = db.scalar(select(ExecutionRun.status).where(ExecutionRun.id == run.id))
-    if final_status == ExecutionStatus.cancelled.value:
-        service.finalize_attempt(db, attempt.id, status=ExecutionStatus.cancelled.value,
-            checkpoint={"domains": domain_result.completed if domain_result else [],
-                        "email": email_result.completed_step_ids if email_result else []})
-        db.refresh(run)
-        return run
-    comp = {}
-    if domain_result:
-        comp["domains"] = domain_result.compensation
-    if email_result:
-        comp.update(email_result.compensation)
     return finalize_terminal(
         db, run, attempt, terminal, phase="worker_complete",
         checkpoint={"domains": domain_result.completed if domain_result else [],
                     "email": email_result.completed_step_ids if email_result else [],
                     "pending_categories": pending_cats},
-        compensation=comp)
+        compensation=_comp())

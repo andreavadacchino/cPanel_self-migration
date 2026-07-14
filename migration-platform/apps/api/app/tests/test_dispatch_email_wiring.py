@@ -10,6 +10,7 @@ from app.core.errors import ConflictError
 from app.modules.comparison.models import ComparisonReport
 from app.modules.endpoints.models import Endpoint
 from app.modules.executions import dispatch as dm
+from app.modules.executions import service
 from app.modules.executions.dispatch import worker_start, IMPLEMENTED_REAL_CATEGORIES
 from app.modules.executions.models import (
     ExecutionAttempt, ExecutionRun, ExecutionStatus, AccountExecutionLease)
@@ -18,6 +19,8 @@ from app.modules.inventory.models import InventorySnapshot
 from app.modules.migrations.models import Migration
 from app.modules.plans.models import MigrationPlan
 from app.modules.readiness.models import WriterReadinessReport
+
+_CANCELLED = ExecutionStatus.cancelled.value
 
 _FWD = {"id": "email_forwarders:a->b", "category": "email_forwarders",
         "key": "a->b", "mode": "automatic", "depends_on_categories": []}
@@ -218,15 +221,126 @@ def test_dry_run_unchanged():
 
 # ── Progress persistence ──────────────────────────────────────────────────────
 
-def test_progress_persister_commits(real_on, fwd_on, db_session, monkeypatch):
+def _running_env(db, monkeypatch, steps=None, cats=None):
+    steps = steps or [_FWD]
+    cats = cats or [{"category": "email_forwarders", "status": "eligible_for_real_design"}]
+    e = _env(db, steps=steps, cats_readiness=cats)
+    att = _dispatch_and_get_attempt(db, e, monkeypatch)
+    att.status = ExecutionStatus.running.value
+    e.run.status = ExecutionStatus.running.value
+    db.commit()
+    return e, att
+
+def test_progress_valid(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import make_progress_persister
+    e, att = _running_env(db_session, monkeypatch)
+    p = make_progress_persister(db_session, e.run, att)
+    cp = {"categories": [{"category": "email_forwarders", "status": "completed", "completed": ["fwd:a"]}],
+          "completed_step_ids": ["fwd:a"]}
+    p(cp, {"email_forwarders": [{"action": "add", "step_id": "fwd:a"}]})
+    db_session.refresh(att)
+    assert att.checkpoint is not None
+
+def test_progress_run_cancelled_zero(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import make_progress_persister
+    e, att = _running_env(db_session, monkeypatch)
+    p = make_progress_persister(db_session, e.run, att)
+    e.run.status = _CANCELLED; db_session.commit()
+    with pytest.raises(ConflictError):
+        p({"categories": [], "completed_step_ids": []}, {})
+
+def test_progress_attempt_not_running(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import make_progress_persister
+    e, att = _running_env(db_session, monkeypatch)
+    p = make_progress_persister(db_session, e.run, att)
+    att.status = ExecutionStatus.halted.value; db_session.commit()
+    with pytest.raises(ConflictError):
+        p({"categories": [], "completed_step_ids": []}, {})
+
+def test_progress_token_mismatch(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import make_progress_persister
+    e, att = _running_env(db_session, monkeypatch)
+    p = make_progress_persister(db_session, e.run, att)
+    att.fencing_token = 999; db_session.commit()
+    with pytest.raises(ConflictError):
+        p({"categories": [], "completed_step_ids": []}, {})
+
+def test_progress_invalid_checkpoint(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import make_progress_persister
+    e, att = _running_env(db_session, monkeypatch)
+    p = make_progress_persister(db_session, e.run, att)
+    with pytest.raises(ConflictError):
+        p({"categories": [{"category": "bogus", "status": "ok"}]}, {})
+
+def test_progress_sensitive_comp_rejected(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import make_progress_persister
+    e, att = _running_env(db_session, monkeypatch)
+    p = make_progress_persister(db_session, e.run, att)
+    with pytest.raises(ConflictError):
+        p({"categories": [], "completed_step_ids": []}, {"email_forwarders": [{"password": "x"}]})
+
+# ── R1: finalize_terminal atomicity ──────────────────────────────────────────
+
+def test_finalize_succeeded_atomic(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import finalize_terminal
+    e, att = _running_env(db_session, monkeypatch)
+    run = finalize_terminal(db_session, e.run, att, ExecutionStatus.succeeded.value,
+        phase="test", checkpoint={"done": True})
+    assert run.status == ExecutionStatus.succeeded.value
+    db_session.refresh(att)
+    assert att.status == ExecutionStatus.succeeded.value
+
+def test_finalize_fresh_cancelled_preserves(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import finalize_terminal
+    e, att = _running_env(db_session, monkeypatch)
+    att.checkpoint = {"prior": True}; att.compensation = {"old": [1]}; db_session.commit()
+    e.run.status = _CANCELLED; db_session.commit()
+    run = finalize_terminal(db_session, e.run, att, ExecutionStatus.succeeded.value,
+        phase="test", checkpoint={"new": True}, compensation={"new": [2]})
+    assert run.status == _CANCELLED
+    db_session.refresh(att)
+    assert att.status == _CANCELLED
+    assert att.checkpoint == {"prior": True}
+    assert "old" in att.compensation
+
+def test_finalize_rollback_on_error(real_on, fwd_on, db_session, monkeypatch):
+    from app.modules.executions.dispatch_terminal import finalize_terminal
+    from unittest.mock import patch as mp
+    e, att = _running_env(db_session, monkeypatch)
+    with mp.object(service, "finalize_attempt", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            finalize_terminal(db_session, e.run, att, ExecutionStatus.succeeded.value,
+                phase="test", checkpoint={})
+    db_session.rollback()
+    run = db_session.get(ExecutionRun, e.run.id)
+    assert run.status == ExecutionStatus.running.value
+
+# ── R1: compensation preservation ────────────────────────────────────────────
+
+@patch.object(dm, "coordinate_email_categories")
+def test_email_failure_preserves_comp(m_coord, real_on, fwd_on, db_session, monkeypatch):
     e = _env(db_session, steps=[_FWD], cats_readiness=[
         {"category": "email_forwarders", "status": "eligible_for_real_design"}])
     att = _dispatch_and_get_attempt(db_session, e, monkeypatch)
-    att.status = ExecutionStatus.running.value
-    e.run.status = ExecutionStatus.running.value
-    db_session.commit()
-    from app.modules.executions.dispatch_terminal import make_progress_persister
-    persist = make_progress_persister(db_session, e.run, att)
-    persist({"cat": "email_forwarders", "done": ["fwd:a"]}, {"email_forwarders": [{"ref": "x"}]})
+    from app.modules.executions.email_worker_coordinator import EmailCoordinationResult
+    m_coord.return_value = EmailCoordinationResult(
+        ok=False, reason="category_phase_failed",
+        completed_step_ids=[], compensation={"email_forwarders": [{"backup_ref": "bk1"}]})
+    run = worker_start(db_session, e.run.id, att.id)
+    assert run.status == ExecutionStatus.failed.value
     db_session.refresh(att)
-    assert att.checkpoint is not None
+    assert att.compensation is not None
+    assert "email_forwarders" in att.compensation
+
+@patch.object(dm, "_run_domain_phase")
+@patch.object(dm, "_build_domain_gateway")
+def test_domain_failure_preserves_comp(m_gw, m_dom, real_on, dom_on, db_session, monkeypatch):
+    e = _env(db_session)
+    att = _dispatch_and_get_attempt(db_session, e, monkeypatch)
+    m_dom.return_value = SimpleNamespace(ok=False, pending=False, completed=[],
+                                         compensation=[{"action": "created", "domain": "d.test"}], reason="blocked")
+    run = worker_start(db_session, e.run.id, att.id)
+    assert run.status == ExecutionStatus.failed.value
+    db_session.refresh(att)
+    assert att.compensation is not None
+    assert "domains" in att.compensation
