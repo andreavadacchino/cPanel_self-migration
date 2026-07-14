@@ -347,6 +347,9 @@ class FakeGateway:
         if self.effect in ("raise_apply", "raise_noop"):
             raise CpanelError("ambiguous outcome")
 
+    def close(self) -> None:
+        pass
+
 
 def _with_domains_source(db: Session, env: SimpleNamespace) -> None:
     """Give the source snapshot the rich, re-validatable domains_contract envelope

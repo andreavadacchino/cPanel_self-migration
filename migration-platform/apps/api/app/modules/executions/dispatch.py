@@ -1,9 +1,4 @@
-"""Durable real execution dispatch (A3) with domains (B3b-ii) and email (B4e-iii-c-iii-b).
-
-Commit-before-enqueue ordering; queue carries only run_id/attempt_id. Worker
-re-reads from PostgreSQL, re-validates, runs domains then email categories,
-computes terminal state atomically. Disabled by default.
-"""
+"""Durable real execution dispatch: domains then email, atomic terminal."""
 
 from __future__ import annotations
 
@@ -40,6 +35,16 @@ IMPLEMENTED_REAL_CATEGORIES = frozenset({
 })
 
 _ACTIVE_ATTEMPT_STATUSES = {ExecutionStatus.queued.value, ExecutionStatus.running.value}
+_RUNNING = ExecutionStatus.running.value
+_CANCELLED = ExecutionStatus.cancelled.value
+
+
+def _fresh_run_status(db: Session, run_id: int) -> str:
+    """Scalar column query bypassing the ORM identity map."""
+    with db.no_autoflush:
+        return db.execute(
+            select(ExecutionRun.status).where(ExecutionRun.id == run_id)
+        ).scalar_one()
 
 
 def _dispatch_owner(run_id: int) -> str:
@@ -132,13 +137,28 @@ def dispatch(db: Session, run_id: int) -> dict:
 
 
 def _preview_categories(run: ExecutionRun) -> list[str]:
-    """Ordered, de-duplicated categories the run's preview targets."""
     seen: list[str] = []
     for item in run.preview:
         category = item.get("category")
         if category and category not in seen:
             seen.append(category)
     return seen
+
+
+def _validate_preview(preview: list[dict]) -> None:
+    """Fail-closed: reject malformed entries and wrong domain/email order."""
+    seen_email = False
+    for item in preview:
+        if not isinstance(item, dict):
+            raise ConflictError("Preview malformata: entry non dict")
+        cat = item.get("category", "")
+        sid = item.get("step_id", "")
+        if not isinstance(cat, str) or not cat or not isinstance(sid, str) or not sid:
+            raise ConflictError("Preview malformata: category/step_id non validi")
+        if cat in EMAIL_CATEGORIES:
+            seen_email = True
+        elif cat == "domains" and seen_email:
+            raise ConflictError("Preview ordine invalido: domains dopo email")
 
 
 def _executable_categories(run: ExecutionRun) -> list[str]:
@@ -163,6 +183,9 @@ class _RealDomainGateway:
     def __init__(self, client) -> None:
         self._client = client
 
+    def close(self) -> None:
+        self._client.close()
+
     def read_domains(self):
         from adapters.cpanel.domains import read_domains
 
@@ -182,12 +205,7 @@ class _RealDomainGateway:
 
 
 def _build_domain_gateway(db: Session, run: ExecutionRun) -> _RealDomainGateway:
-    """Construct the real destination gateway from the DESTINATION only.
-
-    Indirected so tests substitute a deterministic fake without a live cPanel;
-    only reached under the double gate. The client is built solely from the
-    destination endpoint's host/port/username/token — never from the source — and
-    with writes explicitly enabled."""
+    """Destination-only gateway; tests substitute a fake."""
     from adapters.cpanel.client import CpanelClient
     from adapters.cpanel.schemas import CpanelCredentials
 
@@ -212,16 +230,7 @@ def _endpoint_home(db: Session, endpoint_id: int) -> str:
 
 
 def _source_domain_records(db: Session, run: ExecutionRun):
-    """Project the source snapshot's rich domain contract, fail-closed (B3c-ii).
-
-    Reads exclusively the B3c-i envelope under ``data["domains_contract"]`` via the
-    contract reader/validator — never ``domains_data``, ``list_domains``, or a
-    heuristic reconstruction — and re-validates it at execution time. Only a
-    contract that is still ``succeeded`` and coherent (re-derived, not string-
-    trusted) yields records; any other state raises so the worker stops *before*
-    any destination write instead of silently returning ``[]``. Readiness already
-    gates the dispatch, so reaching this with an invalid contract means the
-    evidence drifted between readiness and execution (TOCTOU) — fail closed."""
+    """Re-validate and project the source domain contract (fail-closed, B3c-ii)."""
     from app.modules.inventory import domain_contract
 
     snapshot = db.get(InventorySnapshot, run.source_snapshot_id)
@@ -235,12 +244,8 @@ def _source_domain_records(db: Session, run: ExecutionRun):
 def _run_domain_phase(
     db: Session, run: ExecutionRun, attempt: ExecutionAttempt,
 ) -> real_domain_writer.PhaseResult:
-    """Resolve, build the destination gateway, and run the additive domains phase.
-
-    Passes a ``before_write`` hook that re-authorizes (fresh evidence + lease +
-    fencing) immediately before every real create; the engine performs no gate of
-    its own."""
-    if not settings.domain_real_writer_enabled:  # defence in depth
+    """Resolve, build gateway, run phase. before_write: fresh cancel + authorize."""
+    if not settings.domain_real_writer_enabled:
         raise ConflictError("Domain writer reale disabilitato")
     dest_home = _endpoint_home(db, run.destination_endpoint_id)
     source_snapshot = db.get(InventorySnapshot, run.source_snapshot_id)
@@ -251,15 +256,30 @@ def _run_domain_phase(
     gateway = _build_domain_gateway(db, run)
 
     def before_write() -> None:
+        status = _fresh_run_status(db, run.id)
+        if status == _CANCELLED:
+            raise ConflictError("Run annullato: create bloccata")
+        if status != _RUNNING:
+            raise ConflictError("Run non running: create bloccata")
         safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token,
                                categories=("domains",))
 
-    return real_domain_writer.execute_domain_phase(
-        run, requested, gateway, dest_home, before_write=before_write)
+    _has_exc = False
+    try:
+        return real_domain_writer.execute_domain_phase(
+            run, requested, gateway, dest_home, before_write=before_write)
+    except BaseException:
+        _has_exc = True
+        raise
+    finally:
+        try:
+            gateway.close()
+        except Exception:
+            if not _has_exc:
+                raise
 
 
 def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
-    """Worker entry point: re-read, re-validate, run domains then email, finalize."""
     if not settings.real_execution_enabled:
         raise ConflictError("L'esecuzione reale è disabilitata")
     run = db.get(ExecutionRun, run_id)
@@ -269,6 +289,7 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
     if attempt.status != ExecutionStatus.queued.value:
         return run
 
+    _validate_preview(run.preview or [])
     safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token)
 
     now = datetime.now(timezone.utc)
@@ -285,7 +306,6 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
         result={"attempt_id": attempt.id, "attempt_number": attempt.attempt_number},
     ))
     db.commit()
-
     executable = _executable_categories(run)
     if not executable:
         return finalize_terminal(
@@ -307,12 +327,28 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
     if "domains" in executable:
         safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token,
                                categories=("domains",))
-        domain_result = _run_domain_phase(db, run, attempt)
+        try:
+            domain_result = _run_domain_phase(db, run, attempt)
+        except ConflictError:
+            raise
+        except Exception:
+            return finalize_terminal(
+                db, run, attempt, ExecutionStatus.failed.value,
+                phase="worker_domains", error="domain_phase_error",
+                checkpoint={"completed": []}, compensation=_comp())
         if not domain_result.ok:
             return finalize_terminal(
                 db, run, attempt, ExecutionStatus.failed.value, phase="worker_domains",
                 error=domain_result.reason,
                 checkpoint={"completed": domain_result.completed},
+                compensation=_comp())
+        if domain_result.pending:
+            pending_with_domains = sorted(_preview_categories(run))
+            return finalize_terminal(
+                db, run, attempt, ExecutionStatus.halted.value, phase="worker_domains",
+                message="Domini pending: email non avviata.",
+                checkpoint={"domains": domain_result.completed,
+                            "pending_categories": pending_with_domains},
                 compensation=_comp())
         lease_service.assert_fencing_current(
             db, destination_endpoint_id=run.destination_endpoint_id,
@@ -327,6 +363,13 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
         except ConflictError:
             db.rollback()
             raise
+        except Exception:
+            return finalize_terminal(
+                db, run, attempt, ExecutionStatus.failed.value,
+                phase="worker_email", error="email_phase_error",
+                checkpoint={"domains": domain_result.completed if domain_result else [],
+                            "email": []},
+                compensation=_comp())
         if email_result.cancelled:
             cp = {"domains": domain_result.completed if domain_result else [],
                   "email": email_result.completed_step_ids}

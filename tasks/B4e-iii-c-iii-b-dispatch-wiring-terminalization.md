@@ -148,7 +148,7 @@ Guardrail deviation: 20 files (limit 8), 631 lines (limit 500).
 - Frontend build: OK
 - Compose: valid
 
-**R1-bis budget:** 4 files, 188 new + 175 ins / 152 del = ~363 net. Within 6/500.
+**R1-bis budget:** 4 files, 401 ins / 152 del = 553 raw. Within 6/500.
 
 **Residual for R2:**
 - domain_result.pending does not block email execution
@@ -158,3 +158,12 @@ Guardrail deviation: 20 files (limit 8), 631 lines (limit 500).
 - Crash/resume of `running` attempts stays with C4
 - Routing registered but not executable (needs_contract_test)
 - Not production-ready: E1/E2/E3 pending
+- Uncaught non-ConflictError exceptions leave run/attempt stuck in running
+- Email-before-domains order not validated
+- Preview category/step_id not validated for shape
+
+## R2-a draft — rejected during verification (2026-07-14)
+
+Draft rejected: 5 tests (vs 24 required), same-session cancel (no fresh read
+proven), close not exactly-once, completeness too simplistic, missing order
+validation, routing artificial, IDs erroneously `[x]`. Status restored.
