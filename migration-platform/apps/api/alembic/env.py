@@ -11,8 +11,15 @@ from app.core.config import settings
 from app.db.base import Base
 
 # Import model modules so every table is registered on Base.metadata.
+#
+# A module missing from this list is not a cosmetic omission: `target_metadata`
+# below is what autogenerate diffs the live database against, so a table whose
+# model is not imported looks like a table that should not exist — and the next
+# `alembic revision --autogenerate` proposes to DROP it. Every new model module
+# belongs here on the day it is written.
 from app.modules.comparison import models as _comparison_models  # noqa: F401
 from app.modules.endpoints import models as _endpoints_models  # noqa: F401
+from app.modules.executions import models as _executions_models  # noqa: F401
 from app.modules.inventory import models as _inventory_models  # noqa: F401
 from app.modules.jobs import models as _jobs_models  # noqa: F401
 from app.modules.migrations import models as _migrations_models  # noqa: F401
