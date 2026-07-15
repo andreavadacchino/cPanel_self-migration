@@ -389,3 +389,37 @@ manual-only plan, durability across sessions, no-reverse-op). API 1074 passed; w
 **Budget:** 5 files, 645 raw (≤850). All applicative ≤400. No migration (0012 head).
 
 **C3 still BLOCKED** — R2-c3 (durable gating + gated-off wiring) required.
+
+## R2-c3 — recovery orchestration + durable gating (2026-07-15)
+
+`recovery.py` (new, 98): the completion gate now has one DB-derived source of truth —
+`pending_uncertain_writes(db, run_id)` unions the domain and email write journals'
+blocking statuses (open intents, reconciliation_required, compensation_*) read straight
+from PostgreSQL. It never consults a `RecoveryOutcome.manual_plan` held in RAM, closing
+the R2-b2 "pending domain manual plan" gap: a durable `reconciliation_required` (domain
+or email) blocks completion regardless of whether/what a recovery pass returned.
+
+`recover_writes` — a gated-OFF orchestrator (both DOMAIN_RECOVERY_MODE and
+EMAIL_RECOVERY_MODE must be enabled) composing `domain_recovery.recover_run` and
+`email_recovery.recover_email_run` for one crashed run; no scheduler, no deploy, an
+explicitly invocable entry point (email per-category live read / re-apply are injected
+seams).
+
+worker_start already gates success on the durable journals (R2-b2 domain gate +
+R2-c1 symmetric email gate, both via `blocking_operations`), so no dispatch change was
+needed; recovery.py formalises the unified predicate and adds the orchestrator.
+
+8 tests on real PostgreSQL (clean run not blocked, open domain/email intent blocks from
+DB, domain reconciliation_required gap closed, applied writes don't block, orchestrator
+gated off, orchestrator composes both + reports the durable gate, worker-restart
+recovers from DB and stays blocked). API 1082 passed; worker 18.
+
+**Budget:** 2 files, 271 raw (≤500). recovery.py 98 ≤400. No migration.
+
+**R2-c COMPLETE (R2-c1 + R2-c2 + R2-c3).** The email path now has durable write
+tracking, conservative recovery (no auto-restore, no delete), and a DB-derived
+completion gate symmetric to domains. **C3 may be unblocked once the operator/runtime
+decides to enable the gated-off recovery sweep; the RAM-only compensation loss is
+closed.** Residual: the automatic recovery sweep is gated OFF (no scheduler wired);
+enabling it and the per-category email live-probe/apply-retry real wiring is the
+remaining operational step before C3 execution.
