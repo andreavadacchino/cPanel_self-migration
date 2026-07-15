@@ -72,15 +72,23 @@ class ForwarderGateway:
 
 def _make_backup_persister(db: Session, run: ExecutionRun, attempt: ExecutionAttempt,
                            category: str):
+    bind = db.get_bind()
+
     def _persist(payload: dict) -> str:
         domain = payload.get("domain", "")
         fp = "efp1:" + hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-        return persist_email_backup(
-            db, run_id=run.id, attempt_id=attempt.id, category=category,
-            item_key=domain, evidence_fingerprint=fp, payload=payload,
-            fencing_token=attempt.fencing_token)
+        # Dedicated short session (R2-c1): the backup commit must not commit pending
+        # lifecycle mutations, and a lifecycle rollback must not erase the backup.
+        sess = Session(bind=bind, autoflush=False, future=True)
+        try:
+            return persist_email_backup(
+                sess, run_id=run.id, attempt_id=attempt.id, category=category,
+                item_key=domain, evidence_fingerprint=fp, payload=payload,
+                fencing_token=attempt.fencing_token)
+        finally:
+            sess.close()
     return _persist
 
 
@@ -208,18 +216,28 @@ def run_email_category(
                       if entry.needs_backup else None)
     if now is None:
         now = int(time.time())
+    # Durable write journal for ALL categories (R2-c1): overwrite categories (the
+    # backup-bearing ones) restore a previous value; additive ones remove manually.
+    from app.modules.executions.email_journal import (
+        COMPENSATION_MANUAL, COMPENSATION_RESTORE, bound_recorder, recorder_for_email)
+    operation_type = "overwrite" if entry.needs_backup else "additive_create"
+    compensation_type = COMPENSATION_RESTORE if entry.needs_backup else COMPENSATION_MANUAL
+    recorder = recorder_for_email(db, run, attempt, category=category,
+                                  operation_type=operation_type,
+                                  compensation_type=compensation_type)
     client = _build_destination_client(db, run)
     try:
-        if category == "email_forwarders":
-            return _run_forwarder(run, resolved, client, before_write)
-        if category == "default_address":
-            return _run_default_address(run, resolved, client, before_write, persist_backup)
-        if category == "email_routing":
-            return _run_routing(run, resolved, client, before_write, persist_backup, now)
-        if category == "email_filters":
-            return _run_filters(run, resolved, client, before_write)
-        if category == "email_autoresponders":
-            return _run_autoresponders(run, resolved, client, before_write)
-        return EmailPhaseResult(ok=False, reason="unknown_category")
+        with bound_recorder(recorder):
+            if category == "email_forwarders":
+                return _run_forwarder(run, resolved, client, before_write)
+            if category == "default_address":
+                return _run_default_address(run, resolved, client, before_write, persist_backup)
+            if category == "email_routing":
+                return _run_routing(run, resolved, client, before_write, persist_backup, now)
+            if category == "email_filters":
+                return _run_filters(run, resolved, client, before_write)
+            if category == "email_autoresponders":
+                return _run_autoresponders(run, resolved, client, before_write)
+            return EmailPhaseResult(ok=False, reason="unknown_category")
     finally:
         client.close()

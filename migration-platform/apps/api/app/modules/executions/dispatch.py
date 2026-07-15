@@ -13,6 +13,7 @@ from app.modules.endpoints import service as endpoint_service
 from app.modules.endpoints.models import Endpoint
 from app.modules.executions import domain_journal
 from app.modules.executions import domain_recovery
+from app.modules.executions import email_journal
 from app.modules.executions import lease as lease_service
 from app.modules.executions import real_domain_writer
 from app.modules.executions import safety_gates
@@ -378,6 +379,11 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
                             "email": email_result.completed_step_ids},
                 compensation=_comp())
 
+    gated_email = email_journal.block_completion_if_uncertain(  # R2-c1 symmetric gate
+        db, run, attempt, domain_result=domain_result, email_result=email_result,
+        compensation=_comp())
+    if gated_email is not None:
+        return gated_email
     pending_cats = sorted(c for c in _preview_categories(run) if c not in executable)
     has_pending = bool(pending_cats)
     if domain_result and domain_result.pending:

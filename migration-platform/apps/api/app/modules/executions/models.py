@@ -318,6 +318,106 @@ class DomainWriteJournal(Base):
                 f"status={self.status!r}, fencing_token={self.fencing_token!r})")
 
 
+class EmailWriteStatus(str, enum.Enum):
+    """Lifecycle of one durable email write operation (task B4e-iii-c R2-c1).
+
+    Mirrors the domain lifecycle so recovery (R2-c2) reasons uniformly. Applies to
+    ALL five real email categories — the additive creates (forwarder/filter/
+    autoresponder) and the two overwrites (default_address/routing). ``compensation_*``
+    is the representable contract R2-c2 will drive; R2-c1 produces only
+    ``planned``/``side_effect_started``/``applied``/``reconciliation_required``.
+    """
+
+    planned = "planned"
+    side_effect_started = "side_effect_started"
+    applied = "applied"
+    reconciliation_required = "reconciliation_required"
+    compensation_started = "compensation_started"
+    compensated = "compensated"
+    compensation_failed = "compensation_failed"
+
+
+# additive_create has no reverse op (manual removal); overwrite carries a durable
+# EmailWriteBackup with the previous value (restore is R2-c2, and never on presence alone).
+EMAIL_WRITE_OPERATIONS: frozenset[str] = frozenset({"additive_create", "overwrite"})
+
+EMAIL_WRITE_OPEN_STATUSES: frozenset[str] = frozenset(
+    {EmailWriteStatus.planned.value, EmailWriteStatus.side_effect_started.value}
+)
+
+# Any state that forbids advancing to run success (the symmetric email gate).
+EMAIL_WRITE_BLOCKING_STATUSES: frozenset[str] = EMAIL_WRITE_OPEN_STATUSES | frozenset(
+    {
+        EmailWriteStatus.reconciliation_required.value,
+        EmailWriteStatus.compensation_started.value,
+        EmailWriteStatus.compensation_failed.value,
+    }
+)
+
+
+class EmailWriteJournal(Base):
+    """Durable intent/ack record for one email write, written OUTSIDE the lifecycle txn.
+
+    The email analogue of :class:`DomainWriteJournal`, fixing the same class of bug on
+    the email path: before R2-c1 a created forwarder/filter/autoresponder left NO
+    durable trace on a crash (RAM-only compensation), and an overwrite's compensation
+    reference was RAM-only too. This table records planned→side_effect_started→applied
+    for every category, committed by a dedicated short transaction so it survives a
+    lifecycle rollback/crash.
+
+    Idempotency anchor is per-RUN — ``(execution_run_id, operation_key)`` — NOT
+    per-attempt, so a retry under a *later* attempt maps to the same logical operation
+    (proven before migration 0012). ``execution_attempt_id``/``fencing_token`` are
+    mutable ownership evidence advanced by compare-and-set. ``backup_ref`` links an
+    overwrite op to its :class:`EmailWriteBackup` (the encrypted previous value); it is
+    NULL for additive creates. No secret enters: only opaque digests and a redacted
+    ``item_key`` (never a raw address/domain); the raw previous value lives solely in
+    the encrypted backup.
+    """
+
+    __tablename__ = "email_write_journal"
+    __table_args__ = (
+        UniqueConstraint("execution_run_id", "operation_key", name="uq_email_journal_operation"),
+        CheckConstraint(
+            "status IN ('planned','side_effect_started','applied','reconciliation_required',"
+            "'compensation_started','compensated','compensation_failed')",
+            name="ck_email_journal_status",
+        ),
+        CheckConstraint("operation_type IN ('additive_create','overwrite')",
+                        name="ck_email_journal_operation_type"),
+        Index("ix_email_journal_run", "execution_run_id"),
+        Index("ix_email_journal_attempt", "execution_attempt_id"),
+        Index("ix_email_journal_status", "status"),
+        Index("ix_email_journal_category", "category"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    execution_run_id: Mapped[int] = mapped_column(ForeignKey("execution_runs.id", ondelete="CASCADE"), nullable=False)
+    execution_attempt_id: Mapped[int] = mapped_column(ForeignKey("execution_attempts.id", ondelete="CASCADE"), nullable=False)
+    operation_key: Mapped[str] = mapped_column(String(160), nullable=False)   # deterministic: category + step
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    item_key: Mapped[str] = mapped_column(String(128), nullable=False)        # redacted stable hash
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    fencing_token: Mapped[int] = mapped_column(nullable=False)
+    contract_version: Mapped[int] = mapped_column(nullable=False, default=1)
+    requested_payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    precondition_state: Mapped[str] = mapped_column(String(32), nullable=False)
+    precondition_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_result_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    compensation_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    backup_ref: Mapped[str | None] = mapped_column(String(64))                # overwrite -> EmailWriteBackup
+    failure_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    def __repr__(self) -> str:
+        return (f"EmailWriteJournal(id={self.id!r}, operation_key={self.operation_key!r}, "
+                f"status={self.status!r}, fencing_token={self.fencing_token!r})")
+
+
 class ExecutionEvent(Base):
     __tablename__ = "execution_events"
 

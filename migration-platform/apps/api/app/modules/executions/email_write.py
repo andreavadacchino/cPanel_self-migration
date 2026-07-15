@@ -155,11 +155,29 @@ def _do_create(
     and a failed verify, so a possibly-applied mutation is never left un-referenced.
     """
     planned = plan_call(item)
+    # Durable intent BEFORE any side effect (R2-c1). The recorder is injected out-of-band
+    # by run_email_category; absent (pure unit tests) the engine journals nothing.
+    from app.modules.executions.email_journal import current_recorder
+    recorder = current_recorder()
+    ref = None
+    if recorder is not None:
+        ref, replay = recorder.open_intent(
+            raw_item=item.step_id, requested_payload=item.payload,
+            precondition_state="read" if live is not None else "unreadable",
+            precondition_evidence=item.payload.get("desired_fingerprint", item.step_id))
+        if replay == "applied":
+            # A prior delivery already durably applied this exact operation.
+            _event(run, phase, item, "Operazione email già applicata sul journal: replay idempotente.",
+                    {"status": "already_applied", "changed": False, "item": item.label,
+                     "resolved_by": "journal_replay"}, _VERIFIED, planned=planned)
+            return True, compensation_of(item)
     backup_ref: str | None = None
     if backup_of is not None:
         ok, backup_ref = _persist_backup(run, phase, item, live, planned, backup_of, persist_backup)
         if not ok:
             return False, None
+    if recorder is not None:
+        recorder.mark_started(ref, backup_ref=backup_ref)  # committed; gateway call imminent
     if before_write is not None:
         before_write()  # wiring seam: B4e re-validates the gate + fencing here
     ambiguous = False
@@ -174,12 +192,16 @@ def _do_create(
         # Available on success and failure alike: the write may have partially applied.
         compensation = {**compensation_of(item), "backup_ref": backup_ref}
     if verified:
+        if recorder is not None:
+            recorder.mark_applied(ref, observed_result={"item": item.label, "verified": True})
         _event(run, phase, item, "Elemento email creato e verificato sulla destinazione.",
                 {"status": "created", "changed": True, "item": item.label,
                  "resolved_by": "fresh_read" if ambiguous else "write"},
                 _VERIFIED, planned=planned)
         return True, compensation if compensation is not None else compensation_of(item)
     reason = "ambiguous_write_unconfirmed" if ambiguous else "post_write_not_verified"
+    if recorder is not None:
+        recorder.mark_reconciliation_required(ref, failure_code=reason)
     _event(run, phase, item, "Create email non verificata dalla rilettura live.",
             {"status": "failed", "changed": False, "item": item.label, "error_type": reason},
             _UNVERIFIED, planned=planned, level="error")

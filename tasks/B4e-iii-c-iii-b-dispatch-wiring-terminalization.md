@@ -310,3 +310,50 @@ commits atomic above `8c5fcaa`; no push/deploy.
 all domain removals. Recovery worker/scheduler NOT wired (gated off).
 
 **C3 remains BLOCKED** — needs R2-c (`EMAIL_COMPENSATION_IS_RAM_ONLY`, still CRITICAL_OPEN).
+
+## R2-c1 — durable email write journal + symmetric gate (2026-07-15)
+
+Investigation findings (approved): 5 real email categories (mailing_list is mock-only).
+Three ADDITIVE creates (forwarders/filters/autoresponders) — no reverse op, manual
+removal, previously ZERO durable trace on crash. Two OVERWRITES (default_address/
+routing) — durable encrypted pre-write backup + reverse_op, but no write intent/ack and
+a shared-session commit. Policy correction accepted: **live == desired does NOT prove
+ownership**; without provider-side CAS/version/audit there is no automatic reverse after
+crash (R2-c2 will be conservative).
+
+**Cross-attempt anchor PROVEN before the migration** (real PostgreSQL): the email journal
+anchor is per-RUN `UNIQUE(execution_run_id, operation_key)` with a deterministic,
+attempt-independent `operation_key` — a retry under a later attempt maps to the same row.
+The retry model was verified: `open_attempt` (only caller `dispatch`) increments
+`attempt_number`; recovery stays on the same attempt today, but the per-run anchor is
+robust to a future new-attempt retry (unlike the domain journal's per-attempt anchor).
+
+**Delivered (commit pending):**
+- `migration 0012_email_write_journal` (verified upgrade→head + downgrade→0011 on real PG,
+  unique + 2 CHECK constraints).
+- `EmailWriteJournal` model (per-run anchor, `category`/`operation_type`/`backup_ref`/
+  redacted `item_key`) + `EmailWriteStatus`/open/blocking sets.
+- `email_journal.py` (new, 305): repository with dedicated short transaction, atomic
+  `ON CONFLICT DO NOTHING`, CAS transitions on `(id, status, fencing_token)`, discovery,
+  recorder, and a ContextVar so the shared five-category engine is instrumented without
+  threading a recorder through five writer signatures.
+- intent (`planned`) / start (`side_effect_started`) / ack (`applied`) for ALL FIVE
+  categories, wired into the shared `email_write._do_create`; `backup_ref` recorded on
+  `mark_started` for overwrites.
+- `EmailWriteBackup` persist moved to a dedicated short session (no longer commits pending
+  lifecycle mutations).
+- symmetric gate: `email_journal.block_completion_if_uncertain` — an open/unreconciled
+  email intent forbids run success (extracted to keep `dispatch.py` ≤ 400).
+- NO recovery driver yet (R2-c2).
+- 12 tests on real PostgreSQL (intent/start/ack durable via a 2nd session, crash after
+  started, post-write reconciliation, cross-attempt single row, divergent-payload conflict,
+  stale-fencing CAS reject, overwrite backup_ref, transactional separation, symmetric gate
+  block/allow, no-secret, migration up/down).
+
+**Budget:** 8 files, 828 gross (≤900). Applicative all ≤400 EXCEPT `models.py` at 466 —
+the shared declarative schema registry (already 366 with the domain journal); extracting
+the table would need a new module + conftest change, breaching the ≤9-file budget instead,
+so the shared schema file is flagged rather than split. Tests: API 1047 passed (was 1035),
+worker 18.
+
+**C3 still BLOCKED** — R2-c2 (conservative recovery) + R2-c3 (durable gating) required.

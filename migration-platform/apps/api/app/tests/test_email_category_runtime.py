@@ -21,6 +21,16 @@ def _ep(role="destination"):
     e = MagicMock(); e.id = 1; e.role = role; e.host = "h"; e.port = 2083
     e.username = "u"; e.verify_tls = True; return e
 _P = "app.modules.executions.email_category_runtime"
+_EJ = "app.modules.executions.email_journal"
+
+
+def _fake_rec():
+    # These tests exercise backup/before_write ordering, not journaling (covered on
+    # real PostgreSQL in test_email_journal_crash); mock the recorder so the mock db
+    # need not back the durable journal.
+    r = MagicMock()
+    r.open_intent.return_value = (MagicMock(), "new")
+    return r
 
 def test_five_categories():
     assert set(REGISTRY) == {"email_forwarders","default_address","email_routing","email_filters","email_autoresponders"}
@@ -248,6 +258,7 @@ def test_backup_failure_no_write():
     def track_bw(): bw_calls.append("bw")
     with patch(f"{_P}.is_category_enabled", return_value=True), \
          patch(f"{_P}._build_destination_client", return_value=mc), \
+         patch(f"{_EJ}.recorder_for_email", return_value=_fake_rec()), \
          patch(f"{_P}.persist_email_backup", side_effect=RuntimeError("backup_fail")):
         import pytest
         with pytest.raises(RuntimeError, match="backup_fail"):
@@ -265,6 +276,7 @@ def test_before_write_failure_after_backup_no_write():
     def bw_raise(): raise RuntimeError("fencing_lost")
     with patch(f"{_P}.is_category_enabled", return_value=True), \
          patch(f"{_P}._build_destination_client", return_value=mc), \
+         patch(f"{_EJ}.recorder_for_email", return_value=_fake_rec()), \
          patch(f"{_P}.persist_email_backup", return_value="ebk_ref"):
         import pytest
         with pytest.raises(RuntimeError, match="fencing_lost"):
