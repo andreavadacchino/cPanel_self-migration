@@ -20,19 +20,22 @@ Questa PR memorizza solo il pin. Non lo usa.
 Il client invia **solo** la chiave pubblica OpenSSH su **una riga**:
 
 ```
-<algorithm> <base64> [commento-ignorato]
+<algorithm> <base64>
 ```
 
 Esempio: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA…`
 
-- Il commento (se presente) viene **scartato** dalla canonicalizzazione.
+- **Il payload deve contenere esattamente due token.** Commenti, seconde chiavi e qualsiasi contenuto
+  aggiuntivo sono **rifiutati** (non scartati): il parser di `cryptography` àncora solo all'inizio della
+  riga e tratterebbe tutto ciò che segue come commento ignorato, così una seconda chiave o un payload
+  arbitrario potrebbero viaggiare non visti — per questo si richiedono esattamente due token.
 - Host, porta e fingerprint **non** sono campi del payload (`SshHostKeyUpsert` è `extra='forbid'`):
   sono decisi lato server. Un `host`/`port`/`fingerprint` inviato dal client è un **422**.
 - La forma `ssh-keyscan` (`host algorithm base64`) è **rifiutata**: il token host iniziale non è un
   algoritmo valido, quindi il parser la respinge. Il client non fornisce l'host, e non deve poterne
   contrabbandare uno. (Scelta deliberata: accettare solo la chiave è la superficie più piccola e sicura.)
-- Input multi-riga, vuoto, oltre `MAX_HOST_KEY` (8 KiB), non parsabile, o materiale di **chiave
-  privata** (marker `PRIVATE KEY-----`) → **rifiutati**.
+- Input multi-riga, vuoto, oltre `MAX_HOST_KEY` (8 KiB), non parsabile, materiale di **chiave privata**
+  (marker `PRIVATE KEY-----`) o tipo **DSA `ssh-dss`** (deprecato/debole) → **rifiutati**.
 
 ## Parsing, canonicalizzazione, fingerprint
 
@@ -47,6 +50,37 @@ Esempio: `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA…`
    `SHA256:` + base64(`sha256(blob)`) **senza padding `=`**, dove `blob` è la parte base64 decodificata.
    Verificato contro `ssh-keygen -lf` con un known-answer vector nei test (non tautologico).
 5. Gli errori sono **generici**: non riportano mai il materiale ricevuto.
+
+## Integrità della riga persistita
+
+I CHECK del DB sono **solo di formato** (non-blank, prefisso `SHA256:`): non possono dimostrare che la
+fingerprint derivi realmente dalla chiave, né che il tipo o la forma siano coerenti. Una riga scritta
+fuori dall'API può quindi avere coordinate corrette ma `public_key` invalida/non canonica, `key_type`
+arbitrario o `fingerprint_sha256` formalmente valida ma **falsa**.
+
+Una trust configuration è valida **soltanto** quando **tutte** queste condizioni sono vere:
+
+- coordinate coerenti (`pin.host == endpoint.host`, `pin.port == endpoint.ssh_port`);
+- `public_key` è una singola chiave OpenSSH pubblica **parsabile**;
+- `public_key` è già nella **forma canonica** restituita dal parser;
+- `key_type` coincide col tipo **derivato** dalla chiave canonica;
+- `fingerprint_sha256` coincide con la fingerprint **ricalcolata** dalla chiave canonica.
+
+Il validatore puro `validate_persisted_host_key(public_key, key_type, fingerprint_sha256)` (adapter)
+ridereiva tutto tramite `parse_host_key` (unica autorità, nessuna duplicazione di parsing/fingerprint) e
+solleva `InvalidPersistedHostKey` — generica, senza materiale, senza cause incatenata — su qualunque
+incoerenza. `InvalidPersistedHostKey` è **distinta** da `InvalidHostKey` (input client invalido → 422):
+è una riga già persistita ma non affidabile.
+
+Conseguenze:
+
+- la `GET` **fallisce closed con 404** su ogni incoerenza (coordinate o crittografia); verificare solo
+  host e porta **non è sufficiente**;
+- la riga corrotta **non** viene corretta, riscritta o cancellata automaticamente: resta disponibile per
+  diagnosi amministrativa, invariata (`updated_at` incluso);
+- il **futuro runtime SSH deve usare lo stesso validatore condiviso**: legge endpoint+pin in modo
+  coerente (con lock), verifica host/porta, invoca `validate_persisted_host_key`, e materializza un
+  `known_hosts` **solo dopo** il successo.
 
 ## Modello dati (`endpoint_ssh_host_keys`)
 
@@ -93,9 +127,10 @@ Legata a `host + ssh_port`. Nella **stessa transazione** della modifica delle co
 La host key è l'identità **del server**, indipendente da come ci autentichiamo: cambiare credenziale a
 coordinate invariate non tocca il pin; cambiare il server (host) o la porta sì.
 
-**GET fail-closed**: se il pin esiste ma `pin.host != endpoint.host` o `pin.port != endpoint.ssh_port`
-(coordinate mosse fuori dall'API, o riga scritta manualmente), la `GET` risponde **404** — non presenta
-mai una riga stale come identità valida.
+**GET fail-closed**: se il pin non supera il validatore completo — coordinate (`pin.host`/`pin.port` vs
+endpoint) **o** integrità crittografica (chiave parsabile, canonica, tipo e fingerprint coerenti) — la
+`GET` risponde **404** (uniforme: non distingue assente/stale/corrotto). La riga corrotta resta
+invariata (vedi *Integrità della riga persistita*).
 
 ## Concorrenza
 
@@ -122,8 +157,10 @@ SQLite ignora `FOR UPDATE`: le proprietà concorrenti sono provate **solo** su P
   **preservano** il pin.
 - **I10** cancellazione endpoint → CASCADE.
 - **I11** una riga incoerente scritta fuori dall'API **non** è affidabile: la `GET` la nasconde
-  fail-closed, e **il runtime deve ri-verificare** `pin.host == endpoint.host` e
-  `pin.port == endpoint.ssh_port` prima di fidarsene.
+  fail-closed, e **il runtime deve ri-verificare** sia le coordinate (`pin.host == endpoint.host`,
+  `pin.port == endpoint.ssh_port`) sia l'integrità crittografica invocando lo **stesso validatore
+  condiviso** `validate_persisted_host_key` prima di fidarsene. Le CHECK del DB sono solo di formato:
+  non dimostrano che la fingerprint derivi dalla chiave.
 - **I12** nessun errore/log ripete il materiale ricevuto (la host key è comunque pubblica, ma è input
   non fidato).
 

@@ -369,8 +369,10 @@ Prossimo incremento isolato:
    artifact, cleanup deterministico; ancora **nessun subprocess**. Il pin di host identity (questa PR)
    è la fonte per il `known_hosts` effimero del container: un `known_hosts` costruito dal pin evita che
    il TOFU del motore degradi ad "accetta qualunque chiave al primo run". **Regola per il runtime**:
-   prima di fidarsi di un pin deve ri-verificare che `pin.host == endpoint.host` e
-   `pin.port == endpoint.ssh_port` (la coerenza è fail-closed nel service, non un vincolo DB).
+   prima di fidarsi di un pin deve ri-verificare sia le coordinate (`pin.host == endpoint.host`,
+   `pin.port == endpoint.ssh_port`) sia l'**integrità crittografica** (chiave parsabile/canonica, tipo e
+   fingerprint coerenti) invocando lo stesso validatore condiviso `validate_persisted_host_key`
+   dell'adapter — le CHECK del DB sono solo di formato, non provano che la fingerprint derivi dalla chiave.
 2. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
    allowlist di contratto, avvio rifiutato prima del subprocess se incompatibile.
 
