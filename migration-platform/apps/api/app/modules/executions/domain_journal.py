@@ -207,6 +207,30 @@ class DomainJournalRepository:
         """The outcome of the side effect is not determinable from here. Fail closed."""
         self._cas(ref, expected=_STARTED, new=_RECON, failure_code=failure_code)
 
+    def recovery_transition(
+        self, journal_id: int, *, expected_status: str, expected_token: int,
+        new_status: str, new_token: int, **fields,
+    ) -> bool:
+        """Adopt a stuck row under a fresh recovery token (R2-b2).
+
+        Unlike ``_cas`` (which fences on the row's *current* token), a recovery
+        writer holds a NEW token while the row still carries the crashed writer's
+        OLD one, so the guard is: we own the recovery lease (``new_token``), the row
+        is still exactly as observed (``expected_status``/``expected_token``). A
+        single CAS both bumps the token and moves the status; ``rowcount != 1`` means
+        another recovery worker won or the state changed — the caller backs off, no
+        side effect. Returns ``True`` iff this worker adopted the row.
+        """
+        with self._tx() as sess:
+            self._assert_owner(sess, new_token)   # we must hold the recovery lease
+            result = sess.execute(
+                update(DomainWriteJournal)
+                .where(DomainWriteJournal.id == journal_id,
+                       DomainWriteJournal.status == expected_status,
+                       DomainWriteJournal.fencing_token == expected_token)
+                .values(status=new_status, fencing_token=new_token, **fields))
+            return result.rowcount == 1
+
 
 def _rows(db: Session, attempt_id: int, statuses: frozenset[str]) -> list[dict]:
     """Scalar column query: always the persisted rows, never the ORM identity map."""
@@ -228,6 +252,41 @@ def open_operations(db: Session, attempt_id: int) -> list[dict]:
 def blocking_operations(db: Session, attempt_id: int) -> list[dict]:
     """Anything that forbids advancing to email or to success."""
     return _rows(db, attempt_id, DOMAIN_WRITE_BLOCKING_STATUSES)
+
+
+# Recovery discovery keys off the JOURNAL status, never the attempt/run state: R2-b1
+# may already have terminalised the attempt as ``failed`` while its intent stays open.
+_RECOVERY_COLS = (
+    DomainWriteJournal.id, DomainWriteJournal.execution_run_id,
+    DomainWriteJournal.execution_attempt_id, DomainWriteJournal.operation_key,
+    DomainWriteJournal.operation_type, DomainWriteJournal.target_key,
+    DomainWriteJournal.status, DomainWriteJournal.fencing_token,
+    DomainWriteJournal.requested_payload_hash, DomainWriteJournal.precondition_state,
+    DomainWriteJournal.precondition_fingerprint, DomainWriteJournal.observed_result_fingerprint,
+    DomainWriteJournal.compensation_type, DomainWriteJournal.applied_at,
+    DomainWriteJournal.created_at,
+)
+
+
+def list_operations(db: Session, run_id: int, statuses: frozenset[str]) -> list[dict]:
+    """Full-field detached rows for a run in the given statuses, ordered by id."""
+    with db.no_autoflush:
+        found = db.execute(
+            select(*_RECOVERY_COLS)
+            .where(DomainWriteJournal.execution_run_id == run_id,
+                   DomainWriteJournal.status.in_(sorted(statuses)))
+            .order_by(DomainWriteJournal.id)).all()
+    return [dict(row._mapping) for row in found]
+
+
+def runs_with_open_operations(db: Session) -> list[int]:
+    """Distinct run ids carrying an open intent — the sweep's work list (no scheduler)."""
+    with db.no_autoflush:
+        rows = db.execute(
+            select(DomainWriteJournal.execution_run_id)
+            .where(DomainWriteJournal.status.in_(sorted(DOMAIN_WRITE_OPEN_STATUSES)))
+            .distinct().order_by(DomainWriteJournal.execution_run_id)).all()
+    return [r[0] for r in rows]
 
 
 class DomainJournalRecorder:

@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     autoresponder_writer_mode: str = "disabled"
     # Orchestratore mock end-to-end: coordina i writer mock in un solo run.
     mock_orchestrator_mode: str = "disabled"
+    # Domain crash-recovery (B4e-iii-c-iii-b R2-b2). Explicit opt-in, disabled by
+    # default: the recovery service is invocable in tests, but no scheduler/worker
+    # sweep acts on a live run unless this and the master switch are both enabled.
+    domain_recovery_mode: str = "disabled"
     # Master switch for the real (non-dry-run) execution contract. Only
     # "disabled" and "enabled" are accepted; it defaults to disabled so no real
     # attempt, lease, or destination mutation can be opened without an explicit,
@@ -185,6 +189,14 @@ class Settings(BaseSettings):
         # require this gate before any real add_auto_responder (an UPSERT reached only
         # on a live-absent address). The value "mock" drives the separate mock writer.
         return self.real_execution_enabled and self.autoresponder_writer_mode == "enabled"
+
+    @property
+    def domain_recovery_enabled(self) -> bool:
+        # Double gate for the R2-b2 recovery sweep: an automatic recovery worker may
+        # act on a live run only when both the master real switch and
+        # DOMAIN_RECOVERY_MODE are "enabled". Off by default — the pure service stays
+        # explicitly invocable (and unit-tested) without this gate.
+        return self.real_execution_enabled and self.domain_recovery_mode == "enabled"
 
 
 @lru_cache

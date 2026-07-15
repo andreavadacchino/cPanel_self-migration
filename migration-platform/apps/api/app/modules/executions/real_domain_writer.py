@@ -78,6 +78,35 @@ class CompensationRecorder(Protocol):
     def mark_reconciliation_required(self, ref, *, failure_code: str) -> None: ...
 
 
+class RealDomainGateway:
+    """Concrete :class:`DomainGateway`: B3a typed ops over a write-enabled B1 client.
+
+    Built exclusively from the destination endpoint (see ``dispatch._build_domain_gateway``)
+    so the engine never receives a source endpoint, credential, or client. Adapter
+    imports stay lazy so importing this module pulls in no live client."""
+
+    def __init__(self, client) -> None:
+        self._client = client
+
+    def close(self) -> None:
+        self._client.close()
+
+    def read_domains(self):
+        from adapters.cpanel.domains import read_domains as _read
+
+        return _read(self._client)
+
+    def read_single_domain(self, name: str):
+        from adapters.cpanel.domains import read_single_domain as _read_one
+
+        return _read_one(self._client, name)
+
+    def create(self, requested, normalized_name: str, docroot: str | None) -> None:
+        op = build_create(requested.type, domain=normalized_name, docroot=docroot,
+                          internal_label=requested.internal_label)
+        self._client.write(op)
+
+
 @dataclass
 class PhaseResult:
     """Aggregated, terminal-agnostic outcome of the domains phase."""

@@ -428,8 +428,9 @@ def test_real_gateway_routes_reads_and_create_to_client() -> None:
             self.written = op
             return SimpleNamespace(data={})
 
+    from app.modules.executions.real_domain_writer import RealDomainGateway
     client = FakeClient()
-    gw = dispatch_module._RealDomainGateway(client)
+    gw = RealDomainGateway(client)
     gw.read_domains()
     gw.read_single_domain("demo.example.test")
     assert all(isinstance(op, SafeRead) for op in client.reads)  # reads stay safe

@@ -12,6 +12,7 @@ from app.core.errors import ConflictError
 from app.modules.endpoints import service as endpoint_service
 from app.modules.endpoints.models import Endpoint
 from app.modules.executions import domain_journal
+from app.modules.executions import domain_recovery
 from app.modules.executions import lease as lease_service
 from app.modules.executions import real_domain_writer
 from app.modules.executions import safety_gates
@@ -175,38 +176,8 @@ def _executable_categories(run: ExecutionRun) -> list[str]:
     return executable
 
 
-class _RealDomainGateway:
-    """Real domain gateway: B3a typed ops over a write-enabled B1 client.
-
-    Built exclusively from the destination endpoint (see ``_build_domain_gateway``)
-    so the engine never receives a source endpoint, credential, or client."""
-
-    def __init__(self, client) -> None:
-        self._client = client
-
-    def close(self) -> None:
-        self._client.close()
-
-    def read_domains(self):
-        from adapters.cpanel.domains import read_domains
-
-        return read_domains(self._client)
-
-    def read_single_domain(self, name: str):
-        from adapters.cpanel.domains import read_single_domain
-
-        return read_single_domain(self._client, name)
-
-    def create(self, requested, normalized_name: str, docroot: str | None) -> None:
-        from adapters.cpanel.domains import build_create
-
-        op = build_create(requested.type, domain=normalized_name, docroot=docroot,
-                          internal_label=requested.internal_label)
-        self._client.write(op)
-
-
-def _build_domain_gateway(db: Session, run: ExecutionRun) -> _RealDomainGateway:
-    """Destination-only gateway; tests substitute a fake."""
+def _build_domain_gateway(db: Session, run: ExecutionRun) -> real_domain_writer.RealDomainGateway:
+    """Destination-only gateway (shared with the recovery retry); tests substitute a fake."""
     from adapters.cpanel.client import CpanelClient
     from adapters.cpanel.schemas import CpanelCredentials
 
@@ -222,7 +193,7 @@ def _build_domain_gateway(db: Session, run: ExecutionRun) -> _RealDomainGateway:
                           verify_tls=destination.verify_tls),
         allow_destination_writes=True,
     )
-    return _RealDomainGateway(client)
+    return real_domain_writer.RealDomainGateway(client)
 
 
 def _endpoint_home(db: Session, endpoint_id: int) -> str:
@@ -291,18 +262,11 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
         raise ConflictError("Run o tentativo di dispatch non validi")
     if attempt.status != ExecutionStatus.queued.value:
         # A redelivery of an attempt already taken. Silently returning here used to
-        # strand a crashed run in `running` forever, with a possibly-issued domain
-        # write nobody would ever look at. If the journal holds an open intent the
-        # side effect may or may not have landed, so we never re-run the phase — we
-        # terminalise fail-closed and hand the run to recovery (R2-b2).
-        if attempt.status == _RUNNING:
-            pending = domain_journal.open_operations(db, attempt.id)
-            if pending:
-                return finalize_terminal(
-                    db, run, attempt, ExecutionStatus.failed.value,
-                    phase="worker_recovery", error="open_domain_intent_detected",
-                    checkpoint={"attempt_id": attempt.id, "domains": []})
-        return run
+        # strand a crashed run in `running` forever with a possibly-issued domain
+        # write nobody would look at; the extracted guard terminalises fail-closed
+        # when the journal holds an open intent and hands the run to recover_run.
+        recovered = domain_recovery.terminalize_redelivered_open_intent(db, run, attempt)
+        return recovered if recovered is not None else run
 
     _validate_preview(run.preview or [])
     safety_gates.authorize(db, run.id, fencing_token=attempt.fencing_token)
@@ -369,16 +333,11 @@ def worker_start(db: Session, run_id: int, attempt_id: int) -> ExecutionRun:
             db, destination_endpoint_id=run.destination_endpoint_id,
             fencing_token=attempt.fencing_token)
 
-    # Durable gate before email: the in-memory PhaseResult is not authoritative. If the
-    # journal holds any open or unreconciled domain intent, a domain side effect's real
-    # outcome is unknown — email must not run and the run must not succeed.
-    blocking = domain_journal.blocking_operations(db, attempt.id)
-    if blocking:
-        return finalize_terminal(
-            db, run, attempt, ExecutionStatus.failed.value, phase="worker_domains",
-            error="domain_reconciliation_required",
-            checkpoint={"domains": domain_result.completed if domain_result else []},
-            compensation=_comp())
+    gated = domain_recovery.block_email_if_journal_uncertain(
+        db, run, attempt, completed=domain_result.completed if domain_result else [],
+        compensation=_comp())
+    if gated is not None:
+        return gated
 
     email_executable = [c for c in executable if c in EMAIL_CATEGORIES]
     if email_executable:
