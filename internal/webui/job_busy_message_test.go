@@ -52,3 +52,66 @@ func TestBusyMessagePrefersLiveHolderOverStaleRunningJournal(t *testing.T) {
 		t.Errorf("409 names the STALE journal action A instead of the live holder B: %q", msg)
 	}
 }
+
+// TestBusyMessageUsesMatchingJournalPhaseForLiveHolder proves the flip side: a
+// running journal that IS the same run as the live holder (same action + same
+// started-at) is still trusted to supply the richer phase, so the fix does not
+// regress the "«…» già in corso (fase …)" detail for the normal path.
+func TestBusyMessageUsesMatchingJournalPhaseForLiveHolder(t *testing.T) {
+	dir := t.TempDir()
+
+	// The orchestrator/exec reserves and journals with the SAME started-at, then
+	// journalPhaseRunning advances the phase (here: "rsync home").
+	startedAt := time.Unix(1_700_000_000, 0).UTC()
+	if err := writeJobJournal(dir, jobJournal{
+		SessionID: "mig_x", Action: "migrate content", State: jobStateRunning,
+		StartedAt: startedAt, UpdatedAt: startedAt, Phase: "rsync home",
+	}); err != nil {
+		t.Fatalf("writeJobJournal: %v", err)
+	}
+
+	j := newJobManager(dir, nil, nil)
+	if !j.tryReserveFor("migrate content", startedAt) {
+		t.Fatal("tryReserveFor on a free slot must succeed")
+	}
+
+	msg := busyMessage(dir, j)
+
+	if !strings.Contains(msg, "migrate content") {
+		t.Errorf("409 does not name the running action: %q", msg)
+	}
+	if !strings.Contains(msg, "rsync home") {
+		t.Errorf("coherent journal phase dropped — fell back to the phase-less live holder: %q", msg)
+	}
+}
+
+// TestBusyMessageEmptyHolderActionFallsThrough documents the fail-closed guard:
+// a reserved holder with an EMPTY action is not nameable, so busyMessage does
+// not print «» and instead falls through to the next source (here a running
+// journal). tryReserveFor stays permissive because every production call site
+// passes a validated non-empty constant (actionRegistry name / orchestratorAction);
+// this guard is the defensive backstop at the display layer.
+func TestBusyMessageEmptyHolderActionFallsThrough(t *testing.T) {
+	dir := t.TempDir()
+	startedAt := time.Unix(1_700_000_000, 0).UTC()
+	if err := writeJobJournal(dir, jobJournal{
+		SessionID: "mig_x", Action: "dns apply", State: jobStateRunning,
+		StartedAt: startedAt, UpdatedAt: startedAt, Phase: "dns apply",
+	}); err != nil {
+		t.Fatalf("writeJobJournal: %v", err)
+	}
+
+	j := newJobManager(dir, nil, nil)
+	if !j.tryReserveFor("", startedAt) { // empty action (defensive)
+		t.Fatal("tryReserveFor on a free slot must succeed")
+	}
+
+	msg := busyMessage(dir, j)
+
+	if strings.Contains(msg, "«»") {
+		t.Errorf("empty holder action rendered as «» instead of falling through: %q", msg)
+	}
+	if !strings.Contains(msg, "dns apply") {
+		t.Errorf("empty holder action did not fall through to the running journal: %q", msg)
+	}
+}

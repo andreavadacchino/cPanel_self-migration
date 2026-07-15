@@ -182,35 +182,80 @@ func reconcileJobJournal(dir string, slotBusy bool) *jobJournal {
 	return jj
 }
 
+// formatRunningMessage renders the shared "«action» già in corso …" copy for a
+// running slot holder. The phase is appended only when it adds information over
+// the action name itself (the journal defaults Phase to the action, so a bare
+// exec shows no redundant "(fase …)").
+func formatRunningMessage(action string, startedAt time.Time, phase string) string {
+	msg := fmt.Sprintf("«%s» già in corso dalle %s UTC",
+		action, startedAt.UTC().Format("15:04:05"))
+	if phase != "" && phase != action {
+		msg += fmt.Sprintf(" (fase %s)", phase)
+	}
+	return msg + " — attendi il completamento o riapri la pagina per seguirne l'avanzamento."
+}
+
+// journalMatchesReservedHolder reports whether a running journal describes the
+// SAME run as the live reservedHolder — so it can be trusted to enrich the
+// holder's identity with a phase rather than being a stale record of a previous
+// action. Coherence is action + started-at: the started-at is the nanosecond
+// reserve timestamp, unique per reserve event on the EXCLUSIVE slot (the next
+// holder can only reserve after the previous one released), and it is persisted
+// with full precision (RFC 3339 nano round-trip), so time.Time.Equal is exact —
+// no formatted-string compare, no arbitrary tolerance. A session ID would not
+// improve discrimination in this single-account / single-slot model, so it is
+// deliberately not part of the reservation identity.
+func journalMatchesReservedHolder(jj *jobJournal, action string, startedAt time.Time) bool {
+	return jj != nil && jj.Action == action && jj.StartedAt.Equal(startedAt)
+}
+
 // busyMessage renders the readable state that replaces the opaque 409 for every
-// caller of the shared single-writer slot (/run, /accept, /exec). It prefers
-// the journal (accurate for an exec); if the slot is held by the read-only
-// analysis pipeline (which keeps its state in memory, not on disk) it falls back
-// to that live snapshot; only a genuine race leaves the generic message.
+// caller of the shared single-writer slot (/run, /accept, /exec, orchestrator).
+// Precedence (roadmap §7, finding F1):
+//
+//  1. A LIVE reservedHolder is the truth during a live process — it is published
+//     atomically with the busy flag under jobManager.mu. A running journal is
+//     used only when it is the SAME run (richer phase); a stale or mismatched
+//     journal never overrides the live identity with a different action.
+//  2. No live holder: a running journal covers refresh/recovery and processes
+//     where the journal is the only surviving record.
+//  3. The read-only analysis pipeline holds the slot with its state in memory,
+//     not on disk — fall back to that live snapshot.
+//  4. Only a genuine race leaves the generic message.
 func busyMessage(dir string, j *jobManager) string {
-	if jj, ok := readJobJournal(dir); ok && jj.State == jobStateRunning {
+	// Collect the three sources ONCE, holding no lock across I/O: reservedHolder
+	// and snapshot each take jobManager.mu only long enough to copy their fields,
+	// and readJobJournal is a plain os.ReadFile with no lock held at all.
+	var (
+		holderAction string
+		holderStart  time.Time
+		haveHolder   bool
+	)
+	if j != nil {
+		holderAction, holderStart, haveHolder = j.reservedHolder()
+	}
+	jj, haveJournal := readJobJournal(dir)
+	journalRunning := haveJournal && jj.State == jobStateRunning
+
+	// 1. Live holder wins. An empty action is treated as no nameable holder
+	//    (fail-closed): fall through to the journal/analysis/generic layers.
+	if haveHolder && holderAction != "" {
+		if journalRunning && journalMatchesReservedHolder(jj, holderAction, holderStart) {
+			return formatRunningMessage(jj.Action, jj.StartedAt, jj.Phase)
+		}
+		return formatRunningMessage(holderAction, holderStart, "")
+	}
+
+	// 2. No live holder: a running journal names refresh/recovery.
+	if journalRunning {
 		action := jj.Action
 		if action == "" {
 			action = "un'operazione"
 		}
-		msg := fmt.Sprintf("«%s» già in corso dalle %s UTC",
-			action, jj.StartedAt.UTC().Format("15:04:05"))
-		if jj.Phase != "" && jj.Phase != jj.Action {
-			msg += fmt.Sprintf(" (fase %s)", jj.Phase)
-		}
-		return msg + " — attendi il completamento o riapri la pagina per seguirne l'avanzamento."
+		return formatRunningMessage(action, jj.StartedAt, jj.Phase)
 	}
-	// Live in-memory holder identity (exec/orchestrator). This closes the window
-	// between reserving the slot and persisting the journal: the slot is already
-	// observably busy, but the disk record above may not be written yet, so name
-	// the action from the identity published atomically with the reservation.
-	if j != nil {
-		if action, startedAt, ok := j.reservedHolder(); ok && action != "" {
-			return fmt.Sprintf("«%s» già in corso dalle %s UTC",
-				action, startedAt.UTC().Format("15:04:05")) +
-				" — attendi il completamento o riapri la pagina per seguirne l'avanzamento."
-		}
-	}
+
+	// 3. Analysis pipeline (state in memory, not on disk).
 	if j != nil {
 		if s := j.snapshot(); s.State == "running" {
 			started := ""
