@@ -37,7 +37,9 @@ Verdict: `CPANEL_DISPOSABLE_LAB_MISSING_RUNBOOK_READY`. Follow this runbook to c
 10. cPanel/WHM version known and compatible with production;
 11. the gateway shim implements read + `add_forwarder` against this account;
 12. its endpoint id can be allowlisted **without** removing it from the production denylist;
-13. secrets injected via a secure mechanism, never committed;
+13. secrets injected via a secure mechanism — status **PARTIAL/UNMET** until a real live-credential
+    source exists (see "Secret handling" below): `CREDENTIAL_ENCRYPTION_KEY` is application at-rest
+    encryption, NOT secret injection, and a gitignored `.env` alone is insufficient;
 14. no credential appears in any CLI arg, log, or report;
 15. the harness runs from commit `a95c922` with a clean working tree.
 
@@ -56,9 +58,15 @@ If even one fails → `LAB_MISSING` / `LAB_NOT_QUALIFIED`; do not run the live t
    587) at the firewall/provider so no mail can leave. Confirm the account cannot reach production.
 6. **Minimal API credentials** — create a cPanel API token scoped to the minimum needed for
    `Email::list_forwarders`, `Email::add_forwarder`, and domain listing. No root, no WHM.
-7. **Secure secret injection** — reuse the repo convention: keep all secrets in a **gitignored**
-   `.env.live` (see `.env.live.example`); never place them on a CLI, in logs, or in the report.
-   For DB-stored credentials the encrypted store (`CREDENTIAL_ENCRYPTION_KEY`, Fernet) may be used.
+7. **Secure secret handling (PARTIAL/UNMET)** — the repo has NO Vault/secret-manager resolver, and
+   `CREDENTIAL_ENCRYPTION_KEY` (Fernet) is only application at-rest encryption — it is NOT a secret
+   injection mechanism and must NEVER be reused as a cPanel token. A gitignored `.env` alone is
+   insufficient. Until a Vault-scoped-to-LAB reference exists, use the implemented **token-file**
+   loader (`lab_credentials.load_lab_token`): the token lives in a file OUTSIDE the repo, mode
+   `0600` or stricter, owned by the process user, a real non-symlink regular file, non-empty, under
+   a size cap. The username is non-secret (`CPANEL_TEST_USERNAME`); the token path is
+   `CPANEL_TEST_TOKEN_FILE`. The token is read ONLY after the non-secret gates pass and never lands
+   on a CLI, in an env var, a log, an error, a repr, or the report.
 8. **The six required variables** — populate in `.env.live` (values only there):
    `RUN_LIVE_CPANEL_DESTRUCTIVE_TESTS`, `CPANEL_TEST_ACCOUNT_DISPOSABLE`,
    `CPANEL_TEST_ACCOUNT_RESET_APPROVED`, `CPANEL_TEST_ENDPOINT`,
@@ -66,9 +74,12 @@ If even one fails → `LAB_MISSING` / `LAB_NOT_QUALIFIED`; do not run the live t
 9. **Denylist/allowlist** — put the lab endpoint id into `CPANEL_TEST_ENDPOINT_ALLOWLIST`; verify it
    is NOT present in `CPANEL_TEST_PRODUCTION_ENDPOINTS` (adding the lab must not weaken the
    production denylist).
-10. **Gateway shim** — implement an object exposing `list_domains()`, `list_forwarders()`,
-    `add_forwarder(source, destination)` on top of `CpanelClient` + the forwarder ops, and wire it
-    into `test_live_add_forwarder_characterization` (currently an intentional placeholder).
+10. **Gateway shim (implemented)** — use `lab_cpanel_gateway.LabCpanelGateway` (test-only), which
+    wraps the real `CpanelClient` + real op builders and exposes ONLY `list_domains()`,
+    `list_forwarders()`, `add_forwarder(source, destination, authorization)`. Mint the one-shot
+    `AuthorizedDisposableLabContext` via `issue_lab_authorization(...)` after ALL gates pass, then
+    wrap with `bind_for_harness(...)` to obtain the 2-arg `add_forwarder` the committed harness
+    calls, and wire that into `test_live_add_forwarder_characterization` (still a placeholder).
 11. **Read-only preflight** — run only the read paths: connection/version check, `list_domains`,
     prove the disposable domain is owned, `list_forwarders`, prove no real data, confirm SMTP is
     confined, confirm reset/destroy is concretely possible. Issue **zero** writes.
