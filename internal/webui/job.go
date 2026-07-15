@@ -55,14 +55,25 @@ type jobStatus struct {
 	Steps     []stepResult
 }
 
+// reservedJob is the identity of a non-analysis slot holder (an /exec or
+// orchestrator run). It is published ATOMICALLY with the busy flag by
+// tryReserveFor, so a concurrent caller that loses the slot can name the
+// running action immediately — even in the window before the holder has
+// persisted the durable job journal to disk.
+type reservedJob struct {
+	action    string
+	startedAt time.Time
+}
+
 // jobManager runs ONE read-only analysis pipeline at a time.
 type jobManager struct {
-	mu     sync.Mutex
-	busy   bool
-	status jobStatus
-	runner StepRunner
-	dir    string
-	base   context.Context // parent of every run's context (cancelled on ui shutdown)
+	mu       sync.Mutex
+	busy     bool
+	reserved *reservedJob // identity of an exec/orchestrator holder; nil for the analysis pipeline
+	status   jobStatus
+	runner   StepRunner
+	dir      string
+	base     context.Context // parent of every run's context (cancelled on ui shutdown)
 }
 
 func newJobManager(dir string, runner StepRunner, base context.Context) *jobManager {
@@ -164,10 +175,39 @@ func (j *jobManager) tryReserve() bool {
 	return true
 }
 
-// release frees a slot claimed by tryReserve.
+// tryReserveFor is tryReserve that also publishes the holder's identity under
+// the SAME lock, so a concurrent caller that loses the slot can name the running
+// action with no disk read and no window between "slot busy" and "identity
+// known". Used by the exec/orchestrator paths (which otherwise persist their
+// identity to disk only after reserving). Pair every true return with release().
+func (j *jobManager) tryReserveFor(action string, startedAt time.Time) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.busy {
+		return false
+	}
+	j.busy = true
+	j.reserved = &reservedJob{action: action, startedAt: startedAt}
+	return true
+}
+
+// reservedHolder returns the identity of the current exec/orchestrator slot
+// holder, or ok=false when the slot is free or held by the analysis pipeline
+// (which publishes its state via status, not reserved).
+func (j *jobManager) reservedHolder() (action string, startedAt time.Time, ok bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.reserved == nil {
+		return "", time.Time{}, false
+	}
+	return j.reserved.action, j.reserved.startedAt, true
+}
+
+// release frees a slot claimed by tryReserve/tryReserveFor.
 func (j *jobManager) release() {
 	j.mu.Lock()
 	j.busy = false
+	j.reserved = nil
 	j.mu.Unlock()
 }
 

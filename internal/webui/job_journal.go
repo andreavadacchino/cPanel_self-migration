@@ -200,6 +200,17 @@ func busyMessage(dir string, j *jobManager) string {
 		}
 		return msg + " — attendi il completamento o riapri la pagina per seguirne l'avanzamento."
 	}
+	// Live in-memory holder identity (exec/orchestrator). This closes the window
+	// between reserving the slot and persisting the journal: the slot is already
+	// observably busy, but the disk record above may not be written yet, so name
+	// the action from the identity published atomically with the reservation.
+	if j != nil {
+		if action, startedAt, ok := j.reservedHolder(); ok && action != "" {
+			return fmt.Sprintf("«%s» già in corso dalle %s UTC",
+				action, startedAt.UTC().Format("15:04:05")) +
+				" — attendi il completamento o riapri la pagina per seguirne l'avanzamento."
+		}
+	}
 	if j != nil {
 		if s := j.snapshot(); s.State == "running" {
 			started := ""

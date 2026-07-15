@@ -325,12 +325,14 @@ func (ws *workbenchExecServer) handleStartMigration(w http.ResponseWriter, r *ht
 	}
 
 	// Reserve the shared single-writer slot (mutually exclusive with /run,
-	// /accept and /exec). A busy slot is a readable 409, not opaque.
-	if !ws.job.tryReserve() {
+	// /accept and /exec) AND publish the running action's identity atomically, so
+	// a concurrent caller that loses the slot names the action in its 409 even
+	// before startJobJournal persists it to disk. A busy slot is a readable 409.
+	startedAt := time.Now().UTC()
+	if !ws.job.tryReserveFor(orchestratorAction, startedAt) {
 		writeBusy409(w, ws.dir, ws.job)
 		return
 	}
-	startedAt := time.Now().UTC()
 	startJobJournal(ws.dir, sessionID, orchestratorAction, startedAt)
 	var runErr error
 	stopPhase := orchestratorAction

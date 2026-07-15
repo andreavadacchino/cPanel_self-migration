@@ -1,11 +1,50 @@
 package webui
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestReservedHolderPublishedAtomically pins the invariant behind the fix: an
+// exec/orchestrator reservation publishes its identity together with the busy
+// flag, an analysis-style tryReserve leaves it nil, and release clears it.
+func TestReservedHolderPublishedAtomically(t *testing.T) {
+	j := newJobManager(t.TempDir(), func(context.Context, io.Writer, string, []string) error { return nil }, nil)
+
+	startedAt := time.Unix(1700000000, 0).UTC()
+	if !j.tryReserveFor("dns verify", startedAt) {
+		t.Fatal("tryReserveFor on a free slot must succeed")
+	}
+	action, at, ok := j.reservedHolder()
+	if !ok || action != "dns verify" || !at.Equal(startedAt) {
+		t.Fatalf("reservedHolder = (%q, %v, %v), want (dns verify, %v, true)", action, at, ok, startedAt)
+	}
+	// The slot is exclusive: a second reservation (any kind) is refused.
+	if j.tryReserveFor("dns apply", startedAt) {
+		t.Fatal("tryReserveFor on a busy slot must fail")
+	}
+	if j.tryReserve() {
+		t.Fatal("tryReserve on a busy slot must fail")
+	}
+	j.release()
+	if _, _, ok := j.reservedHolder(); ok {
+		t.Fatal("reservedHolder must be cleared after release")
+	}
+	// An analysis-style reservation (tryReserve) holds the slot but publishes no
+	// exec identity, so a concurrent 409 falls back to the analysis snapshot.
+	if !j.tryReserve() {
+		t.Fatal("tryReserve on a free slot must succeed")
+	}
+	if _, _, ok := j.reservedHolder(); ok {
+		t.Fatal("tryReserve must not publish an exec identity")
+	}
+	j.release()
+}
 
 // TestExecBusy409NamesActionWithinReserveWindow deterministically pins the
 // concurrent window that made TestJobJournalReadable409 flaky: the winning

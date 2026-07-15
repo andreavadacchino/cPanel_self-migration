@@ -388,7 +388,12 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	// writes to the same artifact directory). A busy slot is no longer an
 	// opaque 409: busyMessage reads the job journal and names the running
 	// action + started-at + phase (roadmap §7).
-	if !ws.job.tryReserve() {
+	// Reserve the slot AND publish the running action's identity atomically, so a
+	// concurrent /exec that loses the slot always names the action in its 409 —
+	// including in the window before startJobJournal persists it to disk.
+	start := time.Now()
+	startedAt := start.UTC()
+	if !ws.job.tryReserveFor(action.name, startedAt) {
 		writeBusy409(w, ws.dir, ws.job)
 		return
 	}
@@ -401,8 +406,6 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	// every return path (attach/timeline errors included); pairing it with
 	// release() means a refresh never sees running with a free slot within a
 	// live process.
-	start := time.Now()
-	startedAt := start.UTC()
 	startJobJournal(ws.dir, sessionID, action.name, startedAt)
 	var execErr error
 	defer func() {
