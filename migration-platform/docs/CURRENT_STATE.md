@@ -79,9 +79,20 @@ non esiste ancora un actor che consumi le executions, e una riga in `queued` con
 capo della coda sarebbe uno stato che mente. La execution resta `pending` finché non arriva il
 worker che sa onorarla. Nessun `job` viene creato, Redis non trasporta nulla.
 
-**Nessuna credenziale SSH è modellata** (`endpoints` ha solo il token cPanel; l'adapter SSH è uno
-stub che solleva `NotImplementedError`). È il prerequisito bloccante del dry-run end-to-end: senza
-di essa il worker non può generare l'`host.yaml` che il motore Go richiede a runtime.
+**L'autenticazione SSH degli endpoint è persistita, ma non ancora usata.** `endpoints` ha ora le
+colonne `ssh_*` (metodo `none|password|private_key` × sorgente `direct|ref`, segreti cifrati Fernet
+o riferimenti opachi), settabili via `PUT /api/endpoints/{id}/ssh-credentials` con un bundle
+tipizzato. Una chiave privata diretta è **validata crittograficamente** all'inserimento
+(`adapters.ssh_keys`, via `cryptography`+`bcrypt`): materiale non parsabile, chiave pubblica,
+passphrase errata/mancante o applicata a chiave non cifrata sono rifiutati con 422 generico (mai il
+PEM o la passphrase nell'errore), invece di essere accettati e rifiutati dal motore solo all'avvio.
+Quattro **CHECK constraint** DB presidiano enum/porta/coerenza-`none` (il worker leggerà le righe
+come verità). Impostare/ruotare l'SSH **non tocca** lo stato del probe cPanel
+(`connection_status`/`capabilities`/`last_*`): sono capability distinte. È **sola persistenza**:
+nessun decrypt, nessun `host.yaml`, nessun `known_hosts`, nessuna connessione — l'adapter SSH resta
+uno stub `NotImplementedError`. Manca ancora **l'host-identity trust** (il pin della host key,
+tabella figlia, PR successiva) e tutto il **runtime** (risoluzione dei ref, costruzione di
+`host.yaml`/`known_hosts`, subprocess). Il dry-run end-to-end resta quindi **bloccato**.
 
 Il confine è dichiarato in punti coerenti:
 
@@ -112,7 +123,7 @@ coverage ma **invisibili** all'item-diff. Regressione da presidiare a ogni PR ch
 
 ## Schema dati
 
-Alembic lineare, single head, `0001 → 0008`. Nove tabelle su Postgres:
+Alembic lineare, single head, `0001 → 0009`. Nove tabelle su Postgres:
 
 ```
 migrations · jobs · job_events · endpoints
@@ -134,7 +145,12 @@ Due vincoli sono **del database**, non di un servizio:
 - FK `RESTRICT` su `plan_id` / snapshot / comparison — il piano dietro un'esecuzione non è
   cancellabile. **Non testabile su SQLite** (`PRAGMA foreign_keys` off): verificato su Postgres.
 
-Nessuna modellazione di credenziali SSH.
+`endpoints` (migration `0009`) porta le colonne `ssh_*` per l'autenticazione SSH — capability
+distinta dal token cPanel, default `ssh_auth_method = 'none'` che preserva ogni riga esistente. Solo
+persistenza (segreti Fernet o riferimenti opachi, mai in chiaro nell'API). Quattro CHECK constraint
+(`ck_endpoints_ssh_*`) presidiano enum, range porta e coerenza `none` — verificate su Postgres reale
+(un INSERT con porta 70000 è rifiutato). **Nessuna tabella di host-key pin** ancora: l'host-identity
+trust è la PR successiva.
 
 ## Confine API ↔ worker
 
@@ -178,7 +194,7 @@ Due trappole verificate sul campo:
    dichiara `fastapi>=0.111`; l'immagine risolve una versione molto più recente. Bug che si
    manifestano solo su `0.111.1` (es. `204` + `response_model` truthy) non compaiono nello smoke.
 
-## Stato dei gate — Fase A/1 (2026-07-15, `fork/main` = `e89a985`)
+## Stato dei gate — SSH auth persistence (2026-07-15, `fork/main` = `b326723`)
 
 Eseguiti da un **venv creato nel worktree del branch**, con provenance verificata (`__file__` di
 `app`, `domain`, `adapters`, `worker` tutti dentro quel worktree). Un editable install che punta a
@@ -186,13 +202,11 @@ un worktree vecchio produce verde falso: è già successo.
 
 | Gate | Esito |
 |---|---|
-| `pytest` API | 356 passed |
-| `pytest` domain | 132 passed |
+| `pytest` API | 385 passed |
+| `pytest` domain | 147 passed |
 | `pytest` worker (`DRAMATIQ_TESTING=1`) | 15 passed |
-| Alembic up/down/up (SQLite) | OK |
-| Alembic `0001→0008` su **Postgres reale**, volume nuovo | OK (+ down→up) |
-| Concorrenza su **Postgres reale** | 16 create dry-run concorrenti: 16 OK, 16 `run_id` unici |
-| FK `RESTRICT` su **Postgres reale** | regge: il piano dietro un'esecuzione non è cancellabile |
+| Alembic up/down/up (SQLite) | OK (0001→0009, batch add-column + CHECK) |
+| Alembic `0001→0009` su **Postgres reale**, volume nuovo | OK (+ down→up); 10 colonne `ssh_*`, 4 CHECK, INSERT porta invalida rifiutato |
 | `docker compose config -q` | OK |
 | `npm run build` | **non eseguito** — il web non è toccato da questa PR |
 | Smoke read-only cPanel reale | **NON eseguito** — nessuna credenziale in sessione |
@@ -227,6 +241,13 @@ un worktree vecchio produce verde falso: è già successo.
   nulla) e improbabile (preflight e comparison durano minuti e sono guidati dall'operatore), **ma
   non accettabile per l'apply**: l'ADR chiede la freschezza ricalcolata *immediatamente prima
   dell'avvio*, e quel ricalcolo è compito del worker, non di questa rotta.
+- **La coerenza direct/ref del segreto SSH NON è un vincolo DB.** Le 4 CHECK di `endpoints`
+  presidiano enum, range porta e "`none` è vuoto", ma **non** che `method=password/direct` implichi
+  `ssh_password_enc IS NOT NULL` (predicato lungo e fragile, escluso di proposito). Una riga di
+  quel tipo può quindi esistere se scritta fuori dall'API. **Vincolo per la PR runtime**: il worker
+  deve validare ogni riga SSH *fail-closed* — verificare che il segreto atteso dal metodo/sorgente
+  sia effettivamente presente — **prima** di decifrare o materializzare qualsiasi cosa, senza
+  assumere che il DB lo garantisca.
 
 ## Prossimo passo
 

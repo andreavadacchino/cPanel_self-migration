@@ -8,6 +8,11 @@ dependencies = [
     "httpx>=0.27",
     # Symmetric encryption for endpoint tokens stored at rest (Fernet).
     "cryptography>=42",
+    # cryptography needs bcrypt to parse an OpenSSH private key encrypted with
+    # the bcrypt KDF (the default `ssh-keygen` produces) — required to validate
+    # an encrypted SSH key before storing it. Without it, a valid encrypted key
+    # would fail validation with UnsupportedAlgorithm.
+    "bcrypt>=4.0",
 ]
 
 [build-system]

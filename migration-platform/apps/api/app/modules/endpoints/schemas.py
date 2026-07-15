@@ -14,7 +14,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.modules.endpoints.models import AuthType, EndpointRole
+from adapters.ssh_keys import InvalidPrivateKey, load_private_key_or_raise
+from app.modules.endpoints.models import (
+    AuthType,
+    EndpointRole,
+    SshAuthMethod,
+    SshSecretSource,
+)
 
 
 def _normalize_host(raw: str) -> str:
@@ -152,6 +158,147 @@ class EndpointCredentialUpdate(BaseModel):
     token: str = Field(min_length=1, max_length=4096, repr=False)
 
 
+# References accepted for an SSH secret held elsewhere (env:// only is resolvable
+# today; the rest are reserved and rejected at resolve time, not here). A raw
+# value is refused so a secret can never be persisted in a ref column.
+ALLOWED_SSH_REF_SCHEMES: tuple[str, ...] = ALLOWED_AUTH_REF_SCHEMES
+
+#: The maximum SSH port; a private key rarely exceeds a few KB, but a bounded
+#: field keeps a fat-fingered paste out of the database.
+MAX_SSH_PRIVATE_KEY = 32768
+
+
+def _looks_like_private_key(material: str) -> bool:
+    """A PEM private key, not a file path or a public key.
+
+    The engine reads the key from a path on disk; the platform stores the
+    MATERIAL and the worker writes it out. A path (``/home/op/.ssh/id_ed25519``)
+    is both unreadable from the container and not key material — this is what
+    separates the two.
+    """
+    text = material.strip()
+    # Must BEGIN with the PEM header, not merely contain it: a file path with a
+    # marker smuggled in after a newline ("/tmp/x\n-----BEGIN … PRIVATE KEY-----")
+    # would otherwise pass while still being, at its head, a path.
+    return (
+        text.startswith("-----BEGIN ")
+        and "PRIVATE KEY-----" in text
+        and text.rstrip().endswith("-----")
+        and "-----END " in text
+    )
+
+
+class SshCredentialBundle(BaseModel):
+    """The full SSH credential for one endpoint, set as a unit.
+
+    A typed bundle rather than loose fields: four consecutive optional secrets
+    are exactly the shape a caller half-fills by mistake. It REPLACES the
+    endpoint's SSH credential wholesale — there is no partial merge — so the
+    method and its one secret are always internally consistent.
+
+    ``auth_method`` and ``secret_source`` are orthogonal: the method is password
+    or private key; the source is the material itself (``direct``, encrypted at
+    rest) or an opaque ``ref`` the worker resolves. ``none`` clears everything.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    auth_method: SshAuthMethod
+    secret_source: SshSecretSource | None = None
+    username: str | None = Field(default=None, max_length=255)
+    port: int | None = Field(default=None, ge=1, le=65535)
+
+    # Direct secrets — write-only, never read back.
+    password: str | None = Field(default=None, max_length=1024, repr=False)
+    private_key: str | None = Field(default=None, max_length=MAX_SSH_PRIVATE_KEY, repr=False)
+    key_passphrase: str | None = Field(default=None, max_length=1024, repr=False)
+    # Opaque references — a pointer, never a value.
+    password_ref: str | None = Field(default=None, max_length=255)
+    private_key_ref: str | None = Field(default=None, max_length=255)
+    key_passphrase_ref: str | None = Field(default=None, max_length=255)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "SshCredentialBundle":
+        method = self.auth_method
+        direct = (self.password, self.private_key, self.key_passphrase)
+        refs = (self.password_ref, self.private_key_ref, self.key_passphrase_ref)
+
+        if method == SshAuthMethod.NONE:
+            if (
+                self.secret_source is not None
+                or any(direct)
+                or any(refs)
+                or self.username
+                or self.port is not None
+            ):
+                raise ValueError(
+                    "auth_method 'none' takes no username, port, source or secret"
+                )
+            return self
+
+        if not self.username:
+            raise ValueError("username is required when an SSH method is set")
+        if self.secret_source is None:
+            raise ValueError("secret_source is required when an SSH method is set")
+
+        # A passphrase belongs only to a key.
+        if method != SshAuthMethod.PRIVATE_KEY and (
+            self.key_passphrase or self.key_passphrase_ref
+        ):
+            raise ValueError("a key passphrase applies only to auth_method 'private_key'")
+
+        if self.secret_source == SshSecretSource.DIRECT:
+            if any(refs):
+                raise ValueError("secret_source 'direct' takes no *_ref fields")
+            self._validate_direct(method)
+        else:  # REF
+            if any(direct):
+                raise ValueError("secret_source 'ref' takes no direct secret fields")
+            self._validate_ref(method)
+        return self
+
+    def _validate_direct(self, method: SshAuthMethod) -> None:
+        if method == SshAuthMethod.PASSWORD:
+            if not self.password:
+                raise ValueError("password is required for a direct password method")
+            if self.private_key:
+                raise ValueError("a password method takes no private_key")
+        else:  # PRIVATE_KEY
+            if not self.private_key:
+                raise ValueError("private_key is required for a direct private_key method")
+            if self.password:
+                raise ValueError("a private_key method takes no password")
+            if not _looks_like_private_key(self.private_key):
+                raise ValueError(
+                    "private_key must be PEM private key material, not a file path "
+                    "or a public key"
+                )
+            # Prove it is a usable key, and that the passphrase (if any) matches,
+            # before it is ever encrypted and stored. Turns "accepted here,
+            # rejected by the engine at launch" into an input-time 422. The error
+            # is generic — it never echoes the key or the passphrase.
+            try:
+                load_private_key_or_raise(self.private_key, self.key_passphrase)
+            except InvalidPrivateKey as exc:
+                raise ValueError(str(exc)) from exc
+
+    def _validate_ref(self, method: SshAuthMethod) -> None:
+        wanted = self.password_ref if method == SshAuthMethod.PASSWORD else self.private_key_ref
+        other = self.private_key_ref if method == SshAuthMethod.PASSWORD else self.password_ref
+        if other:
+            raise ValueError("the ref does not match auth_method")
+        for name, value in (
+            (("password_ref" if method == SshAuthMethod.PASSWORD else "private_key_ref"), wanted),
+            ("key_passphrase_ref", self.key_passphrase_ref),
+        ):
+            if value and not value.startswith(ALLOWED_SSH_REF_SCHEMES):
+                raise ValueError(
+                    f"{name} must be an opaque reference (e.g. env://…), never a raw secret"
+                )
+        if not wanted:
+            raise ValueError("a ref source requires the matching *_ref for the method")
+
+
 class EndpointRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -174,3 +321,12 @@ class EndpointRead(BaseModel):
     capabilities: dict | None
     created_at: datetime
     updated_at: datetime
+    # SSH: the fact of a credential, never the credential. No *_enc, no material,
+    # no ref value — only the method/source metadata and the has_* flags.
+    ssh_auth_method: str
+    ssh_secret_source: str | None
+    ssh_username: str | None
+    ssh_port: int | None
+    has_ssh_password: bool
+    has_ssh_private_key: bool
+    has_ssh_key_passphrase: bool
