@@ -256,3 +256,57 @@ granularity, and a `failed` category never calls `persist_progress`
 the compensation exactly as the domain path did pre-R2-b1. Must be fixed (durable
 email journal, same pattern) before C3 can be unblocked. **C3 cannot be declared
 unblocked after R2-b2 while R2-c is open.**
+
+## R2-b2 / R2-b2b — domain crash recovery (2026-07-15)
+
+Verdict: `DOMAIN_RECOVERY_AUTOMATED_FOR_SAFE_RETRY_MANUAL_REMOVAL_FOR_APPLIED_OR_UNCERTAIN_STATES`.
+NOT exactly-once, NOT automatic compensation.
+
+**CRITICAL adapter finding (verified):** `packages/adapters/adapters/cpanel/domains.py`
+is create-and-read only — `_CREATE_OPS` = addaddondomain/addsubdomain/park, **no
+delete/remove primitive exists**. Automatic domain compensation is therefore impossible
+and forbidden (it would also contradict the no-delete rule). Recovery never deletes.
+
+**R2-b2 (commit `2c04429`) — recovery core.** `domain_recovery.py` (new):
+- discovery keys off JOURNAL status (`list_operations`/`runs_with_open_operations`),
+  never attempt/run state — R2-b1 leaves the attempt `failed/open_domain_intent_detected`
+  while the intent stays open;
+- claim: per-invocation lease owner (single winner) + `DomainJournalRepository.recovery_transition`
+  adopt CAS (old→new token) as the hard backstop against a second worker;
+- pure `classify()` decision table (12 unit tests):
+  planned+absent→safe_retry; planned/started+present→MANUAL (ownership unknown);
+  started+absent+stable→safe_retry; started+absent+fence-active/not-stable→
+  previous_fence_still_active / absence_not_stable; applied→record_manual; recon/comp→MANUAL;
+- safe retry reuses `execute_domain_phase` under the new token — the engine's fresh
+  read+decide IS the pre-create re-verification, so a meanwhile-present domain is
+  already_present/blocked, never a double create;
+- `applied` → ordered manual-removal plan (reverse `applied_at`, tie-break `operation_key`),
+  surfaced not executed; `manual_intervention_required`/`email_blocked` set; never `compensated`;
+- stability policy: started+absent retried only once the crashed writer's lease has been
+  expired past a window (`_absence_stable`, injectable `now`);
+- gate OFF by default (`DOMAIN_RECOVERY_MODE`), service explicitly invocable.
+- Extractions to bring `dispatch.py` back to ≤400: redelivery guard + pre-email blocking
+  gate → `domain_recovery`; concrete `RealDomainGateway` → `real_domain_writer` (next to its
+  Protocol); dispatch keeps the factory.
+- 29 tests (17 recovery on real PostgreSQL + 12 classifier): discovery independent of
+  attempt state, two-worker single-create, adopt-CAS stale-token reject, every state path,
+  ordered plan + tie-break, durability across sessions, no-delete-primitive negatives.
+- Budget: 8 files, 875 gross / 819 net (`dispatch.py` −56 via extraction). Applicative all
+  ≤400 (dispatch 394→385 core, domain_recovery 359, real_domain_writer 340, domain_journal 339).
+  Gross ~25 over the 850 ceiling; the excess is ownership-policy-documenting prose the mandate
+  protects from compression (net 819 < 850). No migration (head stays 0011).
+
+**R2-b2b (commit `5066e3d`) — residual findings.** 4 files, 117 raw.
+- close/exception precedence (`_run_domain_phase` finally): close() exactly once; success+
+  close-fail → no false success; exception path preserves the primary, close failure recorded
+  as secondary evidence. Parametric 6-case matrix.
+- `validate_completed_flag` (strict real-boolean; rejects int 1/0, truthy str/list/dict; machine
+  reason codes). 17 tests.
+
+**Tests:** API 1035 passed (R2-b2 core alone autonomously green at 1012); worker 18. Both
+commits atomic above `8c5fcaa`; no push/deploy.
+
+**Still MANUAL (not automated):** ownership-uncertain and started-present/unstable states;
+all domain removals. Recovery worker/scheduler NOT wired (gated off).
+
+**C3 remains BLOCKED** — needs R2-c (`EMAIL_COMPENSATION_IS_RAM_ONLY`, still CRITICAL_OPEN).
