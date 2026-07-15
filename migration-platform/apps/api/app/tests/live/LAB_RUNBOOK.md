@@ -74,12 +74,17 @@ If even one fails → `LAB_MISSING` / `LAB_NOT_QUALIFIED`; do not run the live t
 9. **Denylist/allowlist** — put the lab endpoint id into `CPANEL_TEST_ENDPOINT_ALLOWLIST`; verify it
    is NOT present in `CPANEL_TEST_PRODUCTION_ENDPOINTS` (adding the lab must not weaken the
    production denylist).
-10. **Gateway shim (implemented)** — use `lab_cpanel_gateway.LabCpanelGateway` (test-only), which
-    wraps the real `CpanelClient` + real op builders and exposes ONLY `list_domains()`,
-    `list_forwarders()`, `add_forwarder(source, destination, authorization)`. Mint the one-shot
-    `AuthorizedDisposableLabContext` via `issue_lab_authorization(...)` after ALL gates pass, then
-    wrap with `bind_for_harness(...)` to obtain the 2-arg `add_forwarder` the committed harness
-    calls, and wire that into `test_live_add_forwarder_characterization` (still a placeholder).
+10. **Wiring (implemented, no placeholder)** — the live test calls
+    `lab_wiring.run_wired_live_characterization(...)` (test-only). It composes, in order: the static
+    safety gate → the opaque `LabConnectionGateReceipt` (minted by `issue_connection_receipt(...)`
+    after ALL static gates pass — there is no falsifiable boolean) → the receipt-gated credential
+    loader (`resolve_lab_token`, the ONLY place the token file is opened) → a read-only `CpanelClient`
+    (`allow_destination_writes=False`) behind `LabCpanelReadGateway` (`list_domains`/`list_forwarders`
+    only) → domain-ownership + empty-baseline via the real characterization runner → a fresh,
+    one-shot, operation+pair-specific `AuthorizedDisposableLabContext` per add → a write-enabled
+    `CpanelClient` (`allow_destination_writes=True`) built LAZILY on the first add, behind
+    `LabCpanelWriteGateway`. Both clients are always closed. Only the client factory is swapped in the
+    non-live wiring tests (`test_lab_wiring.py`); the wiring itself is identical.
 11. **Read-only preflight** — run only the read paths: connection/version check, `list_domains`,
     prove the disposable domain is owned, `list_forwarders`, prove no real data, confirm SMTP is
     confined, confirm reset/destroy is concretely possible. Issue **zero** writes.

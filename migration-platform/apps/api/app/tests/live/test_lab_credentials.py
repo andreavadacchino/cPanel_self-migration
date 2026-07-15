@@ -108,35 +108,109 @@ def test_token_never_in_error(repo_root, outside):
         assert _TOKEN not in str(exc) and _TOKEN not in repr(exc)
 
 
-# -- gate ordering: credential not read unless the non-secret gates passed ----
+# -- LabConnectionGateReceipt: the opaque object that REPLACES the falsifiable boolean ----
 
-def test_credential_not_read_when_gates_fail(repo_root, outside):
-    called = {"n": 0}
+_COMMIT = "a0e72e3feedface"
+_ENDPOINT = "disposable-1"
+_DOMAIN = "throwaway-account.test"
+_GATES = {"run_destructive": True, "disposable": True, "reset_approved": True,
+          "endpoint_allowlisted": True, "not_production": True, "domain_configured": True,
+          "working_tree_clean": True, "commit_present": True}
 
-    def _spy_loader(*a, **k):
-        called["n"] += 1
+
+def _receipt(*, gates=None, commit=_COMMIT, endpoint=_ENDPOINT, domain=_DOMAIN,
+             issued_at=1000.0, ttl=60.0, session_nonce="sess-1"):
+    return lc.issue_connection_receipt(
+        gates=_GATES if gates is None else gates, commit=commit, endpoint=endpoint,
+        disposable_domain=domain, issued_at=issued_at, ttl_seconds=ttl, session_nonce=session_nonce)
+
+
+def test_boolean_surface_removed():
+    # the falsifiable `authorized=True` public entrypoint no longer exists
+    assert not hasattr(lc, "resolve_lab_token_after_gates")
+
+
+def test_receipt_issuance_binds_non_secret_state():
+    r = _receipt()
+    assert r.commit == _COMMIT and r.disposable_domain == _DOMAIN
+    assert r.session_nonce == "sess-1"
+    assert r.endpoint_fingerprint == lc.endpoint_fingerprint(_ENDPOINT)
+    assert r.valid_at(1000.0) is True and r.valid_at(1061.0) is False
+
+
+def test_receipt_direct_construction_rejected():
+    with pytest.raises(lc.LabCredentialError):
+        lc.LabConnectionGateReceipt(  # missing module-private sentinel
+            None, commit=_COMMIT, endpoint=_ENDPOINT,
+            endpoint_fingerprint=lc.endpoint_fingerprint(_ENDPOINT), disposable_domain=_DOMAIN,
+            issued_at=1000.0, expires_at=1060.0, session_nonce="s")
+
+
+@pytest.mark.parametrize("bad_gate", sorted(_GATES))
+def test_receipt_refused_when_any_gate_unsatisfied(bad_gate):
+    with pytest.raises(lc.LabCredentialError):
+        _receipt(gates={**_GATES, bad_gate: False})
+
+
+def test_receipt_repr_has_no_endpoint_username_or_token():
+    r = _receipt()
+    blob = repr(r)
+    assert _ENDPOINT not in blob and "token" not in blob.lower()
+    # only the fingerprint (not the raw endpoint) may appear
+    assert lc.endpoint_fingerprint(_ENDPOINT) in blob
+
+
+# -- resolve_lab_token: accepts ONLY a valid receipt; loader untouched on any refusal ----
+
+def _spy():
+    calls = {"n": 0}
+
+    def loader(*a, **k):
+        calls["n"] += 1
         return _TOKEN
 
-    with pytest.raises(lc.LabCredentialError):
-        lc.resolve_lab_token_after_gates(authorized=False, token_file="ignored",
-                                         repo_root=str(repo_root), loader=_spy_loader)
-    assert called["n"] == 0  # loader must never run when a prior gate failed
+    return calls, loader
 
 
-def test_credential_read_only_after_gates(repo_root, outside):
+def test_resolve_reads_token_only_with_valid_receipt(repo_root, outside):
     p = _write(outside / "tok", _TOKEN, 0o600)
-    tok = lc.resolve_lab_token_after_gates(authorized=True, token_file=p,
-                                           repo_root=str(repo_root))
+    tok = lc.resolve_lab_token(_receipt(), p, repo_root=str(repo_root), now=1000.0,
+                               expected_commit=_COMMIT, expected_endpoint=_ENDPOINT,
+                               expected_domain=_DOMAIN)
     assert tok == _TOKEN
 
 
-# -- CpanelCredentials assembly (token never in repr) -------------------------
+@pytest.mark.parametrize("kw", [
+    {"receipt_override": "counterfeit"},          # forged (not a real receipt)
+    {"now": 2000.0},                              # expired
+    {"expected_commit": "other"},                 # commit mismatch
+    {"expected_endpoint": "disposable-2"},        # endpoint mismatch
+    {"expected_domain": "other.test"},            # domain mismatch
+])
+def test_resolve_refuses_and_never_opens_token_file(repo_root, kw):
+    calls, loader = _spy()
+    receipt = kw.pop("receipt_override", None) or _receipt()
+    with pytest.raises(lc.LabCredentialError):
+        lc.resolve_lab_token(receipt, "/nonexistent/should-not-open", repo_root=str(repo_root),
+                             now=kw.get("now", 1000.0),
+                             expected_commit=kw.get("expected_commit", _COMMIT),
+                             expected_endpoint=kw.get("expected_endpoint", _ENDPOINT),
+                             expected_domain=kw.get("expected_domain", _DOMAIN), loader=loader)
+    assert calls["n"] == 0  # the token file is never opened on any refusal
+
+
+# -- CpanelCredentials assembly (receipt-gated; token never in repr) ----------
+
+def _env(p):
+    return {"CPANEL_TEST_USERNAME": "labuser", "CPANEL_TEST_API_HOST": "lab.example",
+            "CPANEL_TEST_API_PORT": "2083", "CPANEL_TEST_TOKEN_FILE": p}
+
 
 def test_build_credentials_token_not_in_repr(repo_root, outside):
     p = _write(outside / "tok", _TOKEN, 0o600)
-    env = {"CPANEL_TEST_USERNAME": "labuser", "CPANEL_TEST_API_HOST": "lab.example",
-           "CPANEL_TEST_API_PORT": "2083", "CPANEL_TEST_TOKEN_FILE": p}
-    creds = lc.build_lab_credentials(env, authorized=True, repo_root=str(repo_root))
+    creds = lc.build_lab_credentials(_env(p), _receipt(), repo_root=str(repo_root), now=1000.0,
+                                     expected_commit=_COMMIT, expected_endpoint=_ENDPOINT,
+                                     expected_domain=_DOMAIN)
     assert creds.username == "labuser" and creds.verify_tls is True
     assert _TOKEN not in repr(creds)  # pydantic repr=False on api_token
 
@@ -145,4 +219,6 @@ def test_build_credentials_missing_username_rejected(repo_root, outside):
     p = _write(outside / "tok", _TOKEN, 0o600)
     env = {"CPANEL_TEST_API_HOST": "lab.example", "CPANEL_TEST_TOKEN_FILE": p}
     with pytest.raises(lc.LabCredentialError):
-        lc.build_lab_credentials(env, authorized=True, repo_root=str(repo_root))
+        lc.build_lab_credentials(env, _receipt(), repo_root=str(repo_root), now=1000.0,
+                                 expected_commit=_COMMIT, expected_endpoint=_ENDPOINT,
+                                 expected_domain=_DOMAIN)

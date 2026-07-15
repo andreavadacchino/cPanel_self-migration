@@ -1,36 +1,41 @@
-"""R2-c4-LAB-GATEWAY — TEST-ONLY restricted cPanel gateway + opaque write-authorization context.
+"""R2-c4-LAB-WIRING — TEST-ONLY read/write cPanel gateways + opaque write-authorization context.
 
 Lives under ``app/tests/live`` (no runtime module imports it). It wraps the REAL ``CpanelClient``
-and the REAL op builders and exposes ONLY the three methods the forwarder harness needs:
-``list_domains``, ``list_forwarders`` and ``add_forwarder(source, destination, authorization)``.
-It never exposes the generic client, ``execute``, arbitrary APIs, a ``__getattr__`` passthrough, or
-any other cPanel write (delete/filter/autoresponder/routing/default-address). Parsing is fail-closed
-(any unexpected shape, partial/ambiguous status, timeout or TLS error becomes a typed
-``LabGatewayError``; a write whose success is not provable is reported indeterminate, never assumed
-successful). Live writes are never auto-retried — the underlying ``add_forwarder_op`` is
-``idempotent=False`` and ``CpanelClient`` does not retry non-idempotent writes.
+and the REAL op builders and splits the restricted surface into two gateways so the read path can
+NEVER reach a write:
 
-A live write cannot be reached with just ``(source, destination)``: it requires an
-``AuthorizedDisposableLabContext`` that can only be minted after ALL harness gates passed and that
-binds the expected commit, endpoint fingerprint and disposable domain, carries a TTL + nonce, and is
-one-shot. The gateway refuses a missing/expired/mismatched/reused/gateless context — every refusal
-issuing ZERO writes. The context holds no credentials and has a safe repr.
+* ``LabCpanelReadGateway`` exposes ONLY ``list_domains`` + ``list_forwarders`` on a client that is
+  constructed with ``allow_destination_writes=False``; it has no ``add_forwarder``/``write``.
+* ``LabCpanelWriteGateway`` exposes ONLY ``add_forwarder(source, destination, authorization)`` on a
+  write-ENABLED client; it never retries (``add_forwarder_op`` is ``idempotent=False``), never
+  exposes the client, and refuses any write whose success is not provable (reported indeterminate).
+
+A live write cannot be reached with just ``(source, destination)``: it requires a fresh, one-shot
+``AuthorizedDisposableLabContext`` DERIVED from a valid ``LabConnectionGateReceipt``. The context
+binds the receipt's session nonce, the commit, the endpoint fingerprint, the disposable domain, the
+EXACT operation (``Email::add_forwarder``) and the EXACT ``(source, destination)`` pair, carries a
+TTL, and is consumed on first use. The gateway refuses a missing/expired/mismatched/reused/forged
+context — every refusal issuing ZERO writes. The context holds no credentials and has a safe repr.
 """
 from __future__ import annotations
 
 import time
 from collections.abc import Mapping
 
+from adapters.cpanel.contract import safe_read
+from adapters.cpanel.domains import parse_domains_data
 from adapters.cpanel.errors import CpanelError
 from app.modules.executions.forwarder_rules import add_forwarder_op, list_forwarders_op
 
-# Real domain read builder + fail-closed parser (reused, not reimplemented).
-try:  # adapters package layout
-    from adapters.cpanel.domains import parse_domains_data
-    from adapters.cpanel.contract import safe_read
-    _DOMAINS_OP = lambda: safe_read("DomainInfo", "domains_data")
-except Exception as _exc:  # pragma: no cover - import guard; surfaced by tests if it ever fires
-    raise
+OP_ADD_FORWARDER = "Email::add_forwarder"
+
+# Module-private sentinel: the context constructor is unreachable without it, so no caller can
+# fabricate a "valid" authorization by hand.
+_AUTH_SENTINEL = object()
+
+
+def _domains_op():
+    return safe_read("DomainInfo", "domains_data")
 
 
 class LabGatewayError(RuntimeError):
@@ -42,33 +47,43 @@ class LabAuthorizationError(RuntimeError):
 
 
 class AuthorizedDisposableLabContext:
-    """Opaque, one-shot write authorization. Exists ONLY if every gate passed. Binds the run to a
-    specific commit + endpoint fingerprint + disposable domain, expires after a TTL, and is consumed
-    on first use. Holds no credentials; its repr never leaks anything sensitive."""
+    """Opaque, one-shot write authorization for ONE ``(operation, source, destination)`` on ONE
+    disposable run. Exists ONLY if minted from a valid receipt after every write gate passed. Holds
+    no credentials; its repr never leaks the raw endpoint or a secret."""
 
-    __slots__ = ("_commit", "_fingerprint", "_domain", "_issued_at", "_expires_at", "_nonce",
-                 "_consumed")
+    __slots__ = ("_session", "_commit", "_fingerprint", "_domain", "_operation", "_source",
+                 "_destination", "_issued_at", "_expires_at", "_nonce", "_consumed")
 
-    def __init__(self, *, expected_commit: str, endpoint_fingerprint: str, disposable_domain: str,
-                 gates: Mapping[str, bool], issued_at: float, ttl_seconds: float, nonce: str):
-        missing = sorted(k for k, v in dict(gates).items() if not v)
-        if missing:
-            raise LabAuthorizationError(f"authorization refused: gate(s) not satisfied: {missing}")
-        if not (expected_commit and endpoint_fingerprint and disposable_domain and nonce):
+    def __init__(self, sentinel, *, session_nonce: str, expected_commit: str,
+                 endpoint_fingerprint: str, disposable_domain: str, operation: str, source: str,
+                 destination: str, issued_at: float, expires_at: float, nonce: str):
+        if sentinel is not _AUTH_SENTINEL:
+            raise LabAuthorizationError(
+                "authorization context constructor is private; use issue_write_authorization")
+        if not (session_nonce and expected_commit and endpoint_fingerprint and disposable_domain
+                and operation and source and destination and nonce):
             raise LabAuthorizationError("authorization refused: incomplete binding")
-        if ttl_seconds <= 0:
+        if expires_at <= issued_at:
             raise LabAuthorizationError("authorization refused: non-positive ttl")
+        self._session = session_nonce
         self._commit = expected_commit
         self._fingerprint = endpoint_fingerprint
         self._domain = disposable_domain.strip().lower()
+        self._operation = operation
+        self._source = source.strip().lower()
+        self._destination = destination.strip().lower()
         self._issued_at = float(issued_at)
-        self._expires_at = float(issued_at) + float(ttl_seconds)
+        self._expires_at = float(expires_at)
         self._nonce = nonce
         self._consumed = False
 
-    def _matches(self, *, commit: str, fingerprint: str, domain: str, now: float) -> bool:
-        return (not self._consumed and now < self._expires_at and self._commit == commit
-                and self._fingerprint == fingerprint and self._domain == domain.strip().lower())
+    def _matches(self, *, session: str, commit: str, fingerprint: str, domain: str, operation: str,
+                 source: str, destination: str, now: float) -> bool:
+        return (not self._consumed and now < self._expires_at
+                and self._session == session and self._commit == commit
+                and self._fingerprint == fingerprint and self._domain == domain.strip().lower()
+                and self._operation == operation and self._source == source.strip().lower()
+                and self._destination == destination.strip().lower())
 
     def _consume(self) -> None:
         if self._consumed:
@@ -77,17 +92,33 @@ class AuthorizedDisposableLabContext:
 
     def __repr__(self) -> str:
         return (f"AuthorizedDisposableLabContext(endpoint={self._fingerprint!r}, "
-                f"domain={self._domain!r}, consumed={self._consumed})")
+                f"domain={self._domain!r}, operation={self._operation!r}, "
+                f"consumed={self._consumed})")
 
 
-def issue_lab_authorization(*, expected_commit: str, endpoint_fingerprint: str,
-                            disposable_domain: str, gates: Mapping[str, bool], issued_at: float,
-                            ttl_seconds: float, nonce: str) -> AuthorizedDisposableLabContext:
-    """Mint a one-shot context; raises unless EVERY gate is satisfied."""
+def issue_write_authorization(receipt, *, operation: str, source: str, destination: str,
+                              gates: Mapping[str, bool], issued_at: float,
+                              ttl_seconds: float, nonce: str) -> AuthorizedDisposableLabContext:
+    """Mint a one-shot, operation+pair-specific context DERIVED from a valid connection receipt.
+    Raises unless EVERY write gate is satisfied, the operation is supported, the source is on the
+    receipt's disposable domain, and the receipt is still valid at ``issued_at``."""
+    missing = sorted(k for k, v in dict(gates).items() if not v)
+    if missing:
+        raise LabAuthorizationError(f"authorization refused: gate(s) not satisfied: {missing}")
+    if ttl_seconds <= 0:
+        raise LabAuthorizationError("authorization refused: non-positive ttl")
+    if operation != OP_ADD_FORWARDER:
+        raise LabAuthorizationError("authorization refused: unsupported operation")
+    domain = receipt.disposable_domain
+    if "@" not in source or source.split("@", 1)[1].strip().lower() != domain:
+        raise LabAuthorizationError("authorization refused: source not on the receipt domain")
+    if not receipt.valid_at(issued_at):
+        raise LabAuthorizationError("authorization refused: connection receipt expired")
     return AuthorizedDisposableLabContext(
-        expected_commit=expected_commit, endpoint_fingerprint=endpoint_fingerprint,
-        disposable_domain=disposable_domain, gates=gates, issued_at=issued_at,
-        ttl_seconds=ttl_seconds, nonce=nonce)
+        _AUTH_SENTINEL, session_nonce=receipt.session_nonce, expected_commit=receipt.commit,
+        endpoint_fingerprint=receipt.endpoint_fingerprint, disposable_domain=domain,
+        operation=operation, source=source, destination=destination, issued_at=float(issued_at),
+        expires_at=float(issued_at) + float(ttl_seconds), nonce=nonce)
 
 
 def _write_marker(result: object) -> dict:
@@ -100,25 +131,20 @@ def _write_marker(result: object) -> dict:
     return {"ok": False, "status": "indeterminate"}
 
 
-class LabCpanelGateway:
-    """The restricted gateway. Constructed with a real (or fake) ``CpanelClient`` bound to ONE
-    disposable endpoint + domain + expected commit."""
+class LabCpanelReadGateway:
+    """Read-only gateway. Wraps a client built with ``allow_destination_writes=False`` and exposes
+    ONLY the two reads the harness needs. It has NO write path and never exposes the client."""
 
-    __slots__ = ("__client", "__fingerprint", "__domain", "__commit", "__clock")
+    __slots__ = ("__client",)
 
-    def __init__(self, client, *, endpoint_fingerprint: str, disposable_domain: str,
-                 expected_commit: str, clock=time.time):
+    def __init__(self, client):
         self.__client = client
-        self.__fingerprint = endpoint_fingerprint
-        self.__domain = disposable_domain.strip().lower()
-        self.__commit = expected_commit
-        self.__clock = clock
 
     # NOTE: no __getattr__ — an unknown attribute must raise AttributeError, never pass through.
 
     def list_domains(self) -> list[str]:
         try:
-            result = self.__client.read(_DOMAINS_OP())
+            result = self.__client.read(_domains_op())
             records = parse_domains_data(result.data)
         except CpanelError as exc:
             raise LabGatewayError(f"list_domains failed: {type(exc).__name__}") from None
@@ -137,16 +163,33 @@ class LabCpanelGateway:
                 raise LabGatewayError("list_forwarders entry is not an object")
         return data
 
+    def close(self) -> None:
+        self.__client.close()
+
+
+class LabCpanelWriteGateway:
+    """Write gateway. Wraps a write-ENABLED client and exposes ONLY ``add_forwarder``. Each call
+    requires an ``AuthorizedDisposableLabContext`` that must bind THIS receipt/commit/endpoint/
+    domain and the EXACT operation + ``(source, destination)`` pair; any mismatch (or a missing,
+    expired, reused or forged context) raises before any write. The client is never exposed."""
+
+    __slots__ = ("__client", "__receipt", "__clock")
+
+    def __init__(self, client, *, receipt, clock=time.time):
+        self.__client = client
+        self.__receipt = receipt
+        self.__clock = clock
+
     def add_forwarder(self, source: str, destination: str, authorization) -> dict:
         if not isinstance(authorization, AuthorizedDisposableLabContext):
             raise LabGatewayError("add_forwarder requires a valid authorization context")
-        now = self.__clock()
-        if not authorization._matches(commit=self.__commit, fingerprint=self.__fingerprint,
-                                      domain=self.__domain, now=now):
-            raise LabGatewayError("authorization does not bind this gateway/commit/domain "
+        r = self.__receipt
+        if not authorization._matches(session=r.session_nonce, commit=r.commit,
+                                      fingerprint=r.endpoint_fingerprint, domain=r.disposable_domain,
+                                      operation=OP_ADD_FORWARDER, source=source,
+                                      destination=destination, now=self.__clock()):
+            raise LabGatewayError("authorization does not bind this receipt/operation/pair "
                                   "or is expired/used")
-        if "@" not in source or source.split("@", 1)[1].strip().lower() != self.__domain:
-            raise LabGatewayError("source is not on the authorized disposable domain")
         authorization._consume()  # one-shot: consumed only after all binding checks pass
         try:
             result = self.__client.write(add_forwarder_op(source, destination))
@@ -154,49 +197,10 @@ class LabCpanelGateway:
             raise LabGatewayError(f"add_forwarder failed: {type(exc).__name__}") from None
         return _write_marker(result)
 
-    # expose the binding (non-secret) so a harness binder can mint matching contexts
-    @property
-    def binding(self) -> tuple[str, str, str]:
-        return (self.__commit, self.__fingerprint, self.__domain)
+    def close(self) -> None:
+        self.__client.close()
 
 
-class _BoundLabGateway:
-    """Harness-facing 2-arg adapter: presents the ``add_forwarder(source, destination)`` shape the
-    committed harness calls, minting a FRESH one-shot context per add from held gate evidence."""
-
-    __slots__ = ("__gw", "__gates", "__clock", "__ttl", "__nonce")
-
-    def __init__(self, gateway: LabCpanelGateway, *, gates, clock, ttl_seconds, nonce_factory):
-        self.__gw = gateway
-        self.__gates = dict(gates)
-        self.__clock = clock
-        self.__ttl = ttl_seconds
-        self.__nonce = nonce_factory
-
-    def list_domains(self):
-        return self.__gw.list_domains()
-
-    def list_forwarders(self):
-        return self.__gw.list_forwarders()
-
-    def add_forwarder(self, source: str, destination: str) -> dict:
-        commit, fingerprint, domain = self.__gw.binding
-        ctx = issue_lab_authorization(
-            expected_commit=commit, endpoint_fingerprint=fingerprint, disposable_domain=domain,
-            gates=self.__gates, issued_at=self.__clock(), ttl_seconds=self.__ttl,
-            nonce=self.__nonce())
-        return self.__gw.add_forwarder(source, destination, ctx)
-
-
-def bind_for_harness(gateway: LabCpanelGateway, *, gates, clock=time.time, ttl_seconds: float = 30.0,
-                     nonce_factory=None) -> _BoundLabGateway:
-    """Wrap ``gateway`` for the committed harness's 2-arg ``add_forwarder`` call."""
-    if nonce_factory is None:
-        import uuid
-        nonce_factory = lambda: uuid.uuid4().hex
-    return _BoundLabGateway(gateway, gates=gates, clock=clock, ttl_seconds=ttl_seconds,
-                            nonce_factory=nonce_factory)
-
-
-__all__ = ["LabGatewayError", "LabAuthorizationError", "AuthorizedDisposableLabContext",
-           "issue_lab_authorization", "LabCpanelGateway", "bind_for_harness"]
+__all__ = ["OP_ADD_FORWARDER", "LabGatewayError", "LabAuthorizationError",
+           "AuthorizedDisposableLabContext", "issue_write_authorization",
+           "LabCpanelReadGateway", "LabCpanelWriteGateway"]

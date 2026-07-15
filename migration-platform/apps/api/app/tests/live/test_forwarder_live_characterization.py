@@ -8,10 +8,13 @@ mutates the capability policy.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.modules.executions import email_recovery_capability_policy as pol
 from app.tests.live import forwarder_live_characterization as lc
+from app.tests.live import lab_wiring as lw
 
 _FULL_ENV = {
     lc.ENV_RUN_DESTRUCTIVE: "1",
@@ -291,6 +294,9 @@ def test_characterization_does_not_touch_capability_policy():
 
 
 # -- the actual LIVE test: skipped unless the real triple opt-in is set --------
+# It runs the REAL `run_wired_live_characterization` path (see lab_wiring.py, exercised end-to-end
+# with fakes in test_lab_wiring.py), but here with the REAL CpanelClient factories (default), the
+# REAL git status/HEAD providers, and the real token file. It is never collected as a write in CI.
 
 _REAL = lc.live_characterization_authorized()  # reads the real process env
 
@@ -298,6 +304,10 @@ _REAL = lc.live_characterization_authorized()  # reads the real process env
 @pytest.mark.skipif(not _REAL.authorized,
                     reason=f"live cPanel characterization disabled ({_REAL.reason})")
 def test_live_add_forwarder_characterization():  # pragma: no cover - never runs in CI
-    raise AssertionError(
-        "A real disposable cPanel gateway must be wired here by the operator before enabling; "
-        "this harness intentionally has no production gateway bound.")
+    import time
+
+    report = lw.run_wired_live_characterization(
+        env=os.environ, repo_root=lc._repo_root(), now=time.time,
+        status_provider=lc._default_git_status, head_provider=lc._default_git_head, timestamp=None)
+    # observation only: never assert a capability, never promote anything
+    assert report["capability_promoted"] is False
