@@ -171,13 +171,26 @@ classificazione degli orfani; **non** avvia subprocess, non apre SSH, non risolv
   takeover (niente A2 creato all'acquisizione). Il retry tecnico è policy futura ed esplicita.
 - Fencing = **solo control-plane**: un worker con lease scaduto non aggiorna più PostgreSQL. Non
   fencia un subprocess Go orfano che scrive da remoto — per questo `partial` non invita mai un retry.
+- **Ordine dei lock uniforme**: `migration_execution` poi `execution_attempt`, sempre. Il clock DB
+  viene letto **dopo** l'ultimo lock, così un lease che scade mentre l'operazione è bloccata sulla
+  riga execution è visto come scaduto (`LeaseExpired`), non mutato con timestamp obsoleto —
+  verificato su Postgres con contention reale (due connessioni) su `mark_writes_started` e
+  `finish_attempt`.
+- **Validazione input fail-closed**: `lease_seconds<=0` → `InvalidLeaseDuration`, `worker_id`
+  vuoto/whitespace → `InvalidWorkerIdentity` (nessun errore riporta il token). `IntegrityError`
+  classificato come lease conflict solo se il constraint è `uq_execution_one_active_attempt`/
+  `uq_execution_attempt_number`; altrimenti propagato.
 
-Un vincolo è **del database**, non di un servizio:
+Vincoli **del database** (non di un servizio):
 
 - `uq_execution_one_active_attempt` — unique parziale su `execution_id WHERE status IN
   ('acquired','running')`: **un solo attempt attivo per execution**. Due worker che acquisiscono in
   gara producono un solo vincitore (lock `FOR UPDATE` sulla riga execution + questo indice come
   backstop) — verificato su Postgres reale con due connessioni/thread.
+- Quattro `CHECK` (difesa in profondità contro scritture fuori dal service): `ck_..._status` (enum
+  valido), `ck_..._number_positive` (`attempt_number>0`), `ck_..._lease_interval`
+  (`lease_expires_at>lease_acquired_at`), `ck_..._finished_when_terminal` (`finished_at` presente se
+  terminale) — presenza verificata via introspezione su Postgres reale.
 
 ## Confine API ↔ worker
 
@@ -245,13 +258,13 @@ Eseguiti da un **venv creato fuori dal worktree**, con provenance verificata (`_
 
 | Gate | Esito |
 |---|---|
-| `pytest` API | 415 passed (385 base + 30 nuovi) |
+| `pytest` API | 428 passed (385 base + 43 nuovi) |
 | `pytest` domain | 147 passed |
 | `pytest` worker (`DRAMATIQ_TESTING=1`) | 15 passed |
-| `pytest` concorrenza **Postgres reale** (`TEST_POSTGRES_URL`) | 5 passed — acquire single-winner (2 thread), unique partial index sotto contention, lease-expiry via `clock_timestamp()` (sleep reale, nessun clock Python), reconcile concorrente (una volta sola), migration up/down/up |
-| Race single-winner + reconcile concorrente | 8 ripetizioni, zero flake |
+| `pytest` concorrenza **Postgres reale** (`TEST_POSTGRES_URL`) | 9 passed — acquire single-winner (2 thread), unique partial index sotto contention, lease-expiry via `clock_timestamp()`, reconcile concorrente (una volta sola), **lease scade durante l'attesa del lock** (mark + finish, 2 connessioni), CHECK rifiuta righe invalide, `IntegrityError` non-conflict non mascherato, migration up/down/up |
+| Race + contention ripetute | 5 ripetizioni, zero flake |
 | Alembic up/down/up (SQLite) | OK (0001→0010, incl. `drop_column writes_started`) |
-| Alembic `0001→0010` su **Postgres reale**, volume nuovo | OK (+ down→up); `execution_attempts` + `migration_executions.writes_started` + 3 indici |
+| Alembic `0001→0010` su **Postgres reale**, volume nuovo | OK (+ down→up); introspezione conferma tabella + `writes_started` + 4 `CHECK` + indici |
 | `docker compose config` | OK |
 | Contratto Go / file `contract` | **non toccati** (verificato: zero file Go/contract nel diff) |
 | `npm run build` | **non eseguito** — il web non è toccato da questa PR |

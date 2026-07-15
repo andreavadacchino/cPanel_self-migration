@@ -98,6 +98,64 @@ fencing token che la destinazione stessa rifiuta) è un problema distinto e futu
 questo che un attempt scaduto con `writes_started` diventa `partial` e non invita mai un retry
 automatico: la piattaforma non può provare che le write remote siano cessate.
 
+### Ordine dei lock e clock dopo il lock
+
+Le operazioni che toccano sia l'attempt sia l'execution prendono i lock in un
+**ordine unico: `migration_execution` poi `execution_attempt`**. `acquire_attempt`
+blocca l'execution per id; le altre risolvono l'`execution_id` immutabile
+dell'attempt con una lettura **senza lock** e poi bloccano nell'ordine canonico.
+Un ordine misto fra funzioni diverse (una `attempt→execution`, un'altra
+`execution→attempt`) è un deadlock latente: qui non esiste.
+
+Il singolo `clock_timestamp()` viene letto **dopo** aver preso l'ultimo lock, non
+prima. Questo chiude una race concreta: se un'operazione legge il clock e valida
+il lease, poi resta bloccata in attesa del secondo lock (un'altra transazione
+tiene la riga execution), e nel frattempo il lease scade, senza questa regola
+committerebbe con un timestamp obsoleto — un owner scaduto potrebbe ancora
+marcare `writes_started` o terminalizzare. Leggendo il clock dopo l'ultimo lock,
+un lease scaduto durante l'attesa viene visto come scaduto (`LeaseExpired`), e la
+riga resta invariata. La riconciliazione blocca ogni candidato nello stesso
+ordine e ri-controlla sotto lock.
+
+### Garanzie: database contro service
+
+L'ADR-001 dice "la UI non è una barriera"; questa PR aggiunge che nemmeno il
+service è l'unica barriera per gli invarianti strutturali. La divisione è
+esplicita e non va confusa:
+
+| Garantito dal **database** | Garantito dal **service** |
+|---|---|
+| FK `attempt → execution` (CASCADE) | transizioni legali della state machine |
+| unicità `(execution_id, attempt_number)` | ownership (`worker_id`) su ogni mutazione |
+| un solo attempt attivo per execution (indice unique parziale) | validità del lease **al momento effettivo** della transizione |
+| vocabolario di `status` valido (`CHECK`) | monotonicità di `writes_started` |
+| `attempt_number > 0` (`CHECK`) | immutabilità terminale attraverso queste API |
+| `lease_expires_at > lease_acquired_at` (`CHECK`) | mapping attempt → execution |
+| `finished_at` presente se terminale (`CHECK`) | riconciliazione e assenza di retry automatico |
+
+I `CHECK` sono difesa in profondità contro scritture fatte **fuori** dal service
+(SQL grezzo, un bug): una riga con `status='runing'` non verrebbe riconosciuta
+come attiva dall'indice parziale e aggirerebbe l'invariante "un solo attempt
+attivo" — il `CHECK` la rifiuta all'origine. Non si dichiara "immutabile nel
+database" ciò che solo il service protegge (es. la monotonicità di
+`writes_started` e l'immutabilità terminale sono garanzie del *service*, non
+`CHECK`/trigger). Il fencing resta del control-plane, non delle write esterne.
+
+### Input e classificazione degli errori
+
+Le funzioni pubbliche rifiutano fail-closed, **prima** di toccare righe, un
+`lease_seconds <= 0` (`InvalidLeaseDuration`) e un `worker_id` vuoto o
+whitespace-only (`InvalidWorkerIdentity`) — nessun errore riporta il token
+presentato. `acquire_attempt` classifica un `IntegrityError` come conflitto di
+lease (`LeaseHeldByAnotherWorker`) **solo** quando la violazione corrisponde
+davvero a `uq_execution_one_active_attempt` o `uq_execution_attempt_number`
+(nome del constraint dalla diagnostica psycopg; fallback sul messaggio per
+SQLite): qualunque altro `IntegrityError` (es. un `CHECK`) viene propagato, non
+mascherato. Una terminalizzazione che troverebbe l'execution già terminale con
+uno stato **incompatibile** con l'esito dell'attempt solleva
+`AggregateStateConflict` (invariante rotta) e fa rollback senza modifiche; con lo
+**stesso** stato è idempotente.
+
 ### Propagazione monotona di `writes_started`
 
 `writes_started` transita solo da `false` a `true`, mai indietro. Esiste sull'attempt (questo
