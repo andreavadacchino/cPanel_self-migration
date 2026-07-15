@@ -385,6 +385,14 @@ class EmailWriteJournal(Base):
         ),
         CheckConstraint("operation_type IN ('additive_create','overwrite')",
                         name="ck_email_journal_operation_type"),
+        # v2 identity digest contract (R2-c4a0): legacy rows are v1/NULL (never
+        # auto-recoverable); new rows are v2 with a non-NULL HMAC identity digest.
+        CheckConstraint("identity_contract_version IN (1, 2)",
+                        name="ck_email_journal_identity_version"),
+        CheckConstraint(
+            "(identity_contract_version = 1 AND identity_digest IS NULL) OR "
+            "(identity_contract_version = 2 AND identity_digest IS NOT NULL)",
+            name="ck_email_journal_identity_digest"),
         Index("ix_email_journal_run", "execution_run_id"),
         Index("ix_email_journal_attempt", "execution_attempt_id"),
         Index("ix_email_journal_status", "status"),
@@ -408,6 +416,11 @@ class EmailWriteJournal(Base):
     compensation_type: Mapped[str] = mapped_column(String(32), nullable=False)
     backup_ref: Mapped[str | None] = mapped_column(String(64))                # overwrite -> EmailWriteBackup
     failure_code: Mapped[str | None] = mapped_column(String(64))
+    # v2 identity digest (R2-c4a0). ``identity_contract_version`` defaults to 1 so an
+    # old-code insert (no identity columns) stays valid without a DB downgrade; new
+    # intents write 2 + a non-NULL ``identity_digest`` (opaque HMAC, never a raw value).
+    identity_contract_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    identity_digest: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

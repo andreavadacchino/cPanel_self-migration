@@ -31,6 +31,21 @@ from app.modules.readiness import models as _readiness_models  # noqa: F401
 from app.modules.migrations import models as _migrations_models  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def _email_identity_digest_key() -> Iterator[None]:
+    """Every new email write intent needs the dedicated, version-selected v2 digest key
+    (R2-c4a0). Set a stable test key so the frozen journal/recovery suites keep passing; tests
+    that assert key-absence behaviour override it locally and this restores it afterwards."""
+    from app.core.config import settings
+
+    prev = settings.email_identity_digest_key_v2
+    settings.email_identity_digest_key_v2 = "test-email-identity-digest-key-v2"
+    try:
+        yield
+    finally:
+        settings.email_identity_digest_key_v2 = prev
+
+
 @pytest.fixture
 def engine() -> Iterator[Engine]:
     engine = create_engine(

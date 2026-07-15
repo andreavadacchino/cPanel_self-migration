@@ -19,6 +19,7 @@ encrypted ``EmailWriteBackup``, linked by ``backup_ref`` for overwrites).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -28,7 +29,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.core.errors import ConflictError
+from app.core.config import settings
+from app.core.errors import ConfigurationError, ConflictError
 from app.modules.executions import lease as lease_service
 from app.modules.executions.models import (
     EMAIL_WRITE_BLOCKING_STATUSES,
@@ -63,6 +65,111 @@ def redact_item(category: str, raw: str) -> str:
 def operation_key(category: str, item_key: str) -> str:
     """Deterministic, attempt-independent anchor component (already-redacted item)."""
     return f"{category}:{item_key}"
+
+
+# --- v2 identity-bearing digest (R2-c4a0) ------------------------------------
+# An HMAC-SHA256 binding of the DESTINATION-BOUND scope + run + category + operation_key +
+# canonical identity + canonical desired, reproducible from the immutable snapshot after a
+# restart (so a future shadow probe can match an operation without trusting the raw journal).
+# It is INERT here: computed and stored on every new intent, consumed by nothing yet.
+#
+# SCOPE (CODE_TRUTH): the domain has NO tenant/organization/customer concept, so this is NOT
+# a tenant-isolation boundary. The durable, restart-reconstructable boundary is
+# ``execution_run_id`` + ``destination_endpoint_id`` (the endpoints PK: globally unique and
+# not reused by a Postgres identity sequence, owned by a migration — NOT by a tenant). The
+# material therefore binds ``scope.destination_endpoint_id`` only; it never fabricates a
+# tenant field.
+#
+# Canonicalization is per-category and ALLOWLISTED — only stable identity/desired keys are
+# digested. Volatile/diagnostic keys (``now``, ``*_status``, intermediate ``policy``, derived
+# ``*_fingerprint``, ``*_present``, ``local``) are excluded by omission (no generic key
+# stripping), so the digest is stable across attempts and timestamps.
+#
+# KEY VERSIONING: the digest key is chosen by ``identity_contract_version`` (the contract
+# version IS the key version — no separate key_id column). v2 uses exclusively
+# ``email_identity_digest_key_v2`` with NO silent fallback; its absence rejects the v2 intent
+# BEFORE any side effect. Comparison uses ``hmac.compare_digest``. Only the opaque digest is
+# ever stored/returned; no raw value leaks into an event, error or repr.
+IDENTITY_CONTRACT_VERSION = 2
+_IDENTITY_DIGEST_PREFIX = "idg2:"
+
+_IDENTITY_FIELDS: dict[str, tuple[str, ...]] = {
+    "email_forwarders": ("source", "destination"),
+    "default_address": ("domain",),
+    "email_routing": ("domain",),
+    "email_filters": ("scope", "scope_account", "filtername"),
+    "email_autoresponders": ("address",),
+}
+_DESIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "email_forwarders": ("source", "destination"),
+    "default_address": ("source_raw",),
+    "email_routing": ("source_routing",),
+    "email_filters": ("rules", "actions"),
+    "email_autoresponders": ("fields",),
+}
+
+
+def _canonical_subset(payload: dict, fields: tuple[str, ...]) -> dict:
+    return {k: payload[k] for k in fields if k in payload}
+
+
+def _identity_digest_key(contract_version: int) -> bytes:
+    """Resolve the HMAC key for the given identity contract version. Only v2 has a digest+key;
+    v1 rows carry no digest (manual recovery) and any other version is unsupported. No silent
+    fallback to a generic key. A missing v2 key fails closed BEFORE any side effect."""
+    if contract_version != IDENTITY_CONTRACT_VERSION:
+        raise ConflictError(
+            f"Email identity digest: versione contratto non supportata ({contract_version})")
+    key = settings.email_identity_digest_key_v2
+    if not isinstance(key, str) or not key:
+        raise ConfigurationError("EMAIL_IDENTITY_DIGEST_KEY_V2 non configurata")
+    return key.encode("utf-8")
+
+
+def identity_material(*, destination_endpoint_id: int, run_id: int, category: str,
+                      operation_key: str, payload: dict,
+                      contract_version: int = IDENTITY_CONTRACT_VERSION) -> dict:
+    """The category-specific, allowlisted, destination-bound material bound by the v2 digest."""
+    if category not in _IDENTITY_FIELDS:
+        raise ConflictError(f"Email identity digest: categoria non ammessa ({category})")
+    return {
+        "version": contract_version,
+        "scope": {"destination_endpoint_id": destination_endpoint_id},
+        "execution_run_id": run_id,
+        "category": category,
+        "operation_key": operation_key,
+        "identity": _canonical_subset(payload, _IDENTITY_FIELDS[category]),
+        "desired": _canonical_subset(payload, _DESIRED_FIELDS[category]),
+    }
+
+
+def compute_identity_digest(*, destination_endpoint_id: int, run_id: int, category: str,
+                            operation_key: str, payload: dict,
+                            contract_version: int = IDENTITY_CONTRACT_VERSION) -> str:
+    """HMAC-SHA256 of the canonical material under the version-selected key. Rejects a missing
+    key BEFORE the caller reaches any side effect. Never logs or returns the raw material."""
+    key = _identity_digest_key(contract_version)
+    material = identity_material(destination_endpoint_id=destination_endpoint_id, run_id=run_id,
+                                 category=category, operation_key=operation_key, payload=payload,
+                                 contract_version=contract_version)
+    canonical = json.dumps(material, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False, default=str)
+    mac = hmac.new(key, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
+    return _IDENTITY_DIGEST_PREFIX + mac
+
+
+def verify_identity_digest(expected: str, *, destination_endpoint_id: int, run_id: int,
+                           category: str, operation_key: str, payload: dict,
+                           contract_version: int = IDENTITY_CONTRACT_VERSION) -> bool:
+    """Constant-time check that ``expected`` matches the recomputed digest. Any falsy/non-string
+    expected is False; the comparison uses ``hmac.compare_digest``. Used by the R2-c4a shadow
+    probe — never mutates anything."""
+    if not isinstance(expected, str) or not expected:
+        return False
+    actual = compute_identity_digest(
+        destination_endpoint_id=destination_endpoint_id, run_id=run_id, category=category,
+        operation_key=operation_key, payload=payload, contract_version=contract_version)
+    return hmac.compare_digest(expected, actual)
 
 
 @dataclass(frozen=True)
@@ -123,6 +230,7 @@ class EmailJournalRepository:
         self, *, run_id: int, attempt_id: int, fencing_token: int, category: str,
         operation_type: str, item_key: str, requested_payload_hash: str,
         precondition_state: str, precondition_fingerprint: str, compensation_type: str,
+        identity_digest: str | None = None, identity_contract_version: int = 1,
     ) -> tuple[EmailJournalRef, str]:
         """Commit the intent BEFORE any side effect. Returns ``(ref, replay)``.
 
@@ -142,6 +250,8 @@ class EmailJournalRepository:
                 "precondition_state": precondition_state,
                 "precondition_fingerprint": precondition_fingerprint,
                 "compensation_type": compensation_type,
+                "identity_digest": identity_digest,
+                "identity_contract_version": identity_contract_version,
             })
             row = sess.scalar(
                 select(EmailWriteJournal).where(
@@ -283,17 +393,25 @@ class EmailJournalRecorder:
     category: str
     operation_type: str
     compensation_type: str
+    destination_endpoint_id: int  # v2 identity digest tenant anchor (the destination account)
 
     def open_intent(self, *, raw_item: str, requested_payload: dict,
                     precondition_state: str, precondition_evidence) -> tuple[EmailJournalRef, str]:
+        item_key = redact_item(self.category, raw_item)
+        op_key = operation_key(self.category, item_key)
+        # v2 digest FIRST: a missing key rejects the intent before the durable insert
+        # and before any cPanel side effect (this runs before ``gateway.create``).
+        digest = compute_identity_digest(
+            destination_endpoint_id=self.destination_endpoint_id, run_id=self.run_id,
+            category=self.category, operation_key=op_key, payload=requested_payload)
         return self.repository.open_intent(
             run_id=self.run_id, attempt_id=self.attempt_id, fencing_token=self.fencing_token,
-            category=self.category, operation_type=self.operation_type,
-            item_key=redact_item(self.category, raw_item),
+            category=self.category, operation_type=self.operation_type, item_key=item_key,
             requested_payload_hash=fingerprint(requested_payload),
             precondition_state=precondition_state,
             precondition_fingerprint=fingerprint(precondition_evidence),
-            compensation_type=self.compensation_type)
+            compensation_type=self.compensation_type,
+            identity_digest=digest, identity_contract_version=IDENTITY_CONTRACT_VERSION)
 
     def mark_started(self, ref: EmailJournalRef, *, backup_ref: str | None = None) -> None:
         self.repository.mark_started(ref, backup_ref=backup_ref)
@@ -313,7 +431,8 @@ def recorder_for_email(db: Session, run, attempt, *, category: str, operation_ty
         repository=EmailJournalRepository(db.get_bind(),
                                           destination_endpoint_id=run.destination_endpoint_id),
         run_id=run.id, attempt_id=attempt.id, fencing_token=attempt.fencing_token,
-        category=category, operation_type=operation_type, compensation_type=compensation_type)
+        category=category, operation_type=operation_type, compensation_type=compensation_type,
+        destination_endpoint_id=run.destination_endpoint_id)
 
 
 # The engine (``email_write.execute_email_phase``) is shared by five category writers,
@@ -339,7 +458,9 @@ def current_recorder() -> EmailJournalRecorder | None:
 
 __all__ = [
     "COMPENSATION_MANUAL", "COMPENSATION_RESTORE", "CONTRACT_VERSION",
+    "IDENTITY_CONTRACT_VERSION",
     "EmailJournalRecorder", "EmailJournalRef", "EmailJournalRepository",
-    "blocking_operations", "bound_recorder", "current_recorder", "fingerprint",
-    "open_operations", "operation_key", "recorder_for_email", "redact_item",
+    "blocking_operations", "bound_recorder", "compute_identity_digest", "current_recorder",
+    "fingerprint", "identity_material", "open_operations", "operation_key",
+    "recorder_for_email", "redact_item", "verify_identity_digest",
 ]

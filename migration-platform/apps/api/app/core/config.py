@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     # when a backup is persisted or loaded; its absence fails closed before any write. Losing
     # this key makes the encrypted backups — and therefore rollback — unrecoverable.
     email_backup_encryption_key: str | None = None
+    # Versioned, dedicated, stable HMAC-SHA256 key for the v2 email identity digest
+    # (B4e-iii-c R2-c4a0). The key is chosen by identity_contract_version (the contract
+    # version IS the key version): v2 rows use exclusively this key, with NO silent fallback
+    # to a generic key. It is SEPARATE from the credential/backup keys. Required for every NEW
+    # email write intent: its absence rejects the v2 intent BEFORE insert and any side effect.
+    # It is a MAC key, not an encryption key — losing it only forces manual recovery.
+    # ROTATION CONTRACT: this key MUST NOT be replaced or removed while any recoverable v2
+    # journal row exists (doing so makes those rows digest-unverifiable). A future v3 must add
+    # a DISTINCT key (email_identity_digest_key_v3) and keep this one available.
+    email_identity_digest_key_v2: str | None = None
     preflight_inline: bool = False
     # Hard safety switch. Only "mock" is implemented; "real" is rejected.
     domain_writer_mode: str = "disabled"
