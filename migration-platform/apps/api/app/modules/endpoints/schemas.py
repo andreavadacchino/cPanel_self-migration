@@ -14,6 +14,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from adapters.ssh_host_keys import MAX_HOST_KEY
 from adapters.ssh_keys import InvalidPrivateKey, load_private_key_or_raise
 from app.modules.endpoints.models import (
     AuthType,
@@ -297,6 +298,33 @@ class SshCredentialBundle(BaseModel):
                 )
         if not wanted:
             raise ValueError("a ref source requires the matching *_ref for the method")
+
+
+class SshHostKeyUpsert(BaseModel):
+    """Pin (replace) an endpoint's SSH host key.
+
+    The client sends only the public key. Host, port and fingerprint are the
+    server's to decide — there is deliberately no field for them here, so the
+    client cannot bind a pin to coordinates or a fingerprint of its choosing.
+    ``extra='forbid'`` refuses a smuggled ``host``/``port``/``fingerprint``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    public_key: str = Field(min_length=1, max_length=MAX_HOST_KEY)
+
+
+class SshHostKeyRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    endpoint_id: int
+    host: str
+    port: int
+    key_type: str
+    public_key: str
+    fingerprint_sha256: str
+    created_at: datetime
+    updated_at: datetime
 
 
 class EndpointRead(BaseModel):

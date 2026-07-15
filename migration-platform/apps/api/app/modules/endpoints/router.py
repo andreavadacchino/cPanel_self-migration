@@ -17,6 +17,8 @@ from app.modules.endpoints.schemas import (
     EndpointRead,
     EndpointUpdate,
     SshCredentialBundle,
+    SshHostKeyRead,
+    SshHostKeyUpsert,
 )
 
 # Nested under a migration.
@@ -117,3 +119,47 @@ def set_ssh_credentials(
     resolves a ref. The response never carries a secret, only the has_* flags.
     """
     return service.set_ssh_credentials(db, endpoint_id, payload)
+
+
+@endpoints_router.get(
+    "/{endpoint_id}/ssh-host-key", response_model=SshHostKeyRead
+)
+def get_ssh_host_key(
+    endpoint_id: int, db: Session = Depends(get_db)
+) -> SshHostKeyRead:
+    """Return the endpoint's pinned SSH host key (404 if none, or if stale)."""
+    return service.get_ssh_host_key(db, endpoint_id)
+
+
+@endpoints_router.put(
+    "/{endpoint_id}/ssh-host-key", response_model=SshHostKeyRead
+)
+def set_ssh_host_key(
+    endpoint_id: int,
+    payload: SshHostKeyUpsert,
+    db: Session = Depends(get_db),
+) -> SshHostKeyRead:
+    """Pin (replace) the endpoint's SSH host key.
+
+    The client sends only the public key; the server derives host/port from the
+    endpoint and computes the fingerprint. PUT because a single pin is replaced
+    wholesale. Persistence only — no probe, no ssh-keyscan, no known_hosts. 409
+    if SSH is not configured on the endpoint.
+    """
+    return service.set_ssh_host_key(db, endpoint_id, payload.public_key)
+
+
+# response_model=None is explicit (as on delete_endpoint): a ``-> None`` return
+# annotation under ``from __future__ import annotations`` is otherwise read as a
+# NoneType response body and asserts "204 must not have a response body" on the
+# low end of the supported FastAPI range.
+@endpoints_router.delete(
+    "/{endpoint_id}/ssh-host-key",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+def delete_ssh_host_key(
+    endpoint_id: int, db: Session = Depends(get_db)
+) -> None:
+    """Remove the endpoint's host-key pin (204; idempotent when none exists)."""
+    service.delete_ssh_host_key(db, endpoint_id)
