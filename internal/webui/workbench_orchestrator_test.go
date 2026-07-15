@@ -696,8 +696,13 @@ func TestOrchestratorReservesNamedIdentityForBusy409(t *testing.T) {
 		t.Fatalf("orchestrator reservedHolder = (%q, ok=%v), want %q — handleStartMigration must reserve with the named identity",
 			action, ok, orchestratorAction)
 	}
-	// And a concurrent caller that loses the slot names the orchestrator in its 409.
-	if msg := busyMessage(e.dir, ws.job); !strings.Contains(msg, orchestratorAction) {
+	// And a concurrent caller that loses the slot captures a conflict naming the
+	// orchestrator, which the 409 renders from the immutable snapshot.
+	acquired, conflict := ws.job.tryReserve()
+	if acquired {
+		t.Fatal("concurrent reservation must be refused while the orchestrator holds the slot")
+	}
+	if msg := busyMessageForConflict(e.dir, conflict); !strings.Contains(msg, orchestratorAction) {
 		t.Errorf("busy 409 does not name the orchestrator: %q", msg)
 	}
 }

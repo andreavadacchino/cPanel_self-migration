@@ -31,7 +31,7 @@ func TestReservedHolderPublishedAtomically(t *testing.T) {
 	}
 
 	startedAt := time.Unix(1700000000, 0).UTC()
-	if !j.tryReserveFor("dns verify", startedAt) {
+	if acquired, _ := j.tryReserveFor("dns verify", startedAt); !acquired {
 		t.Fatal("tryReserveFor on a free slot must succeed")
 	}
 	// busy and identity are published together, under the same lock.
@@ -44,12 +44,17 @@ func TestReservedHolderPublishedAtomically(t *testing.T) {
 	}
 
 	// The slot is exclusive: a second reservation (any kind) is refused AND the
-	// existing holder identity is left intact (no partial clobber on the loser).
-	if j.tryReserveFor("dns apply", startedAt.Add(time.Hour)) {
+	// refusal returns an immutable conflict snapshotting the current holder under
+	// the same lock (finding R3), while the holder itself is left intact.
+	if acquired, conflict := j.tryReserveFor("dns apply", startedAt.Add(time.Hour)); acquired {
 		t.Fatal("tryReserveFor on a busy slot must fail")
+	} else if conflict.kind != slotHolderNamed || conflict.action != "dns verify" || !conflict.startedAt.Equal(startedAt) {
+		t.Fatalf("refused tryReserveFor conflict = %+v, want named dns verify @ %v", conflict, startedAt)
 	}
-	if j.tryReserve() {
+	if acquired, conflict := j.tryReserve(); acquired {
 		t.Fatal("tryReserve on a busy slot must fail")
+	} else if conflict.kind != slotHolderNamed || conflict.action != "dns verify" {
+		t.Fatalf("refused tryReserve conflict = %+v, want named dns verify", conflict)
 	}
 	if a, _, ok := j.reservedHolder(); !ok || a != "dns verify" {
 		t.Fatalf("a refused reservation altered the holder: got %q (ok=%v), want dns verify", a, ok)
@@ -65,7 +70,7 @@ func TestReservedHolderPublishedAtomically(t *testing.T) {
 
 	// An analysis-style reservation (tryReserve) holds the slot but publishes no
 	// exec identity, so a concurrent 409 falls back to the analysis snapshot.
-	if !j.tryReserve() {
+	if acquired, _ := j.tryReserve(); !acquired {
 		t.Fatal("tryReserve on a free slot must succeed")
 	}
 	if _, _, ok := j.reservedHolder(); ok {
@@ -76,7 +81,7 @@ func TestReservedHolderPublishedAtomically(t *testing.T) {
 	// A fresh reservation after release carries the NEW identity only — no stale
 	// action or started-at survives from the first holder.
 	newStart := time.Unix(1700009999, 0).UTC()
-	if !j.tryReserveFor("migrate content", newStart) {
+	if acquired, _ := j.tryReserveFor("migrate content", newStart); !acquired {
 		t.Fatal("tryReserveFor on a re-freed slot must succeed")
 	}
 	action, at, ok = j.reservedHolder()
@@ -88,8 +93,8 @@ func TestReservedHolderPublishedAtomically(t *testing.T) {
 	// Empty action: tryReserveFor stays PERMISSIVE because every production call
 	// site passes a validated non-empty constant (an actionRegistry name or
 	// orchestratorAction). The fail-closed backstop lives at the display layer —
-	// busyMessage's «action != ""» guard — covered by
-	// TestBusyMessageEmptyHolderActionFallsThrough.
+	// an empty-action holder yields an anonymous conflict (generic 409), covered
+	// by TestBusyMessageEmptyHolderActionIsAnonymous.
 }
 
 // newExecServer builds a workbenchExecServer directly (store + one session +

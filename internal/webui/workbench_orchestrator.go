@@ -329,8 +329,8 @@ func (ws *workbenchExecServer) handleStartMigration(w http.ResponseWriter, r *ht
 	// a concurrent caller that loses the slot names the action in its 409 even
 	// before startJobJournal persists it to disk. A busy slot is a readable 409.
 	startedAt := time.Now().UTC()
-	if !ws.job.tryReserveFor(orchestratorAction, startedAt) {
-		writeBusy409(w, ws.dir, ws.job)
+	if acquired, conflict := ws.job.tryReserveFor(orchestratorAction, startedAt); !acquired {
+		writeBusy409(w, ws.dir, conflict)
 		return
 	}
 	startJobJournal(ws.dir, sessionID, orchestratorAction, startedAt)

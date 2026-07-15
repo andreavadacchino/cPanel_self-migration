@@ -380,9 +380,9 @@ func (s *server) startRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no configuration yet: save the server connections first", http.StatusUnprocessableEntity)
 		return
 	}
-	if err := s.job.start(); err != nil {
+	if conflict, err := s.job.start(); err != nil {
 		if errors.Is(err, errBusy) {
-			writeBusy409(w, s.dir, s.job)
+			writeBusy409(w, s.dir, conflict)
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)

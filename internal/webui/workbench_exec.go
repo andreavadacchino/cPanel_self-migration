@@ -395,8 +395,8 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	// including in the window before startJobJournal persists it to disk.
 	start := time.Now()
 	startedAt := start.UTC()
-	if !ws.job.tryReserveFor(action.name, startedAt) {
-		writeBusy409(w, ws.dir, ws.job)
+	if acquired, conflict := ws.job.tryReserveFor(action.name, startedAt); !acquired {
+		writeBusy409(w, ws.dir, conflict)
 		return
 	}
 	if ws.afterExecReserve != nil {

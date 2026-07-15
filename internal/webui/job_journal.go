@@ -209,66 +209,40 @@ func journalMatchesReservedHolder(jj *jobJournal, action string, startedAt time.
 	return jj != nil && jj.Action == action && jj.StartedAt.Equal(startedAt)
 }
 
-// busyMessage renders the readable state that replaces the opaque 409 for every
-// caller of the shared single-writer slot (/run, /accept, /exec, orchestrator).
-// Precedence (roadmap §7, finding F1):
+// busyMessageForConflict renders the 409 body from the IMMUTABLE slotConflict
+// captured under jobManager.mu at the moment the reservation was refused. It
+// NEVER re-reads the jobManager (no reservedHolder / snapshot / running call), so
+// the operation named here is exactly the one that caused THIS refusal — even if
+// the slot has since been released or handed to a different holder (finding R3).
 //
-//  1. A LIVE reservedHolder is the truth during a live process — it is published
-//     atomically with the busy flag under jobManager.mu. A running journal is
-//     used only when it is the SAME run (richer phase); a stale or mismatched
-//     journal never overrides the live identity with a different action.
-//  2. No live holder: a running journal covers refresh/recovery and processes
-//     where the journal is the only surviving record.
-//  3. The read-only analysis pipeline holds the slot with its state in memory,
-//     not on disk — fall back to that live snapshot.
-//  4. Only a genuine race leaves the generic message.
-func busyMessage(dir string, j *jobManager) string {
-	// Collect the three sources ONCE, holding no lock across I/O: reservedHolder
-	// and snapshot each take jobManager.mu only long enough to copy their fields,
-	// and readJobJournal is a plain os.ReadFile with no lock held at all.
-	var (
-		holderAction string
-		holderStart  time.Time
-		haveHolder   bool
-	)
-	if j != nil {
-		holderAction, holderStart, haveHolder = j.reservedHolder()
-	}
-	jj, haveJournal := readJobJournal(dir)
-	journalRunning := haveJournal && jj.State == jobStateRunning
-
-	// 1. Live holder wins. An empty action is treated as no nameable holder
-	//    (fail-closed): fall through to the journal/analysis/generic layers.
-	if haveHolder && holderAction != "" {
-		if journalRunning && journalMatchesReservedHolder(jj, holderAction, holderStart) {
+// The on-disk journal is read only to ENRICH a named conflict with a phase, and
+// only when it is the same run (action + started-at). A stale, terminal or
+// mismatched journal — including one belonging to a replacement holder — never
+// replaces the snapshot identity. An analysis conflict is never enriched from the
+// journal (its state lives in memory); an anonymous conflict stays generic
+// (naming a journal action there would resurrect a previous run's identity for a
+// holder that has none — /accept holds the slot without a nameable action).
+func busyMessageForConflict(dir string, c slotConflict) string {
+	switch c.kind {
+	case slotHolderNamed:
+		if jj, ok := readJobJournal(dir); ok && jj.State == jobStateRunning &&
+			journalMatchesReservedHolder(jj, c.action, c.startedAt) {
 			return formatRunningMessage(jj.Action, jj.StartedAt, jj.Phase)
 		}
-		return formatRunningMessage(holderAction, holderStart, "")
-	}
-
-	// 2. No live holder: a running journal names refresh/recovery.
-	if journalRunning {
-		action := jj.Action
-		if action == "" {
-			action = "un'operazione"
+		return formatRunningMessage(c.action, c.startedAt, "")
+	case slotHolderAnalysis:
+		started := ""
+		if c.analysisStarted != "" {
+			started = " dalle " + c.analysisStarted
 		}
-		return formatRunningMessage(action, jj.StartedAt, jj.Phase)
+		return fmt.Sprintf("Un'analisi è in corso%s — attendi il completamento prima di lanciare un'altra operazione.", started)
+	default: // slotHolderAnonymous / slotHolderNone
+		return "Un'operazione è già in corso — attendi il completamento prima di lanciarne un'altra."
 	}
-
-	// 3. Analysis pipeline (state in memory, not on disk).
-	if j != nil {
-		if s := j.snapshot(); s.State == "running" {
-			started := ""
-			if s.StartedAt != "" {
-				started = " dalle " + s.StartedAt
-			}
-			return fmt.Sprintf("Un'analisi è in corso%s — attendi il completamento prima di lanciare un'altra operazione.", started)
-		}
-	}
-	return "Un'operazione è già in corso — attendi il completamento prima di lanciarne un'altra."
 }
 
-// writeBusy409 sends the readable busy state as a 409 Conflict.
-func writeBusy409(w http.ResponseWriter, dir string, j *jobManager) {
-	http.Error(w, busyMessage(dir, j), http.StatusConflict)
+// writeBusy409 sends the readable busy state as a 409 Conflict, rendered from the
+// conflict snapshot captured when the reservation was refused.
+func writeBusy409(w http.ResponseWriter, dir string, c slotConflict) {
+	http.Error(w, busyMessageForConflict(dir, c), http.StatusConflict)
 }
