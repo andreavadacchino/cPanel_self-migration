@@ -7,10 +7,14 @@ with ``--junitxml`` and fails when a required guarantee is not met:
   - any skipped test at all (a silent skip is how a "green" run hides that the
     PostgreSQL suite never ran because TEST_POSTGRES_URL was unset);
   - fewer than a floor of total tests (a broken collection);
-  - the PostgreSQL module present but under-run or partly skipped.
+  - the PostgreSQL module present but under-run or partly skipped;
+  - the PostgreSQL module missing entirely when it is required (fail-closed once
+    the module exists on the base branch or in the PR checkout, so a later PR
+    cannot delete/rename it back to a green ``pg_module=0``).
 
 Usage:
-    check_pytest_report.py <report.xml> --min-total N --pg-module NAME --pg-min N
+    check_pytest_report.py <report.xml> --min-total N --pg-module NAME --pg-min N \
+        [--require-pg-module]
 """
 
 from __future__ import annotations
@@ -26,6 +30,15 @@ def main() -> int:
     parser.add_argument("--min-total", type=int, default=0)
     parser.add_argument("--pg-module", default="test_execution_attempts_pg")
     parser.add_argument("--pg-min", type=int, default=0)
+    parser.add_argument(
+        "--require-pg-module",
+        action="store_true",
+        help=(
+            "fail if the PostgreSQL module ran zero tests; set by CI once the "
+            "module exists on the base branch or in the PR checkout so it cannot "
+            "be silently removed"
+        ),
+    )
     args = parser.parse_args()
 
     root = ET.parse(args.report).getroot()
@@ -62,9 +75,16 @@ def main() -> int:
         problems.append(f"{failed} failed, {errored} errored")
     if total < args.min_total:
         problems.append(f"only {total} tests ran, expected >= {args.min_total}")
-    # The PostgreSQL module lives in a separate PR (#114). When it is present it
-    # must be fully run; when absent (e.g. this CI PR on main) there is nothing
-    # to enforce yet.
+    # The PostgreSQL module (#114) is enforced fail-closed once it exists. CI
+    # passes --require-pg-module when the module is present on the base branch or
+    # in the PR checkout: then a zero-test run (deleted/renamed/uncollected
+    # module) is a failure, not a silent green. Absent + not required (e.g. a CI
+    # PR before #114 merges) is the only allowed transition.
+    if args.require_pg_module and pg_total == 0:
+        problems.append(
+            f"pg module '{args.pg_module}' is required but ran 0 tests "
+            "(deleted, renamed, or not collected)"
+        )
     if pg_total and pg_total < args.pg_min:
         problems.append(f"pg module ran {pg_total} tests, expected >= {args.pg_min}")
     if pg_total and pg_skipped:

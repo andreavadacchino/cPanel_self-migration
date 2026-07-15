@@ -43,7 +43,11 @@ jobs:
       DATABASE_URL: postgresql+psycopg://migration:migration@localhost:5432/migration_test
       TEST_POSTGRES_URL: postgresql+psycopg://migration:migration@localhost:5432/exec_attempts_test
     steps:
+      # fetch-depth: 0 so the base-aware guard below can look up the PostgreSQL
+      # test module on the PR base branch, not only in the PR checkout.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -64,6 +68,45 @@ jobs:
       - name: Import provenance (fail-closed)
         working-directory: migration-platform/apps/api
         run: python "${GITHUB_WORKSPACE}/migration-platform/ci/check_import_provenance.py"
+
+      # Self-test the fail-closed gate script itself, so a regression in its
+      # skip/floor/require-module logic is caught here rather than in a real run.
+      - name: Self-test the pytest report gate
+        run: python -m pytest -q "${GITHUB_WORKSPACE}/migration-platform/ci/test_check_pytest_report.py"
+
+      # Base-aware enforcement of the PostgreSQL module. The module ships in
+      # PR #114; once it exists on the base branch OR in this PR's checkout it is
+      # mandatory. This closes the transitional hole where deleting/renaming the
+      # module would yield pg_module=0 and a false green.
+      #
+      #   base absent + head absent  -> not required  (allowed transition)
+      #   base absent + head present -> required
+      #   base present + head present-> required
+      #   base present + head absent -> required (script then fails: 0 tests)
+      - name: Determine PostgreSQL module enforcement (base-aware)
+        id: pgreq
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODULE="migration-platform/apps/api/app/tests/test_execution_attempts_pg.py"
+          present_head=0
+          [ -f "$MODULE" ] && present_head=1
+          present_base=0
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Fetch the PR base tip and read it via FETCH_HEAD: the remote
+            # tracking ref (origin/<base>) is not guaranteed to exist under the
+            # checkout's refspec, but FETCH_HEAD always points at what we fetched.
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            if git cat-file -e "FETCH_HEAD:${MODULE}" 2>/dev/null; then
+              present_base=1
+            fi
+          fi
+          require=0
+          if [ "$present_base" = "1" ] || [ "$present_head" = "1" ]; then
+            require=1
+          fi
+          echo "present_base=$present_base present_head=$present_head require=$require"
+          echo "require=$require" >> "$GITHUB_OUTPUT"
 
       - name: PostgreSQL reachable + version
         run: |
@@ -111,10 +154,16 @@ jobs:
 
       - name: API tests on PostgreSQL (fail-closed on skip)
         working-directory: migration-platform/apps/api
+        env:
+          PG_REQUIRE: ${{ steps.pgreq.outputs.require }}
         run: |
           python -m pytest -rs --junitxml="${GITHUB_WORKSPACE}/junit-api.xml" app/tests
+          REQUIRE_FLAG=()
+          if [ "${PG_REQUIRE}" = "1" ]; then
+            REQUIRE_FLAG=(--require-pg-module)
+          fi
           python "${GITHUB_WORKSPACE}/migration-platform/ci/check_pytest_report.py" \
-            "${GITHUB_WORKSPACE}/junit-api.xml" --min-total 300 --pg-min 9
+            "${GITHUB_WORKSPACE}/junit-api.xml" --min-total 300 --pg-min 9 "${REQUIRE_FLAG[@]}"
 
       - name: Domain tests (fail-closed on skip)
         working-directory: migration-platform/packages/domain
@@ -184,3 +233,47 @@ jobs:
       - name: docker compose config
         working-directory: migration-platform
         run: docker compose config -q
+
+  # Single stable required check. Configure branch protection against
+  # "Platform V2 Required Gates / platform-required" (NOT the individual jobs,
+  # whose names could change). It runs no tests of its own -- it only asserts
+  # that every Platform V2 job reported success. Because it needs all four and
+  # runs with if:always(), a job that fails, is cancelled, or is unexpectedly
+  # skipped makes its result != 'success' and fails this gate: no silent green.
+  platform-required:
+    name: platform-required
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - platform-postgres
+      - platform-go-contract
+      - platform-frontend
+      - platform-compose
+    steps:
+      - name: Assert every required Platform V2 job succeeded
+        shell: bash
+        env:
+          POSTGRES_RESULT: ${{ needs.platform-postgres.result }}
+          GO_CONTRACT_RESULT: ${{ needs.platform-go-contract.result }}
+          FRONTEND_RESULT: ${{ needs.platform-frontend.result }}
+          COMPOSE_RESULT: ${{ needs.platform-compose.result }}
+        run: |
+          set -euo pipefail
+          echo "platform-postgres=${POSTGRES_RESULT}"
+          echo "platform-go-contract=${GO_CONTRACT_RESULT}"
+          echo "platform-frontend=${FRONTEND_RESULT}"
+          echo "platform-compose=${COMPOSE_RESULT}"
+          rc=0
+          for pair in \
+            "platform-postgres:${POSTGRES_RESULT}" \
+            "platform-go-contract:${GO_CONTRACT_RESULT}" \
+            "platform-frontend:${FRONTEND_RESULT}" \
+            "platform-compose:${COMPOSE_RESULT}"; do
+            job="${pair%%:*}"
+            result="${pair#*:}"
+            if [ "$result" != "success" ]; then
+              echo "::error::required job '${job}' did not succeed (result=${result})"
+              rc=1
+            fi
+          done
+          exit "$rc"
