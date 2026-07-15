@@ -191,6 +191,24 @@ class EmailJournalRepository:
     def mark_reconciliation_required(self, ref: EmailJournalRef, *, failure_code: str) -> None:
         self._cas(ref, expected=_STARTED, new=_RECON, failure_code=failure_code)
 
+    def recovery_transition(
+        self, journal_id: int, *, expected_status: str, expected_token: int,
+        new_status: str, new_token: int, **fields,
+    ) -> bool:
+        """Adopt a stuck row under a fresh recovery token (R2-c2), analogous to the
+        domain journal. Guard: we own the recovery lease (``new_token``) and the row is
+        still exactly as observed. ``rowcount != 1`` -> another worker won or the state
+        changed; the caller backs off. Returns ``True`` iff this worker adopted it."""
+        with self._tx() as sess:
+            self._assert_owner(sess, new_token)
+            result = sess.execute(
+                update(EmailWriteJournal)
+                .where(EmailWriteJournal.id == journal_id,
+                       EmailWriteJournal.status == expected_status,
+                       EmailWriteJournal.fencing_token == expected_token)
+                .values(status=new_status, fencing_token=new_token, **fields))
+            return result.rowcount == 1
+
 
 def _rows(db: Session, run_id: int, statuses: frozenset[str]) -> list[dict]:
     """Scalar column query keyed on the RUN and journal status — never attempt/run state."""
@@ -212,6 +230,28 @@ def open_operations(db: Session, run_id: int) -> list[dict]:
 def blocking_operations(db: Session, run_id: int) -> list[dict]:
     """Anything that forbids the run reaching success (the symmetric email gate)."""
     return _rows(db, run_id, EMAIL_WRITE_BLOCKING_STATUSES)
+
+
+_RECOVERY_COLS = (
+    EmailWriteJournal.id, EmailWriteJournal.execution_run_id,
+    EmailWriteJournal.execution_attempt_id, EmailWriteJournal.operation_key,
+    EmailWriteJournal.category, EmailWriteJournal.operation_type, EmailWriteJournal.item_key,
+    EmailWriteJournal.status, EmailWriteJournal.fencing_token,
+    EmailWriteJournal.requested_payload_hash, EmailWriteJournal.backup_ref,
+    EmailWriteJournal.applied_at, EmailWriteJournal.created_at,
+)
+
+
+def list_operations(db: Session, run_id: int, statuses: frozenset[str]) -> list[dict]:
+    """Full-field detached rows for a run in the given statuses, ordered by id — keyed on
+    the RUN and journal status, never the attempt/run terminal state (R2-c2 discovery)."""
+    with db.no_autoflush:
+        found = db.execute(
+            select(*_RECOVERY_COLS)
+            .where(EmailWriteJournal.execution_run_id == run_id,
+                   EmailWriteJournal.status.in_(sorted(statuses)))
+            .order_by(EmailWriteJournal.id)).all()
+    return [dict(row._mapping) for row in found]
 
 
 def block_completion_if_uncertain(db: Session, run, attempt, *, domain_result,

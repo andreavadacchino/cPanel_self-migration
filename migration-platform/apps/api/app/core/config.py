@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # default: the recovery service is invocable in tests, but no scheduler/worker
     # sweep acts on a live run unless this and the master switch are both enabled.
     domain_recovery_mode: str = "disabled"
+    # Email crash-recovery (B4e-iii-c R2-c2). Same fail-closed opt-in as the domain
+    # recovery: the pure service is unit/PostgreSQL-tested, but no runtime sweep acts.
+    email_recovery_mode: str = "disabled"
     # Master switch for the real (non-dry-run) execution contract. Only
     # "disabled" and "enabled" are accepted; it defaults to disabled so no real
     # attempt, lease, or destination mutation can be opened without an explicit,
@@ -197,6 +200,12 @@ class Settings(BaseSettings):
         # DOMAIN_RECOVERY_MODE are "enabled". Off by default — the pure service stays
         # explicitly invocable (and unit-tested) without this gate.
         return self.real_execution_enabled and self.domain_recovery_mode == "enabled"
+
+    @property
+    def email_recovery_enabled(self) -> bool:
+        # Double gate for the R2-c2 email recovery sweep; off by default. The pure
+        # service stays explicitly invocable (and tested) without this gate.
+        return self.real_execution_enabled and self.email_recovery_mode == "enabled"
 
 
 @lru_cache

@@ -357,3 +357,35 @@ so the shared schema file is flagged rather than split. Tests: API 1047 passed (
 worker 18.
 
 **C3 still BLOCKED** — R2-c2 (conservative recovery) + R2-c3 (durable gating) required.
+
+## R2-c2 — conservative email recovery (2026-07-15)
+
+`email_recovery.py` (new): pure classifier + conservative service, gated OFF
+(`EMAIL_RECOVERY_MODE`). Discovery keys off the email journal status per RUN,
+independent of attempt/run terminal state. Claim + adopt CAS
+(`EmailJournalRepository.recovery_transition`), single-winner lease owner.
+
+**Corrected ownership policy enforced:** `live == desired` does NOT prove ownership —
+no automatic reverse/restore after a crash, ever. The only automation is a safe
+RE-APPLY of a write that provably never landed:
+- additive, live absent -> safe retry (idempotent add);
+- overwrite, live still stably == backed-up PREVIOUS value AND fencing valid -> re-apply desired.
+
+Everything else is manual: additive present under `started` -> record manual removal
+(no delete op); additive present under `planned` -> ownership unknown; overwrite
+`live == desired` -> `applied_or_external_ambiguous` (manual plan carrying `backup_ref`
+for a human-decided restore); divergent -> manual reconciliation. Ordered manual plan
+(reverse `applied_at`, tie `operation_key`), `manual_intervention_required`/`email_blocked`.
+NO reverse op is ever invoked (structural test asserts no adapter import/op call).
+
+The per-category live read and engine re-apply are injected (`live_probe`/`apply_retry`)
+— that runtime wiring is R2-c3.
+
+26 tests (12 pure classifier + 14 on real PostgreSQL: gate off, discovery independent
+of attempt state, additive absent/present, overwrite equals-previous-stable/unstable/
+equals-desired/divergent, previous-fence-active bail, two-recoveries single apply,
+manual-only plan, durability across sessions, no-reverse-op). API 1074 passed; worker 18.
+
+**Budget:** 5 files, 645 raw (≤850). All applicative ≤400. No migration (0012 head).
+
+**C3 still BLOCKED** — R2-c3 (durable gating + gated-off wiring) required.
