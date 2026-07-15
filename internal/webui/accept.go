@@ -44,8 +44,8 @@ func (s *server) saveAcceptTo(w http.ResponseWriter, r *http.Request, redirectUR
 	// checklist, write acceptances, regenerate): a concurrent /run sees the
 	// slot taken and is refused, and vice versa — real mutual exclusion, so
 	// the two writers of migration_checklist.json never overlap.
-	if !s.job.tryReserve() {
-		writeBusy409(w, s.dir, s.job)
+	if acquired, conflict := s.job.tryReserve(); !acquired {
+		writeBusy409(w, s.dir, conflict)
 		return
 	}
 	defer s.job.release()

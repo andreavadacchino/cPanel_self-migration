@@ -305,6 +305,14 @@ type workbenchExecServer struct {
 	base   context.Context
 	job    *jobManager // shared single-writer slot with /run and /accept
 	dir    string      // webui working dir (plans, reports, host.yaml)
+	// afterExecReserve, when non-nil, is invoked inside handleExec in the window
+	// between reserving the single-writer slot and persisting the job journal. It
+	// is a TEST SEAM only (nil in production, so no production behaviour changes)
+	// that lets a test stop the winning request exactly inside that window and
+	// probe a concurrent 409 deterministically. It is scoped to THIS instance —
+	// never a package global — so it can never affect another server in the same
+	// process.
+	afterExecReserve func()
 }
 
 // validateStrongConfirmation checks that confirm_account matches the session
@@ -382,9 +390,17 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	// writes to the same artifact directory). A busy slot is no longer an
 	// opaque 409: busyMessage reads the job journal and names the running
 	// action + started-at + phase (roadmap §7).
-	if !ws.job.tryReserve() {
-		writeBusy409(w, ws.dir, ws.job)
+	// Reserve the slot AND publish the running action's identity atomically, so a
+	// concurrent /exec that loses the slot always names the action in its 409 —
+	// including in the window before startJobJournal persists it to disk.
+	start := time.Now()
+	startedAt := start.UTC()
+	if acquired, conflict := ws.job.tryReserveFor(action.name, startedAt); !acquired {
+		writeBusy409(w, ws.dir, conflict)
 		return
+	}
+	if ws.afterExecReserve != nil {
+		ws.afterExecReserve()
 	}
 	// Persist the job identity BEFORE launching the subprocess, so a refresh, a
 	// sleep or a killed ui always reconstructs "action running since ..."
@@ -392,8 +408,6 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	// every return path (attach/timeline errors included); pairing it with
 	// release() means a refresh never sees running with a free slot within a
 	// live process.
-	start := time.Now()
-	startedAt := start.UTC()
 	startJobJournal(ws.dir, sessionID, action.name, startedAt)
 	var execErr error
 	defer func() {

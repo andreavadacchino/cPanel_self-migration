@@ -638,3 +638,71 @@ func TestOrchestratorRequiresCSRF(t *testing.T) {
 		t.Errorf("nothing must run without CSRF, got %v", e.callNames())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The orchestrator reserves the slot with its NAMED identity, so a concurrent
+// caller that loses the slot gets a 409 naming "migrazione automatica" — the
+// same live-holder guarantee /exec has. This is the regression guard for
+// handleStartMigration reverting to the anonymous tryReserve().
+// ---------------------------------------------------------------------------
+
+func TestOrchestratorReservesNamedIdentityForBusy409(t *testing.T) {
+	e := newOrchEnv(t, workbench.ContentSelection{Files: true})
+
+	entered := make(chan struct{}) // orchestrator reached its (blocked) write phase
+	release := make(chan struct{})
+	var enterOnce, releaseOnce sync.Once
+	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
+	runner := func(ctx context.Context, out io.Writer, name string, argv []string) error {
+		enterOnce.Do(func() { close(entered) })
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+	// A dedicated exec server over the SAME store/dir as e: handleStartMigration
+	// clears every precondition (setup + confirmed scope + ready checklist), but
+	// its jobManager is observable here so we can read the reserved identity.
+	ws := &workbenchExecServer{
+		store: e.store, csrf: e.csrf, runner: runner, base: context.Background(),
+		job: newJobManager(e.dir, runner, context.Background()), dir: e.dir,
+	}
+
+	form := url.Values{"confirm_account": {"giorginisposi"}}
+	req := httptest.NewRequest(http.MethodPost,
+		"/workbench/session/"+e.sessID+"/start-migration", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		ws.handleStartMigration(httptest.NewRecorder(), req, e.sessID)
+	}()
+	// Release and join even if an assertion fails — no goroutine left blocked.
+	t.Cleanup(func() { releaseRun(); <-runDone })
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("orchestrator never reached its write phase (precondition failed?)")
+	}
+
+	// Regression guard: the live holder must carry the orchestrator identity. A
+	// revert to tryReserve() leaves reservedHolder empty and fails here.
+	action, _, ok := ws.job.reservedHolder()
+	if !ok || action != orchestratorAction {
+		t.Fatalf("orchestrator reservedHolder = (%q, ok=%v), want %q — handleStartMigration must reserve with the named identity",
+			action, ok, orchestratorAction)
+	}
+	// And a concurrent caller that loses the slot captures a conflict naming the
+	// orchestrator, which the 409 renders from the immutable snapshot.
+	acquired, conflict := ws.job.tryReserve()
+	if acquired {
+		t.Fatal("concurrent reservation must be refused while the orchestrator holds the slot")
+	}
+	if msg := busyMessageForConflict(e.dir, conflict); !strings.Contains(msg, orchestratorAction) {
+		t.Errorf("busy 409 does not name the orchestrator: %q", msg)
+	}
+}

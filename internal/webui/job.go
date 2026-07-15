@@ -55,14 +55,50 @@ type jobStatus struct {
 	Steps     []stepResult
 }
 
+// reservedJob is the identity of a non-analysis slot holder (an /exec or
+// orchestrator run). It is published ATOMICALLY with the busy flag by
+// tryReserveFor, so a concurrent caller that loses the slot can name the
+// running action immediately — even in the window before the holder has
+// persisted the durable job journal to disk.
+type reservedJob struct {
+	action    string
+	startedAt time.Time
+}
+
+// slotHolderKind classifies who holds the single-writer slot at the instant a
+// reservation is refused.
+type slotHolderKind int
+
+const (
+	slotHolderNone      slotHolderKind = iota // slot was free (defensive: a refusal implies busy)
+	slotHolderNamed                           // exec/orchestrator: action + started-at
+	slotHolderAnalysis                        // /run analysis pipeline: status snapshot
+	slotHolderAnonymous                       // busy but no nameable identity (e.g. /accept)
+)
+
+// slotConflict is an IMMUTABLE snapshot of the slot holder captured under
+// jobManager.mu at the exact moment a reservation is refused. It holds only
+// value-copied fields — no pointer into the jobManager's mutable state — so the
+// 409 renderer needs no further lock and can never drift to a holder that took
+// (or freed) the slot AFTER the refusal. This closes the TOCTOU between the
+// refusal decision and its diagnostic: the 409 always describes the holder that
+// actually caused THAT refusal (roadmap §7, finding R3).
+type slotConflict struct {
+	kind            slotHolderKind
+	action          string    // slotHolderNamed: the blocking action
+	startedAt       time.Time // slotHolderNamed: its reserve timestamp (value copy)
+	analysisStarted string    // slotHolderAnalysis: jobStatus.StartedAt (already a formatted string)
+}
+
 // jobManager runs ONE read-only analysis pipeline at a time.
 type jobManager struct {
-	mu     sync.Mutex
-	busy   bool
-	status jobStatus
-	runner StepRunner
-	dir    string
-	base   context.Context // parent of every run's context (cancelled on ui shutdown)
+	mu       sync.Mutex
+	busy     bool
+	reserved *reservedJob // identity of an exec/orchestrator holder; nil for the analysis pipeline
+	status   jobStatus
+	runner   StepRunner
+	dir      string
+	base     context.Context // parent of every run's context (cancelled on ui shutdown)
 }
 
 func newJobManager(dir string, runner StepRunner, base context.Context) *jobManager {
@@ -75,18 +111,19 @@ func newJobManager(dir string, runner StepRunner, base context.Context) *jobMana
 	return &jobManager{dir: dir, runner: runner, base: base, status: jobStatus{State: "idle"}}
 }
 
-// start launches the pipeline in the background; errBusy when one is
-// already running.
-func (j *jobManager) start() error {
+// start launches the pipeline in the background; (conflict, errBusy) when the
+// slot is already held, with conflict snapshotting the blocker under the SAME
+// lock so /run can render a 409 that names the real holder without re-reading.
+func (j *jobManager) start() (slotConflict, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.busy {
-		return errBusy
+		return j.captureConflictLocked(), errBusy
 	}
 	j.busy = true
 	j.status = jobStatus{State: "running", StartedAt: time.Now().UTC().Format("2006-01-02 15:04:05 UTC")}
 	go j.execute(pipelineSteps(j.dir))
-	return nil
+	return slotConflict{}, nil
 }
 
 func (j *jobManager) execute(steps []step) {
@@ -149,25 +186,76 @@ func (j *jobManager) running() bool {
 	return j.busy
 }
 
-// tryReserve atomically claims the single-writer slot (returns false if a
-// run or another reservation already holds it). It is the SAME busy flag
-// start() checks, so a full analysis run and a browser accept — both of
+// tryReserve atomically claims the single-writer slot. It returns (true, {}) on
+// success; on refusal it returns (false, conflict) with the blocker snapshotted
+// under the SAME lock so the caller renders a 409 that describes the holder that
+// caused THIS refusal — never a later re-read (finding R3). It is the SAME busy
+// flag start() checks, so a full analysis run and a browser accept — both of
 // which write migration_checklist.json — are mutually exclusive, not just
-// TOCTOU-guarded. Pair every true return with release().
-func (j *jobManager) tryReserve() bool {
+// TOCTOU-guarded. Pair every acquired==true with release().
+func (j *jobManager) tryReserve() (acquired bool, conflict slotConflict) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.busy {
-		return false
+		return false, j.captureConflictLocked()
 	}
 	j.busy = true
-	return true
+	return true, slotConflict{}
 }
 
-// release frees a slot claimed by tryReserve.
+// tryReserveFor is tryReserve that also publishes the holder's identity under
+// the SAME lock, so a concurrent caller that loses the slot can name the running
+// action with no disk read and no window between "slot busy" and "identity
+// known". Used by the exec/orchestrator paths (which otherwise persist their
+// identity to disk only after reserving). Pair every acquired==true with release().
+func (j *jobManager) tryReserveFor(action string, startedAt time.Time) (acquired bool, conflict slotConflict) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.busy {
+		return false, j.captureConflictLocked()
+	}
+	j.busy = true
+	j.reserved = &reservedJob{action: action, startedAt: startedAt}
+	return true, slotConflict{}
+}
+
+// captureConflictLocked snapshots the CURRENT slot holder into an immutable
+// value. It MUST be called with j.mu held (it is the atomic half of a refusal:
+// the same critical section that observed busy==true copies the blocker). Order:
+// a named exec/orchestrator holder wins; else a running analysis pipeline; else
+// an anonymous busy holder (e.g. /accept) renders generic. A named holder with
+// an empty action is treated as not-nameable (fail-closed) and falls through.
+func (j *jobManager) captureConflictLocked() slotConflict {
+	if !j.busy {
+		return slotConflict{kind: slotHolderNone}
+	}
+	if j.reserved != nil && j.reserved.action != "" {
+		return slotConflict{kind: slotHolderNamed, action: j.reserved.action, startedAt: j.reserved.startedAt}
+	}
+	if j.status.State == "running" {
+		return slotConflict{kind: slotHolderAnalysis, analysisStarted: j.status.StartedAt}
+	}
+	return slotConflict{kind: slotHolderAnonymous}
+}
+
+// reservedHolder returns a COPY of the current exec/orchestrator slot holder's
+// identity, or ok=false when the slot is free or held by the analysis pipeline
+// (which publishes its state via status, not reserved). Used by tests to assert
+// the live holder; the 409 path uses the immutable slotConflict instead.
+func (j *jobManager) reservedHolder() (action string, startedAt time.Time, ok bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.reserved == nil {
+		return "", time.Time{}, false
+	}
+	return j.reserved.action, j.reserved.startedAt, true
+}
+
+// release frees a slot claimed by tryReserve/tryReserveFor.
 func (j *jobManager) release() {
 	j.mu.Lock()
 	j.busy = false
+	j.reserved = nil
 	j.mu.Unlock()
 }
 
