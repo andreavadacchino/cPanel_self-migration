@@ -16,6 +16,9 @@ dist/
 
 # Env
 .env
+# Live cPanel characterization secrets — NEVER commit; the *.example template is tracked.
+.env.live
+*.env.live
 
 # OS
 .DS_Store
