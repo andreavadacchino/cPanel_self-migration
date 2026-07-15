@@ -206,6 +206,10 @@ func TestJobJournalSurfacedOnRefresh(t *testing.T) {
 // End of the opaque 409: a busy slot yields a readable state
 // ---------------------------------------------------------------------------
 
+// TestJobJournalReadable409 is kept as a black-box smoke test that a busy slot
+// yields a named, non-opaque 409 through the full HTTP stack. It polls, so it is
+// NOT the primary proof of the reserve→journal window — that is the deterministic
+// TestExecBusy409NamesActionWithinReserveWindow (no sleeps, per-instance seam).
 func TestJobJournalReadable409(t *testing.T) {
 	h, _, sessID, csrf, fr := newJournalEnv(t)
 	fr.gate = make(chan struct{})

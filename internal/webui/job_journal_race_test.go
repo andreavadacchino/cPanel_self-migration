@@ -4,10 +4,16 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/tis24dev/cPanel_self-migration/internal/workbench"
 )
 
 // TestReservedHolderPublishedAtomically pins the invariant behind the fix: an
@@ -86,40 +92,96 @@ func TestReservedHolderPublishedAtomically(t *testing.T) {
 	// TestBusyMessageEmptyHolderActionFallsThrough.
 }
 
+// newExecServer builds a workbenchExecServer directly (store + one session +
+// working dir) so a test can set the per-INSTANCE afterExecReserve seam and
+// drive handleExec with no package-global state. Mirrors the direct construction
+// already used by TestOrchestratorPerPhaseTimeout.
+func newExecServer(t *testing.T, runner StepRunner) (*workbenchExecServer, string) {
+	t.Helper()
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "migrations")
+	if err := os.MkdirAll(storeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := workbench.NewStore(storeDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	sess, err := store.Create("giorginisposi", "src", "dst", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "host.yaml"), []byte("src:\n  ip: 1.2.3.4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if runner == nil {
+		runner = func(context.Context, io.Writer, string, []string) error { return nil }
+	}
+	ws := &workbenchExecServer{
+		store: store, csrf: "csrf", runner: runner, base: context.Background(),
+		job: newJobManager(dir, runner, context.Background()), dir: dir,
+	}
+	return ws, sess.ID
+}
+
+// execReq builds an /exec POST for the given action. CSRF is enforced by the
+// router (server.post), not handleExec, so a direct handleExec call needs only
+// the form body.
+func execReq(sessID, action string) *http.Request {
+	form := url.Values{"action": {action}}
+	req := httptest.NewRequest(http.MethodPost, "/workbench/session/"+sessID+"/exec",
+		strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
+}
+
 // TestExecBusy409NamesActionWithinReserveWindow deterministically pins the
 // concurrent window that made TestJobJournalReadable409 flaky: the winning
 // /exec reserves the single-writer slot and only afterwards persists the job
 // journal. A second /exec that arrives in between loses the slot and gets a
-// 409 — and it must still name the running action, not fall back to the
-// generic "un'operazione è già in corso" message.
+// 409 — and it must still name the running action, not the generic
+// "un'operazione è già in corso" message.
 //
-// The window is closed with a channel-driven test hook (no sleeps): the hook
-// stops the winner exactly inside the reserve→journal gap while the probe runs.
-// Pre-fix (slot published before the identity) this fails; post-fix (identity
-// published atomically with the slot) it passes.
+// The window is held open by the per-instance afterExecReserve seam (no sleeps,
+// no package global): the seam stops the winner exactly inside the
+// reserve→journal gap while the probe runs. Pre-fix (slot published before the
+// identity) this fails; post-fix (identity published atomically) it passes.
 func TestExecBusy409NamesActionWithinReserveWindow(t *testing.T) {
-	h, _, sessID, csrf, _ := newJournalEnv(t)
+	ws, sessID := newExecServer(t, nil)
 
-	reserved := make(chan struct{})  // winner has taken the slot, journal not yet written
+	reserved := make(chan struct{})  // winner holds the slot; journal not yet written
 	probeDone := make(chan struct{}) // release the winner after the probe
+	var reserveOnce, releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(probeDone) }) }
 
-	execAfterReserveHook = func() {
-		close(reserved)
+	ws.afterExecReserve = func() {
+		reserveOnce.Do(func() { close(reserved) })
 		<-probeDone
 	}
-	defer func() { execAfterReserveHook = nil }()
 
-	form := url.Values{"csrf": {csrf}, "action": {"dns_verify"}}
-	done := make(chan struct{})
+	winnerDone := make(chan struct{})
 	go func() {
-		doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sessID+"/exec", form)
-		close(done)
+		defer close(winnerDone)
+		ws.handleExec(httptest.NewRecorder(), execReq(sessID, "dns_verify"), sessID)
 	}()
+	// Always release and join the winner, even if an assertion below fails — no
+	// goroutine is left blocked in the seam (release is idempotent; a closed
+	// winnerDone is safe to receive from twice).
+	t.Cleanup(func() { release(); <-winnerDone })
 
-	<-reserved // the slot is held; we are inside the reserve→journal window
-	rr := doWorkbenchReq(h, http.MethodPost, "/workbench/session/"+sessID+"/exec", form)
-	close(probeDone) // let the winner persist the journal and finish
-	<-done
+	// The reservation is the synchronisation; the timeout is only a diagnostic
+	// guard against a winner that never reaches the window.
+	select {
+	case <-reserved:
+	case <-time.After(2 * time.Second):
+		t.Fatal("winner never reached the reserve→journal window")
+	}
+
+	// Inside the reserve→journal window: the slot is held but NO journal exists
+	// yet, so a correct 409 can only name the action from the LIVE reserved
+	// holder (the probe loses tryReserveFor and returns before the seam runs).
+	rr := httptest.NewRecorder()
+	ws.handleExec(rr, execReq(sessID, "dns_verify"), sessID)
 
 	if rr.Code != http.StatusConflict {
 		t.Fatalf("concurrent exec while slot held: code = %d, want 409", rr.Code)
