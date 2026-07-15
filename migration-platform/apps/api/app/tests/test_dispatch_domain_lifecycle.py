@@ -234,6 +234,57 @@ def test_close_failure_no_false_success(real_on, dom_on, db_session, monkeypatch
     assert run.status == ExecutionStatus.failed.value
 
 
+def _raise(exc):
+    def _fn(*a, **kw):
+        raise exc
+    return _fn
+
+
+# (primary outcome, close ok?) -> (raises?, run status if no raise, primary marker)
+_CLOSE_MATRIX = [
+    ("success", True, None, ExecutionStatus.succeeded.value, None),
+    ("success", False, None, ExecutionStatus.failed.value, None),      # close fail -> no false success
+    ("exception", True, None, ExecutionStatus.failed.value, None),
+    ("exception", False, None, ExecutionStatus.failed.value, None),    # primary preserved -> still failed
+    ("cancel", False, "annullato", None, "annullato"),                 # primary ConflictError not masked
+    ("fencing", False, "fencing", None, "fencing"),
+]
+
+
+@pytest.mark.parametrize("primary,close_ok,raises,status,marker", _CLOSE_MATRIX)
+def test_close_and_exception_precedence(primary, close_ok, raises, status, marker,
+                                        real_on, dom_on, db_session, monkeypatch):
+    """close() exactly once; a close failure never masks a primary exception and, on
+    the success path, is promoted so no false success is committed."""
+    e = _env(db_session); att = _disp(db_session, e, monkeypatch)
+    cl: list = []
+    def close():
+        cl.append(1)
+        if not close_ok:
+            raise RuntimeError("close boom")
+    gw = SimpleNamespace(read_domains=lambda: [], read_single_domain=lambda n: None,
+                         create=lambda *a, **kw: None, close=close)
+    from app.modules.executions import real_domain_writer
+    phase = {
+        "success": lambda *a, **kw: _ok(["domains:demo.test"]),
+        "exception": _raise(RuntimeError("primary boom")),
+        "cancel": _raise(ConflictError("Run annullato: create bloccata")),
+        "fencing": _raise(ConflictError("fencing loss")),
+    }[primary]
+    with patch.object(dm, "_build_domain_gateway", return_value=gw), \
+         patch.object(dm, "_source_domain_records", return_value=[]):
+        monkeypatch.setattr(real_domain_writer, "resolve_requested", lambda *a: {})
+        monkeypatch.setattr(real_domain_writer, "execute_domain_phase", phase)
+        if raises is not None:
+            with pytest.raises(ConflictError, match=marker):   # primary message, never "close boom"
+                worker_start(db_session, e.run.id, att.id)
+            db_session.rollback()
+        else:
+            run = worker_start(db_session, e.run.id, att.id)
+            assert run.status == status
+    assert cl == [1]   # close invoked exactly once on every path
+
+
 @patch.object(dm, "_run_domain_phase")
 @patch.object(dm, "_build_domain_gateway")
 @patch.object(dm, "coordinate_email_categories")

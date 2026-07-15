@@ -243,12 +243,21 @@ def _run_domain_phase(
             run, requested, gateway, dest_home,
             recorder=recorder, before_write=before_write)
     except BaseException:
+        # A primary exception (failure, cancellation, fencing loss, termination) is
+        # always re-raised so its semantics survive — never a broad swallow.
         _has_exc = True
         raise
     finally:
+        # close() exactly once. Its failure is recorded as a SECONDARY signal and, on
+        # the success path, promoted to a primary failure (no false success); on the
+        # exception path it is swallowed so it cannot mask the primary.
         try:
             gateway.close()
         except Exception:
+            run.events.append(ExecutionEvent(
+                level="warning", phase="worker_domains",
+                message="Chiusura gateway fallita (secondary).",
+                result={"secondary_failure": "gateway_close_failed"}))
             if not _has_exc:
                 raise
 

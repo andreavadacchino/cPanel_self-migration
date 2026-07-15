@@ -186,3 +186,20 @@ def validate_terminal_compensation(compensation: dict | None) -> None:
     _assert_size(compensation)
     if _scan_forbidden(compensation):
         raise ConflictError("Terminal compensation contiene chiave vietata")
+
+
+def validate_completed_flag(payload: dict, *, key: str = "completed", required: bool = True) -> None:
+    """Fail closed unless ``payload[key]`` is a REAL boolean (R2-b2 §8).
+
+    A phase-completion signal must be exactly ``True``/``False``. ``isinstance(x, bool)``
+    rejects ``1``/``0`` (int is not bool) and every truthy string/list/dict, so a
+    malformed payload can never be mistaken for a completion. Reason codes are stable
+    and machine-readable; no rejected value is echoed."""
+    if not isinstance(payload, dict):
+        raise ConflictError("completed_payload_invalid")
+    if key not in payload:
+        if required:
+            raise ConflictError("completed_missing")
+        return
+    if not isinstance(payload[key], bool):
+        raise ConflictError("completed_not_bool")
