@@ -19,6 +19,13 @@ jobs:
   release-guard:
     name: release-guard
     runs-on: ubuntu-latest
+    # This guard validates the shape/provenance of a *release* PR, and its
+    # policy only accepts main <- dev (see the "main only accepts release PRs
+    # from dev" check below). A normal, non-release PR to main (e.g. a CI or
+    # feature branch) is not a release PR, so running the validation on it would
+    # always die. Scope the job to dev -> main PRs: every other PR skips this
+    # job cleanly instead of producing a spurious red.
+    if: github.event.pull_request.head.ref == 'dev'
 
     steps:
       - name: Checkout trusted base policy

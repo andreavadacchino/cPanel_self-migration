@@ -3,10 +3,13 @@ name: Dependency Review
 on:
   pull_request:
     branches: [ main, dev ]
+    # Dependency Review inspects changes to the dependency manifest/lockfile.
+    # Editing a workflow file is not a dependency change, so '.github/workflows/**'
+    # was dropped: it only forced the job to run (and, on this fork, fail) on
+    # CI-only PRs that touch no dependencies.
     paths:
       - 'go.mod'
       - 'go.sum'
-      - '.github/workflows/**'
 
 permissions:
   contents: read
@@ -15,6 +18,12 @@ permissions:
 jobs:
   dependency-review:
     runs-on: ubuntu-latest
+    # GitHub does not support Dependency Review on forks: the API returns
+    # "Dependency review is not supported on this repository" before any diff is
+    # analysed, so on a fork the job can neither pass nor find anything -- it can
+    # only error. Skip it here (documented, not silenced) and keep it a real,
+    # blocking gate on the upstream (non-fork) repository, where it works.
+    if: ${{ !github.event.repository.fork }}
 
     steps:
       - name: Checkout repository
