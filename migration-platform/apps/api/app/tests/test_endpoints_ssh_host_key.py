@@ -288,6 +288,96 @@ def test_a_pin_whose_port_no_longer_matches_is_not_presented(
     assert _get_hostkey(client, eid).status_code == 404
 
 
+# --- persisted-pin integrity (Revision 2) -----------------------------------
+# Coordinates alone do not make a pin trustworthy: a row written outside the API
+# can carry correct host/port but a public_key that is unparsable, non-canonical,
+# a mismatched key_type, or a fingerprint that does not derive from the key. The
+# DB CHECKs allow all of these (non-empty, SHA256:-prefixed). GET must fail closed.
+
+from adapters.ssh_host_keys import parse_host_key  # noqa: E402
+
+_REAL = parse_host_key(_KEY_A)  # canonical form, correct key_type + fingerprint
+
+
+def _insert_pin(db: Session, endpoint_id: int, **fields) -> None:
+    row = {
+        "endpoint_id": endpoint_id,
+        "host": "real.example.com",  # == the endpoint host from _new_endpoint
+        "port": 22,  # == the SSH port from _configure_ssh
+        "key_type": _REAL.key_type,
+        "public_key": _REAL.public_key,
+        "fingerprint_sha256": _REAL.fingerprint_sha256,
+    }
+    row.update(fields)
+    db.add(EndpointSshHostKey(**row))
+    db.commit()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        # A — unparsable key material, coordinates correct
+        {"public_key": "ssh-ed25519 not-valid-base64!!!"},
+        # B — a false but well-formed fingerprint
+        {"fingerprint_sha256": "SHA256:" + "B" * 43},
+        # C — a key_type that does not match the key
+        {"key_type": "ssh-rsa"},
+        # D — a valid key that is NOT in canonical form (extra whitespace)
+        {"public_key": _KEY_A.replace(" ", "   ", 1)},
+    ],
+    ids=["unparsable_key", "false_fingerprint", "wrong_key_type", "non_canonical"],
+)
+def test_a_cryptographically_incoherent_row_is_not_presented(
+    client: TestClient, db_session: Session, corruption: dict
+) -> None:
+    eid = _pinnable_endpoint(client)
+    _insert_pin(db_session, eid, **corruption)
+    resp = _get_hostkey(client, eid)
+    assert resp.status_code == 404, resp.text
+    # The corrupt material must not leak in the fail-closed response.
+    for value in corruption.values():
+        assert value not in resp.text
+
+
+def test_a_fully_coherent_row_is_presented(
+    client: TestClient, db_session: Session
+) -> None:
+    """The integrity check must not turn every directly-inserted row into a false
+    negative: a coherent row (correct coordinates, canonical key, matching type
+    and fingerprint) is still served."""
+    eid = _pinnable_endpoint(client)
+    _insert_pin(db_session, eid)  # all defaults are coherent
+    resp = _get_hostkey(client, eid)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["fingerprint_sha256"] == _REAL.fingerprint_sha256
+
+
+def test_get_does_not_mutate_a_corrupt_row(
+    client: TestClient, db_session: Session
+) -> None:
+    """A fail-closed GET must not auto-correct, rewrite or delete the corrupt row:
+    it stays available for administrative diagnosis, unchanged."""
+    eid = _pinnable_endpoint(client)
+    _insert_pin(db_session, eid, fingerprint_sha256="SHA256:" + "C" * 43)
+    before = db_session.get(EndpointSshHostKey, _pin_id(db_session, eid))
+    before_fp, before_updated = before.fingerprint_sha256, before.updated_at
+
+    assert _get_hostkey(client, eid).status_code == 404
+    db_session.expire_all()
+    after = db_session.get(EndpointSshHostKey, _pin_id(db_session, eid))
+    assert after is not None  # not deleted
+    assert after.fingerprint_sha256 == before_fp  # not rewritten
+    assert after.updated_at == before_updated  # not touched
+
+
+def _pin_id(db: Session, endpoint_id: int) -> int:
+    return db.execute(
+        select(EndpointSshHostKey.id).where(
+            EndpointSshHostKey.endpoint_id == endpoint_id
+        )
+    ).scalar_one()
+
+
 # --- invalidation on coordinate change --------------------------------------
 
 
