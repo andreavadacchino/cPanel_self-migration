@@ -15,6 +15,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -75,8 +76,40 @@ class ConnectionStatus(str, enum.Enum):
     FAILED = "failed"
 
 
+# Database-level guardrails on the SSH columns. Pydantic validates the request,
+# but the worker will read these rows as the source of truth — a bad row inserted
+# by any other path (a fixture, a manual UPDATE, a future bug) must not reach it.
+# These pin the enums, the port range, and that a 'none' method carries nothing.
+# The direct/ref secret-coherence rule is deliberately NOT encoded here (it would
+# be a long, brittle predicate); the runtime validates each row fail-closed
+# before it decrypts or materializes anything.
+_SSH_CONSTRAINTS = (
+    CheckConstraint(
+        "ssh_auth_method IN ('none', 'password', 'private_key')",
+        name="ck_endpoints_ssh_auth_method",
+    ),
+    CheckConstraint(
+        "ssh_secret_source IS NULL OR ssh_secret_source IN ('direct', 'ref')",
+        name="ck_endpoints_ssh_secret_source",
+    ),
+    CheckConstraint(
+        "ssh_port IS NULL OR (ssh_port BETWEEN 1 AND 65535)",
+        name="ck_endpoints_ssh_port_range",
+    ),
+    CheckConstraint(
+        "ssh_auth_method <> 'none' OR ("
+        "ssh_secret_source IS NULL AND ssh_username IS NULL AND ssh_port IS NULL "
+        "AND ssh_password_enc IS NULL AND ssh_private_key_enc IS NULL "
+        "AND ssh_key_passphrase_enc IS NULL AND ssh_password_ref IS NULL "
+        "AND ssh_private_key_ref IS NULL AND ssh_key_passphrase_ref IS NULL)",
+        name="ck_endpoints_ssh_none_is_empty",
+    ),
+)
+
+
 class Endpoint(Base):
     __tablename__ = "endpoints"
+    __table_args__ = _SSH_CONSTRAINTS
 
     id: Mapped[int] = mapped_column(primary_key=True)
     migration_id: Mapped[int] = mapped_column(

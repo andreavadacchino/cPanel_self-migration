@@ -100,8 +100,11 @@ def set_ssh_credentials(
     direct secrets and store the refs verbatim. Every ssh_* column not used by
     the chosen method is cleared, so a switch never leaves an orphan ciphertext.
 
-    Changing how we authenticate invalidates the previous connection verdict, so
-    the endpoint's status is reset — it must be re-tested.
+    ``connection_status``/``capabilities``/``last_*`` describe the cPanel TOKEN
+    probe, a DISTINCT capability — they are deliberately left untouched. Rotating
+    an SSH key must not turn a connected cPanel endpoint into ``unknown`` or drop
+    valid capabilities. The SSH connection's own verdict arrives with separate
+    fields in the runtime PR.
     """
     endpoint = get_endpoint(db, endpoint_id)  # 404 if missing
 
@@ -123,10 +126,6 @@ def set_ssh_credentials(
         else:  # REF
             _apply_ref_ssh_secret(endpoint, bundle)
 
-    endpoint.connection_status = ConnectionStatus.UNKNOWN.value
-    endpoint.last_error = None
-    endpoint.capabilities = None
-    endpoint.last_checked_at = None
     db.add(endpoint)
     db.commit()
     db.refresh(endpoint)

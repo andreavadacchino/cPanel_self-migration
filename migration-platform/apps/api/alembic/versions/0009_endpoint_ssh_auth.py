@@ -54,11 +54,42 @@ def _ssh_columns() -> list[sa.Column]:
     ]
 
 
+# Database-level guardrails: the enums, the port range, and that a 'none' method
+# carries nothing. The worker will read these rows as the source of truth, so a
+# bad row from any non-API path must not reach it. Kept literal (not imported from
+# the model) — a migration describes the schema as it was the day it was written.
+_SSH_CHECKS = (
+    ("ck_endpoints_ssh_auth_method", "ssh_auth_method IN ('none', 'password', 'private_key')"),
+    (
+        "ck_endpoints_ssh_secret_source",
+        "ssh_secret_source IS NULL OR ssh_secret_source IN ('direct', 'ref')",
+    ),
+    ("ck_endpoints_ssh_port_range", "ssh_port IS NULL OR (ssh_port BETWEEN 1 AND 65535)"),
+    (
+        "ck_endpoints_ssh_none_is_empty",
+        "ssh_auth_method <> 'none' OR ("
+        "ssh_secret_source IS NULL AND ssh_username IS NULL AND ssh_port IS NULL "
+        "AND ssh_password_enc IS NULL AND ssh_private_key_enc IS NULL "
+        "AND ssh_key_passphrase_enc IS NULL AND ssh_password_ref IS NULL "
+        "AND ssh_private_key_ref IS NULL AND ssh_key_passphrase_ref IS NULL)",
+    ),
+)
+
+
 def upgrade() -> None:
-    for column in _ssh_columns():
-        op.add_column("endpoints", column)
+    # A batch: add the columns AND the checks in one recreate on SQLite (which
+    # cannot ALTER … ADD CONSTRAINT), a plain ADD COLUMN + ADD CONSTRAINT on
+    # Postgres. The checks reference the columns added in the same batch.
+    with op.batch_alter_table("endpoints") as batch:
+        for column in _ssh_columns():
+            batch.add_column(column)
+        for name, condition in _SSH_CHECKS:
+            batch.create_check_constraint(name, condition)
 
 
 def downgrade() -> None:
-    for column in reversed(_ssh_columns()):
-        op.drop_column("endpoints", column.name)
+    with op.batch_alter_table("endpoints") as batch:
+        for name, _ in reversed(_SSH_CHECKS):
+            batch.drop_constraint(name, type_="check")
+        for column in reversed(_ssh_columns()):
+            batch.drop_column(column.name)

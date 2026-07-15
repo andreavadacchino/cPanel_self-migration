@@ -14,6 +14,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from adapters.ssh_keys import InvalidPrivateKey, load_private_key_or_raise
 from app.modules.endpoints.models import (
     AuthType,
     EndpointRole,
@@ -272,6 +273,14 @@ class SshCredentialBundle(BaseModel):
                     "private_key must be PEM private key material, not a file path "
                     "or a public key"
                 )
+            # Prove it is a usable key, and that the passphrase (if any) matches,
+            # before it is ever encrypted and stored. Turns "accepted here,
+            # rejected by the engine at launch" into an input-time 422. The error
+            # is generic — it never echoes the key or the passphrase.
+            try:
+                load_private_key_or_raise(self.private_key, self.key_passphrase)
+            except InvalidPrivateKey as exc:
+                raise ValueError(str(exc)) from exc
 
     def _validate_ref(self, method: SshAuthMethod) -> None:
         wanted = self.password_ref if method == SshAuthMethod.PASSWORD else self.private_key_ref
