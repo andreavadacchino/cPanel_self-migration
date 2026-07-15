@@ -34,6 +34,10 @@ depends_on: Union[str, Sequence[str], None] = None
 # Literal, not imported from the model: the migration describes the schema as it
 # was written, not as the code says today.
 _ONE_ACTIVE_ATTEMPT = "status IN ('acquired', 'running')"
+_ALL_STATUS = (
+    "status IN ('acquired', 'running', 'succeeded', 'failed', "
+    "'partial', 'cancelled', 'interrupted')"
+)
 
 
 def upgrade() -> None:
@@ -90,6 +94,21 @@ def upgrade() -> None:
         # A new attempt is a new number; a prior attempt is never overwritten.
         sa.UniqueConstraint(
             "execution_id", "attempt_number", name="uq_execution_attempt_number"
+        ),
+        # Database-level invariants (defence in depth against writes outside the
+        # service): valid status vocabulary, positive number, positive lease
+        # window, and finished_at present for any terminal status.
+        sa.CheckConstraint(_ALL_STATUS, name="ck_execution_attempt_status"),
+        sa.CheckConstraint(
+            "attempt_number > 0", name="ck_execution_attempt_number_positive"
+        ),
+        sa.CheckConstraint(
+            "lease_expires_at > lease_acquired_at",
+            name="ck_execution_attempt_lease_interval",
+        ),
+        sa.CheckConstraint(
+            f"{_ONE_ACTIVE_ATTEMPT} OR finished_at IS NOT NULL",
+            name="ck_execution_attempt_finished_when_terminal",
         ),
     )
     op.create_index(

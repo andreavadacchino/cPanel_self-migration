@@ -31,6 +31,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -314,6 +315,9 @@ ATTEMPT_TERMINAL_TO_EXECUTION_STATUS: dict[str, str] = {
 }
 
 _ATTEMPT_ACTIVE_SQL = ", ".join(f"'{s}'" for s in sorted(ATTEMPT_ACTIVE_STATUSES))
+_ATTEMPT_STATUS_SQL = ", ".join(
+    f"'{s.value}'" for s in AttemptStatus
+)
 
 # One active attempt per execution, enforced by the database.
 #
@@ -349,6 +353,25 @@ class ExecutionAttempt(Base):
             "execution_id", "attempt_number", name="uq_execution_attempt_number"
         ),
         _ONE_ACTIVE_ATTEMPT,
+        # Database-level invariants: a status written outside the service (raw
+        # SQL, a bug) cannot slip a value the partial index would not recognise
+        # as active, nor a non-positive number, nor a non-positive lease window.
+        CheckConstraint(
+            f"status IN ({_ATTEMPT_STATUS_SQL})", name="ck_execution_attempt_status"
+        ),
+        CheckConstraint(
+            "attempt_number > 0", name="ck_execution_attempt_number_positive"
+        ),
+        CheckConstraint(
+            "lease_expires_at > lease_acquired_at",
+            name="ck_execution_attempt_lease_interval",
+        ),
+        # A terminal attempt always carries its finished_at (written together
+        # with the terminal status by the service).
+        CheckConstraint(
+            f"status IN ({_ATTEMPT_ACTIVE_SQL}) OR finished_at IS NOT NULL",
+            name="ck_execution_attempt_finished_when_terminal",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
