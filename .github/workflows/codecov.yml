@@ -31,18 +31,32 @@ jobs:
             echo "COVER_GOTOOLCHAIN=auto" >> "$GITHUB_ENV"
           fi
 
+      # The tests ARE the gate: if any test fails, this step fails and the job
+      # is red before Codecov is ever reached.
       - name: Run tests with coverage
         env:
           GOTOOLCHAIN: ${{ env.COVER_GOTOOLCHAIN }}
         run: |
           go test $(go list ./... | grep -v -E '/cmd/') -coverprofile=coverage.out
 
+      # Fail closed if coverage generation itself is broken, so the tolerant
+      # Codecov upload below cannot mask a missing/empty profile.
+      - name: Verify coverage profile exists and is non-empty
+        run: |
+          test -s coverage.out || { echo "coverage.out missing or empty"; exit 1; }
+          echo "coverage.out: $(wc -l < coverage.out) lines"
+
+      # Telemetry only. Codecov's tokenless upload is disabled for this repo
+      # ("Token required - not valid tokenless upload") and CODECOV_TOKEN is not
+      # available on the fork, so the upload fails for a purely remote reason.
+      # fail_ci_if_error is false so a telemetry failure does NOT turn a green
+      # test run red; the test + coverage-verify steps above remain blocking.
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           # Skip the GPG verification of the downloaded Codecov CLI: the runner
           # cannot import Codecov's public key (gpg "no valid OpenPGP data found"
           # -> "Can't check signature: No public key"), which otherwise aborts the

@@ -1,0 +1,279 @@
+name: Platform V2 Required Gates
+
+run-name: Platform V2 gates - ${{ github.ref_name }}
+
+"on":
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-v2-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The required check. Runs every Python gate against a real PostgreSQL and
+  # fails closed if the PostgreSQL suite was skipped instead of executed.
+  platform-postgres:
+    name: platform-postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: migration
+          POSTGRES_PASSWORD: migration
+          POSTGRES_DB: migration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://migration:migration@localhost:5432/migration_test
+      TEST_POSTGRES_URL: postgresql+psycopg://migration:migration@localhost:5432/exec_attempts_test
+    steps:
+      # fetch-depth: 0 so the base-aware guard below can look up the PostgreSQL
+      # test module on the PR base branch, not only in the PR checkout.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            migration-platform/apps/api/pyproject.toml
+            migration-platform/packages/domain/pyproject.toml
+            migration-platform/packages/adapters/pyproject.toml
+            migration-platform/apps/worker/pyproject.toml
+
+      - name: Install platform packages (editable)
+        working-directory: migration-platform
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e packages/domain -e packages/adapters -e "apps/api[test]" -e apps/worker
+
+      - name: Import provenance (fail-closed)
+        working-directory: migration-platform/apps/api
+        run: python "${GITHUB_WORKSPACE}/migration-platform/ci/check_import_provenance.py"
+
+      # Self-test the fail-closed gate script itself, so a regression in its
+      # skip/floor/require-module logic is caught here rather than in a real run.
+      - name: Self-test the pytest report gate
+        run: python -m pytest -q "${GITHUB_WORKSPACE}/migration-platform/ci/test_check_pytest_report.py"
+
+      # Base-aware enforcement of the PostgreSQL module. The module ships in
+      # PR #114; once it exists on the base branch OR in this PR's checkout it is
+      # mandatory. This closes the transitional hole where deleting/renaming the
+      # module would yield pg_module=0 and a false green.
+      #
+      #   base absent + head absent  -> not required  (allowed transition)
+      #   base absent + head present -> required
+      #   base present + head present-> required
+      #   base present + head absent -> required (script then fails: 0 tests)
+      - name: Determine PostgreSQL module enforcement (base-aware)
+        id: pgreq
+        shell: bash
+        run: |
+          set -euo pipefail
+          MODULE="migration-platform/apps/api/app/tests/test_execution_attempts_pg.py"
+          present_head=0
+          [ -f "$MODULE" ] && present_head=1
+          present_base=0
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            # Fetch the PR base tip and read it via FETCH_HEAD: the remote
+            # tracking ref (origin/<base>) is not guaranteed to exist under the
+            # checkout's refspec, but FETCH_HEAD always points at what we fetched.
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            if git cat-file -e "FETCH_HEAD:${MODULE}" 2>/dev/null; then
+              present_base=1
+            fi
+          fi
+          require=0
+          if [ "$present_base" = "1" ] || [ "$present_head" = "1" ]; then
+            require=1
+          fi
+          echo "present_base=$present_base present_head=$present_head require=$require"
+          echo "require=$require" >> "$GITHUB_OUTPUT"
+
+      - name: PostgreSQL reachable + version
+        run: |
+          python - <<'PY'
+          import psycopg
+          c = psycopg.connect("postgresql://migration:migration@localhost:5432/migration_test")
+          with c.cursor() as cur:
+              cur.execute("SELECT version()")
+              print(cur.fetchone()[0])
+          c.close()
+          PY
+
+      - name: Alembic up/down/up on a clean database (single head)
+        working-directory: migration-platform/apps/api
+        env:
+          DATABASE_URL: postgresql+psycopg://migration:migration@localhost:5432/alembic_ci
+        run: |
+          python - <<'PY'
+          import psycopg
+          c = psycopg.connect("postgresql://migration:migration@localhost:5432/migration_test", autocommit=True)
+          with c.cursor() as cur:
+              cur.execute("DROP DATABASE IF EXISTS alembic_ci")
+              cur.execute("CREATE DATABASE alembic_ci")
+          c.close()
+          PY
+          alembic upgrade head
+          heads="$(alembic heads | grep -c .)"
+          if [ "$heads" -ne 1 ]; then
+            echo "expected exactly one Alembic head, got ${heads}:"; alembic heads; exit 1
+          fi
+          alembic current
+          alembic downgrade -1
+          alembic upgrade head
+
+      - name: Create disposable concurrency-test database
+        run: |
+          python - <<'PY'
+          import psycopg
+          c = psycopg.connect("postgresql://migration:migration@localhost:5432/migration_test", autocommit=True)
+          with c.cursor() as cur:
+              cur.execute("DROP DATABASE IF EXISTS exec_attempts_test")
+              cur.execute("CREATE DATABASE exec_attempts_test")
+          c.close()
+          PY
+
+      - name: API tests on PostgreSQL (fail-closed on skip)
+        working-directory: migration-platform/apps/api
+        env:
+          PG_REQUIRE: ${{ steps.pgreq.outputs.require }}
+        run: |
+          python -m pytest -rs --junitxml="${GITHUB_WORKSPACE}/junit-api.xml" app/tests
+          REQUIRE_FLAG=()
+          if [ "${PG_REQUIRE}" = "1" ]; then
+            REQUIRE_FLAG=(--require-pg-module)
+          fi
+          python "${GITHUB_WORKSPACE}/migration-platform/ci/check_pytest_report.py" \
+            "${GITHUB_WORKSPACE}/junit-api.xml" --min-total 300 --pg-min 9 "${REQUIRE_FLAG[@]}"
+
+      - name: Domain tests (fail-closed on skip)
+        working-directory: migration-platform/packages/domain
+        run: |
+          python -m pytest -rs --junitxml="${GITHUB_WORKSPACE}/junit-domain.xml"
+          python "${GITHUB_WORKSPACE}/migration-platform/ci/check_pytest_report.py" \
+            "${GITHUB_WORKSPACE}/junit-domain.xml" --min-total 100
+
+      - name: Worker tests (fail-closed on skip)
+        working-directory: migration-platform/apps/worker
+        env:
+          DRAMATIQ_TESTING: "1"
+        run: |
+          python -m pytest -rs --junitxml="${GITHUB_WORKSPACE}/junit-worker.xml"
+          python "${GITHUB_WORKSPACE}/migration-platform/ci/check_pytest_report.py" \
+            "${GITHUB_WORKSPACE}/junit-worker.xml" --min-total 10
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-reports
+          path: junit-*.xml
+          if-no-files-found: ignore
+
+  # Cross-language: the Go side of the shared execution contract must still
+  # validate the same corpus the Python domain tests use.
+  platform-go-contract:
+    name: platform-go-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: go build ./...
+      - name: Execution contract test (shared corpus)
+        run: go test ./internal/executioncontract/...
+
+  platform-frontend:
+    name: platform-frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: migration-platform/apps/web/package-lock.json
+      - name: Install (deterministic)
+        working-directory: migration-platform/apps/web
+        run: npm ci
+      - name: Build
+        working-directory: migration-platform/apps/web
+        run: npm run build
+
+  platform-compose:
+    name: platform-compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config
+        working-directory: migration-platform
+        run: docker compose config -q
+
+  # Single stable required check. Configure branch protection against
+  # "Platform V2 Required Gates / platform-required" (NOT the individual jobs,
+  # whose names could change). It runs no tests of its own -- it only asserts
+  # that every Platform V2 job reported success. Because it needs all four and
+  # runs with if:always(), a job that fails, is cancelled, or is unexpectedly
+  # skipped makes its result != 'success' and fails this gate: no silent green.
+  platform-required:
+    name: platform-required
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - platform-postgres
+      - platform-go-contract
+      - platform-frontend
+      - platform-compose
+    steps:
+      - name: Assert every required Platform V2 job succeeded
+        shell: bash
+        env:
+          POSTGRES_RESULT: ${{ needs.platform-postgres.result }}
+          GO_CONTRACT_RESULT: ${{ needs.platform-go-contract.result }}
+          FRONTEND_RESULT: ${{ needs.platform-frontend.result }}
+          COMPOSE_RESULT: ${{ needs.platform-compose.result }}
+        run: |
+          set -euo pipefail
+          echo "platform-postgres=${POSTGRES_RESULT}"
+          echo "platform-go-contract=${GO_CONTRACT_RESULT}"
+          echo "platform-frontend=${FRONTEND_RESULT}"
+          echo "platform-compose=${COMPOSE_RESULT}"
+          rc=0
+          for pair in \
+            "platform-postgres:${POSTGRES_RESULT}" \
+            "platform-go-contract:${GO_CONTRACT_RESULT}" \
+            "platform-frontend:${FRONTEND_RESULT}" \
+            "platform-compose:${COMPOSE_RESULT}"; do
+            job="${pair%%:*}"
+            result="${pair#*:}"
+            if [ "$result" != "success" ]; then
+              echo "::error::required job '${job}' did not succeed (result=${result})"
+              rc=1
+            fi
+          done
+          exit "$rc"
