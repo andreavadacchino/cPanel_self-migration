@@ -22,6 +22,21 @@ Recovery is classification only. An expired attempt is reconciled — it is not
 taken over, and no replacement attempt is created here. Technical retry of the
 same execution is a future, explicit policy; it must not appear implicitly in
 ``acquire_attempt``.
+
+Lock order is uniform: **migration_execution then execution_attempt**, always.
+Every operation that touches both takes the execution row first (``acquire`` by
+id, the others by resolving the attempt's immutable ``execution_id`` with an
+unlocked read). The single database-clock read happens *after* the last lock is
+held, so a lease that expires while a call blocks on the execution row is seen
+as expired — never mutated with a stale timestamp. Reconciliation locks each
+candidate in the same order and re-checks under lock.
+
+Some invariants are the database's, not this module's: valid status vocabulary,
+one active attempt per execution, unique ``attempt_number``, positive number and
+lease window, finished_at present when terminal. This module owns transitions,
+ownership, lease validity at the moment of the transition, ``writes_started``
+monotonicity, terminal immutability across these APIs, the attempt→execution
+mapping, reconciliation and the no-auto-retry rule. See the ADR.
 """
 
 from __future__ import annotations
@@ -35,7 +50,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError, UnprocessableError
 from app.modules.executions.models import (
     ATTEMPT_ACTIVE_STATUSES,
     ATTEMPT_TERMINAL_STATUSES,
@@ -111,6 +126,32 @@ class OwnershipMismatch(AttemptError):
     def __init__(self, attempt_id: int) -> None:
         # Never echoes the presented worker token.
         super().__init__(f"attempt {attempt_id} is owned by another worker")
+
+
+class AggregateStateConflict(AttemptError):
+    """An attempt would terminalize its execution into a state incompatible with
+    the execution's existing terminal state — a broken invariant, not a normal
+    operator conflict."""
+
+    def __init__(self, execution_id: int, current: str, attempted: str) -> None:
+        super().__init__(
+            f"execution {execution_id} is already terminal '{current}', "
+            f"incompatible with attempt outcome '{attempted}'"
+        )
+
+
+# Bad-input errors (422 semantics): the value is malformed, not the state.
+
+
+class InvalidLeaseDuration(UnprocessableError):
+    def __init__(self) -> None:
+        super().__init__("lease duration must be a positive number of seconds")
+
+
+class InvalidWorkerIdentity(UnprocessableError):
+    def __init__(self) -> None:
+        # Never echoes the presented worker token.
+        super().__init__("worker_id must be a non-empty, non-blank identifier")
 
 
 # --- transaction boundary ---------------------------------------------------
@@ -207,6 +248,54 @@ def _assert_transition(current: str, target: str) -> None:
         raise InvalidTransition(current, target)
 
 
+# --- input validation (fail-closed, before any row work) --------------------
+
+
+def _require_valid_lease(lease_seconds: int) -> None:
+    if not isinstance(lease_seconds, int) or isinstance(lease_seconds, bool):
+        raise InvalidLeaseDuration()
+    if lease_seconds <= 0:
+        raise InvalidLeaseDuration()
+
+
+def _require_valid_worker(worker_id: str) -> None:
+    if not isinstance(worker_id, str) or not worker_id.strip():
+        raise InvalidWorkerIdentity()
+
+
+def _execution_id_of(session: Session, attempt_id: int) -> int:
+    """Read the (immutable) parent execution id without locking, so callers can
+    take the execution lock first — the canonical order — before locking the
+    attempt."""
+    execution_id = session.execute(
+        select(ExecutionAttempt.execution_id).where(ExecutionAttempt.id == attempt_id)
+    ).scalar_one_or_none()
+    if execution_id is None:
+        raise NotFoundError("execution_attempt", attempt_id)
+    return execution_id
+
+
+# The unique constraints whose violation genuinely means "another attempt won
+# the active slot / that number". Any other IntegrityError (e.g. a CHECK) is a
+# different failure and must not be reported as a lease conflict.
+_ACTIVE_ATTEMPT_CONSTRAINTS: frozenset[str] = frozenset(
+    {"uq_execution_one_active_attempt", "uq_execution_attempt_number"}
+)
+
+
+def _active_attempt_conflict(exc: IntegrityError) -> bool:
+    orig = getattr(exc, "orig", None)
+    # psycopg exposes the violated constraint by name — the robust path.
+    diag = getattr(orig, "diag", None)
+    name = getattr(diag, "constraint_name", None)
+    if name:
+        return name in _ACTIVE_ATTEMPT_CONSTRAINTS
+    # SQLite has no diagnostics: match the constraint/index name in the message
+    # without swallowing unrelated integrity errors.
+    message = str(orig or exc)
+    return any(c in message for c in _ACTIVE_ATTEMPT_CONSTRAINTS)
+
+
 def _terminalize(
     attempt: ExecutionAttempt,
     execution: MigrationExecution,
@@ -221,7 +310,19 @@ def _terminalize(
     monotone: it is only ever set true here, never cleared. The execution is
     terminalized one-to-one under the current no-retry policy (see the model's
     ATTEMPT_TERMINAL_TO_EXECUTION_STATUS note).
+
+    If the execution is already terminal with a *different* state, this is a
+    broken invariant (attempt and execution would diverge): fail loudly with
+    AggregateStateConflict rather than silently leaving them inconsistent. An
+    already-terminal execution with the *same* target is treated as idempotent.
     """
+    expected_execution = ATTEMPT_TERMINAL_TO_EXECUTION_STATUS[target]
+    if (
+        execution.status in TERMINAL_STATUSES
+        and execution.status != expected_execution
+    ):
+        raise AggregateStateConflict(execution.id, execution.status, target)
+
     attempt.status = target
     attempt.finished_at = moment
     if error_code is not None:
@@ -232,7 +333,7 @@ def _terminalize(
         attempt.writes_started = True
         execution.writes_started = True
     if execution.status not in TERMINAL_STATUSES:
-        execution.status = ATTEMPT_TERMINAL_TO_EXECUTION_STATUS[target]
+        execution.status = expected_execution
         execution.finished_at = moment
 
 
@@ -252,6 +353,8 @@ def acquire_attempt(
     LeaseHeldByAnotherWorker and creates nothing. No takeover, no replacement
     attempt — an expired predecessor is the reconciler's job, not this call's.
     """
+    _require_valid_worker(worker_id)
+    _require_valid_lease(lease_seconds)
     execution = _lock_execution(session, execution_id)
     if execution.status in TERMINAL_STATUSES:
         raise ExecutionNotAcquirable(execution_id, f"execution is {execution.status}")
@@ -286,9 +389,13 @@ def acquire_attempt(
         execution.status = ExecutionStatus.RUNNING.value
     try:
         session.commit()
-    except IntegrityError as exc:  # lost the race on the unique partial index
+    except IntegrityError as exc:
         session.rollback()
-        raise LeaseHeldByAnotherWorker(execution_id) from exc
+        # Only a real active-attempt / attempt-number collision is a lease
+        # conflict. Any other integrity error (e.g. a CHECK) propagates as-is.
+        if _active_attempt_conflict(exc):
+            raise LeaseHeldByAnotherWorker(execution_id) from exc
+        raise
     session.refresh(attempt)
     return attempt
 
@@ -298,6 +405,7 @@ def start_attempt(
     session: Session, attempt_id: int, worker_id: str
 ) -> ExecutionAttempt:
     """Mark the subprocess launched: acquired -> running."""
+    _require_valid_worker(worker_id)
     attempt = _lock_attempt(session, attempt_id)
     _require_owner(attempt, worker_id)
     _require_not_terminal(attempt)
@@ -317,6 +425,8 @@ def renew_attempt_lease(
     session: Session, attempt_id: int, worker_id: str, lease_seconds: int
 ) -> ExecutionAttempt:
     """Extend the lease for the owning worker of a still-valid, non-terminal attempt."""
+    _require_valid_worker(worker_id)
+    _require_valid_lease(lease_seconds)
     attempt = _lock_attempt(session, attempt_id)
     _require_owner(attempt, worker_id)
     _require_not_terminal(attempt)
@@ -338,7 +448,14 @@ def mark_writes_started(
     Sets the attempt and its execution aggregate true in one transaction. A
     write-adjacent operation, so it requires a valid lease: a fenced-out worker
     cannot flip this the instant before it is reconciled.
+
+    Locks execution then attempt (the canonical order), and reads the database
+    clock only *after* both locks are held — so a lease that expires while this
+    call blocks on the execution row is seen as expired, not mutated with a
+    stale timestamp.
     """
+    _require_valid_worker(worker_id)
+    execution = _lock_execution(session, _execution_id_of(session, attempt_id))
     attempt = _lock_attempt(session, attempt_id)
     _require_owner(attempt, worker_id)
     _require_not_terminal(attempt)
@@ -346,7 +463,6 @@ def mark_writes_started(
         raise InvalidTransition(attempt.status, "writes_started")
     moment = _db_now(session)
     _require_lease_valid(attempt, moment)
-    execution = _lock_execution(session, attempt.execution_id)
     attempt.writes_started = True
     execution.writes_started = True
     session.commit()
@@ -372,9 +488,16 @@ def finish_attempt(
     must be reconciled, not allowed to author its own terminal state and escape
     classification. The terminal status, finished_at and the execution's
     terminal status are written atomically.
+
+    Locks execution then attempt (the canonical order), and reads the database
+    clock only *after* both locks are held — so a lease that expires while this
+    call blocks on the execution row is seen as expired, not terminalized with a
+    stale timestamp.
     """
+    _require_valid_worker(worker_id)
     if status not in _WORKER_TERMINAL_STATES:
         raise InvalidTransition(status, "worker-authored terminal state")
+    execution = _lock_execution(session, _execution_id_of(session, attempt_id))
     attempt = _lock_attempt(session, attempt_id)
     _require_owner(attempt, worker_id)
     _require_not_terminal(attempt)
@@ -386,7 +509,6 @@ def finish_attempt(
         target = AttemptStatus.PARTIAL.value
     _assert_transition(attempt.status, target)
 
-    execution = _lock_execution(session, attempt.execution_id)
     _terminalize(attempt, execution, target, moment, error_code, error_summary)
     session.commit()
     session.refresh(attempt)
@@ -396,36 +518,37 @@ def finish_attempt(
 # --- reconciliation: the single authority over lost owners ------------------
 
 
-def _expired_active_attempts(
+def _expired_active_attempt_ids(
     session: Session, execution_id: int | None
-) -> tuple[datetime, list[ExecutionAttempt]]:
-    # One database-clock reading decides expiry *and* stamps finished_at, so an
-    # attempt can never be recorded as finishing before its own lease expired.
+) -> tuple[datetime, list[tuple[int, int]]]:
+    """Discover ``(execution_id, attempt_id)`` of active, expired attempts.
+
+    Read WITHOUT locking, so the reconciler can then take the locks in the
+    canonical order (execution then attempt) and re-check each under lock. One
+    database-clock reading (``moment``) decides expiry and later stamps
+    finished_at, so an attempt is never recorded as finishing before its lease
+    expired. Ordered deterministically so concurrent reconcilers lock in the
+    same order.
+    """
     moment = _db_now(session)
-    stmt = select(ExecutionAttempt).where(
-        ExecutionAttempt.status.in_(ATTEMPT_ACTIVE_STATUSES)
-    )
+    stmt = select(
+        ExecutionAttempt.execution_id,
+        ExecutionAttempt.id,
+        ExecutionAttempt.lease_expires_at,
+    ).where(ExecutionAttempt.status.in_(ATTEMPT_ACTIVE_STATUSES))
     if execution_id is not None:
         stmt = stmt.where(ExecutionAttempt.execution_id == execution_id)
-    if session.get_bind().dialect.name == "postgresql":
-        # Lock only the genuinely-expired rows, decided by `moment`. A concurrent
-        # reconciler blocks here, then re-checks status IN active after the lock
-        # and sees the rows already terminal — so it does nothing. Deterministic
-        # lock order across concurrent global reconciles avoids a lock-order
-        # deadlock.
-        stmt = (
-            stmt.where(ExecutionAttempt.lease_expires_at <= moment)
-            .order_by(ExecutionAttempt.execution_id, ExecutionAttempt.id)
-            .with_for_update()
-        )
-        rows = list(session.execute(stmt).scalars().all())
-    else:
-        rows = [
-            a
-            for a in session.execute(stmt).scalars().all()
-            if _as_utc(a.lease_expires_at) <= moment
-        ]
-    return moment, rows
+    is_pg = session.get_bind().dialect.name == "postgresql"
+    if is_pg:
+        stmt = stmt.where(ExecutionAttempt.lease_expires_at <= moment)
+    stmt = stmt.order_by(ExecutionAttempt.execution_id, ExecutionAttempt.id)
+    rows = session.execute(stmt).all()
+    pairs = [
+        (eid, aid)
+        for eid, aid, expires in rows
+        if is_pg or _as_utc(expires) <= moment
+    ]
+    return moment, pairs
 
 
 @_atomic
@@ -435,14 +558,24 @@ def reconcile_expired_attempts(
     """Classify every active attempt whose lease has expired.
 
     ``writes_started`` false -> ``interrupted``; true -> ``partial``. Both the
-    attempt and its execution are terminalized. Idempotent: a re-run finds no
-    active-and-expired rows and changes nothing. Never creates a new attempt —
-    there is no implicit retry.
+    attempt and its execution are terminalized. Locks execution then attempt
+    (the canonical order) per candidate and re-checks under lock, so a
+    concurrent renew (which cannot extend an already-expired lease) or a
+    concurrent reconciler leaves this idempotent: a re-run finds nothing active
+    and expired and changes nothing. Never creates a new attempt — there is no
+    implicit retry.
     """
-    moment, expired = _expired_active_attempts(session, execution_id)
+    moment, candidates = _expired_active_attempt_ids(session, execution_id)
     reconciled: list[ExecutionAttempt] = []
-    for attempt in expired:
-        execution = _lock_execution(session, attempt.execution_id)
+    for exec_id, attempt_id in candidates:
+        execution = _lock_execution(session, exec_id)
+        attempt = _lock_attempt(session, attempt_id)
+        # Re-check under lock: another reconciler may have terminalized it, or
+        # its lease may no longer be expired.
+        if attempt.status not in ATTEMPT_ACTIVE_STATUSES:
+            continue
+        if _as_utc(attempt.lease_expires_at) > moment:
+            continue
         target = (
             AttemptStatus.PARTIAL.value
             if attempt.writes_started
