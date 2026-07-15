@@ -337,6 +337,12 @@ func validateDoubleConfirmation(r *http.Request, sess *workbench.Session) error 
 // It validates the action, applies the appropriate confirmation gate,
 // launches the subprocess synchronously, records the result in the timeline,
 // attaches produced artifacts, and attempts auto-transition after verify.
+// execAfterReserveHook, when non-nil, is invoked inside handleExec in the window
+// between reserving the single-writer slot and persisting the job journal. It is
+// a test seam only (nil in production) that lets a test stop the winning request
+// exactly inside that window and probe a concurrent 409 deterministically.
+var execAfterReserveHook func()
+
 func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request, sessionID string) {
 	actionName := strings.TrimSpace(r.FormValue("action"))
 	action, ok := actionRegistry[actionName]
@@ -385,6 +391,9 @@ func (ws *workbenchExecServer) handleExec(w http.ResponseWriter, r *http.Request
 	if !ws.job.tryReserve() {
 		writeBusy409(w, ws.dir, ws.job)
 		return
+	}
+	if execAfterReserveHook != nil {
+		execAfterReserveHook()
 	}
 	// Persist the job identity BEFORE launching the subprocess, so a refresh, a
 	// sleep or a killed ui always reconstructs "action running since ..."
