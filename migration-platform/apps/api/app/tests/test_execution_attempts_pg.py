@@ -242,13 +242,71 @@ def test_concurrent_reconcile_terminalizes_once(pg_sessionmaker) -> None:
 # --- lease expiry while blocked on the execution lock (Finding 1) -----------
 
 
+def _wait_until_backend_waiting_on_lock(
+    admin_conn, pid: int, timeout: float = 15.0
+) -> None:
+    """Block until backend ``pid`` is genuinely parked on a PostgreSQL lock.
+
+    Proves — via a distinct admin connection reading pg_stat_activity — that the
+    worker's own backend is blocked (state='active', wait_event_type='Lock'),
+    not merely that its Python thread has started. Raises a diagnostic
+    AssertionError on timeout instead of looping forever.
+    """
+    deadline = time.monotonic() + timeout
+    last: object = None
+    while time.monotonic() < deadline:
+        row = admin_conn.execute(
+            text(
+                "SELECT state, wait_event_type, wait_event, query "
+                "FROM pg_stat_activity WHERE pid = :pid"
+            ),
+            {"pid": pid},
+        ).first()
+        if row is not None:
+            state, wait_type, wait_event, query = row
+            last = {"state": state, "wait_event_type": wait_type,
+                    "wait_event": wait_event, "query": (query or "")[:80]}
+            if state == "active" and wait_type == "Lock":
+                return
+        time.sleep(0.02)
+    raise AssertionError(
+        f"backend {pid} never reached a Lock wait within {timeout}s; last seen: {last}"
+    )
+
+
+def _wait_until_lease_expired(
+    admin_conn, attempt_id: int, timeout: float = 15.0
+) -> None:
+    """Block until PostgreSQL's own clock says the attempt's lease has expired.
+
+    The expiry authority is ``clock_timestamp()``, never Python's clock."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        expired = admin_conn.execute(
+            text(
+                "SELECT clock_timestamp() >= lease_expires_at "
+                "FROM execution_attempts WHERE id = :i"
+            ),
+            {"i": attempt_id},
+        ).scalar()
+        if expired:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"attempt {attempt_id} lease never expired within {timeout}s")
+
+
 def _lease_expires_during_contention(
     pg_engine: Engine,
     pg_sessionmaker,
     op: Callable[[Session, int, str], object],
 ) -> None:
     """A worker whose lease expires *while it blocks on the execution row lock*
-    must be rejected with LeaseExpired, not mutate with a stale timestamp."""
+    must be rejected with LeaseExpired, not mutate with a stale timestamp.
+
+    Determinism: the main thread observes, on pg_stat_activity, the worker's own
+    backend actually parked on a Lock before it lets the lease expire (by
+    clock_timestamp()). No arbitrary sleep decides the outcome.
+    """
     setup = pg_sessionmaker()
     execution_id = _make_execution(setup)
     attempt = attempt_service.acquire_attempt(setup, execution_id, "w1", 2)
@@ -263,12 +321,19 @@ def _lease_expires_during_contention(
         text("SELECT id FROM migration_executions WHERE id = :i FOR UPDATE"),
         {"i": execution_id},
     )
+    # A third, autocommit connection to observe the worker backend.
+    admin = pg_engine.connect().execution_options(isolation_level="AUTOCOMMIT")
 
     result: dict[str, object] = {}
+    pid_ready = threading.Event()
 
     def worker() -> None:
         session = pg_sessionmaker()
         try:
+            # Same session/connection the operation will block on, so the PID we
+            # publish is the backend that parks on the lock.
+            result["pid"] = session.execute(text("SELECT pg_backend_pid()")).scalar()
+            pid_ready.set()
             result["outcome"] = op(session, attempt_id, "w1")
         except Exception as exc:  # noqa: BLE001 - recorded and asserted
             result["outcome"] = exc
@@ -279,10 +344,15 @@ def _lease_expires_during_contention(
 
     th = threading.Thread(target=worker)
     th.start()
-    time.sleep(2.6)  # the 2s lease expires while the worker is blocked on T1
-    holder.rollback()
-    holder.close()
+    try:
+        assert pid_ready.wait(timeout=10), "worker never published its backend pid"
+        _wait_until_backend_waiting_on_lock(admin, int(result["pid"]))
+        _wait_until_lease_expired(admin, attempt_id)
+    finally:
+        holder.rollback()
+        holder.close()
     th.join(10)
+    admin.close()
 
     assert isinstance(result.get("outcome"), LeaseExpired), result
     assert result.get("reusable") is True
@@ -295,6 +365,12 @@ def _lease_expires_during_contention(
     assert a.writes_started is False
     assert e.status == ExecutionStatus.RUNNING.value      # execution unchanged
     assert e.finished_at is None
+    # No residual lock: the execution row is immediately lockable again.
+    check.execute(
+        text("SELECT id FROM migration_executions WHERE id = :i FOR UPDATE NOWAIT"),
+        {"i": execution_id},
+    )
+    check.rollback()
     check.close()
 
 
