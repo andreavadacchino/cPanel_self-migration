@@ -1,7 +1,7 @@
 # Current State — Migration Platform V2
 
 > Documento vivo. Descrive **cosa è vero adesso**, non cosa è pianificato.
-> Aggiornato: 2026-07-15 · `fork/main` = `b5c9d36` · + branch `feat/platform-v2-execution-attempts`
+> Aggiornato: 2026-07-15 · `fork/main` = `db8d0c4` · + branch `feat/platform-v2-host-identity-persistence`
 
 Per la direzione architetturale vincolante vedi [`../../docs/ADR_V2_GO_EXECUTOR.md`](../../docs/ADR_V2_GO_EXECUTOR.md)
 e [`../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md`](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md).
@@ -15,8 +15,8 @@ della WebUI Go). Su quel checkout la directory contiene solo residui di scaffold
 una migration Alembic, tre tabelle, un actor Dramatiq che scrive una riga di log, adapter che
 sollevano `NotImplementedError`.
 
-**La piattaforma reale esiste solo su `fork/main`**: 179 file, moduli `comparison`, `endpoints`,
-`inventory`, `plan`, catena Alembic `0001→0007`, cifratura Fernet dei token.
+**La piattaforma reale esiste solo su `fork/main`**: moduli `comparison`, `endpoints`,
+`inventory`, `plan`, `executions`, catena Alembic `0001→0011`, cifratura Fernet dei token.
 `origin/main` (upstream `tis24dev`) **non contiene affatto** la directory.
 
 Chi inizia a lavorare dal working tree sbagliato conclude che la piattaforma è un guscio vuoto
@@ -91,9 +91,10 @@ Quattro **CHECK constraint** DB presidiano enum/porta/coerenza-`none` (il worker
 come verità). Impostare/ruotare l'SSH **non tocca** lo stato del probe cPanel
 (`connection_status`/`capabilities`/`last_*`): sono capability distinte. È **sola persistenza**:
 nessun decrypt, nessun `host.yaml`, nessun `known_hosts`, nessuna connessione — l'adapter SSH resta
-uno stub `NotImplementedError`. Manca ancora **l'host-identity trust** (il pin della host key,
-tabella figlia, PR successiva) e tutto il **runtime** (risoluzione dei ref, costruzione di
-`host.yaml`/`known_hosts`, subprocess). Il dry-run end-to-end resta quindi **bloccato**.
+uno stub `NotImplementedError`. **L'host-identity trust ora esiste** (il pin della host key, tabella
+figlia `endpoint_ssh_host_keys`, migration `0011`; vedi [SSH_HOST_IDENTITY.md](SSH_HOST_IDENTITY.md)),
+ma manca ancora tutto il **runtime** (risoluzione dei ref, costruzione di `host.yaml`/`known_hosts`,
+subprocess). Il dry-run end-to-end resta quindi **bloccato**.
 
 Il confine è dichiarato in punti coerenti:
 
@@ -124,12 +125,12 @@ coverage ma **invisibili** all'item-diff. Regressione da presidiare a ogni PR ch
 
 ## Schema dati
 
-Alembic lineare, single head, `0001 → 0010`. Dieci tabelle su Postgres:
+Alembic lineare, single head, `0001 → 0011`. Undici tabelle su Postgres:
 
 ```
 migrations · jobs · job_events · endpoints
 inventory_snapshots · comparison_reports · migration_plans
-migration_executions · execution_attempts · alembic_version
+migration_executions · execution_attempts · endpoint_ssh_host_keys · alembic_version
 ```
 
 `jobs` non modella l'esecuzione: `JobStatus` = `pending queued running succeeded failed`, e non ha
@@ -150,8 +151,22 @@ Due vincoli sono **del database**, non di un servizio:
 distinta dal token cPanel, default `ssh_auth_method = 'none'` che preserva ogni riga esistente. Solo
 persistenza (segreti Fernet o riferimenti opachi, mai in chiaro nell'API). Quattro CHECK constraint
 (`ck_endpoints_ssh_*`) presidiano enum, range porta e coerenza `none` — verificate su Postgres reale
-(un INSERT con porta 70000 è rifiutato). **Nessuna tabella di host-key pin** ancora: l'host-identity
-trust è la PR successiva.
+(un INSERT con porta 70000 è rifiutato).
+
+`endpoint_ssh_host_keys` (migration `0011`) è il **pin della host key SSH** di un endpoint: la chiave
+pubblica che il server presenta, canonicalizzata, con la sua fingerprint OpenSSH `SHA256:`, legata a
+uno **snapshot server-side** di `host + ssh_port` al momento del pin. **Sola persistenza + API**
+(`GET`/`PUT`/`DELETE /api/endpoints/{id}/ssh-host-key`): nessuna connessione, nessun `ssh-keyscan`,
+nessun TOFU, nessun `known_hosts`. Il client invia **solo** la chiave pubblica; host, porta e
+fingerprint sono derivati/calcolati **lato server** (`extra='forbid'` rifiuta un host/porta/fingerprint
+inviati dal client). Vincoli DB: FK `ON DELETE CASCADE` verso `endpoints`, **unique per endpoint**
+(un solo pin attivo), range porta, non-blank su host/tipo/chiave, formato `SHA256:` — verificati su
+Postgres reale (introspezione + INSERT invalidi rifiutati). Il pin è **invalidato nella stessa
+transazione** quando cambiano `host` o `ssh_port` dell'endpoint (o l'SSH è azzerato a `none`); ruotare
+segreto/sorgente/username a coordinate invariate lo **preserva** (la host key è l'identità del server,
+indipendente da come ci autentichiamo). La `GET` è **fail-closed**: una riga il cui snapshot non
+coincide più con le coordinate correnti dell'endpoint **non** è presentata come identità valida (404).
+Dettaglio, threat model e matrice di invalidazione in [SSH_HOST_IDENTITY.md](SSH_HOST_IDENTITY.md).
 
 `execution_attempts` (migration `0010`) modella ownership, lease e recovery di **un** tentativo di
 *un* worker su un'execution. Vedi [ADR-002](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md). Il
@@ -214,9 +229,16 @@ mono-operatore** finché auth, autorizzazione, protezione SSRF e host allowlist 
 
 ## Gate di qualità
 
-**Sul fork non esiste CI funzionale.** `gh pr checks` mostra solo `Sourcery review: skipping`.
-Lo stato `MERGEABLE`/`CLEAN` di GitHub **non dice nulla sulla correttezza**. Ogni gate va eseguito
-localmente, sempre.
+**Sul fork esiste ora CI funzionale e obbligatoria.** Il workflow `Platform V2 Required Gates`
+(`.github/workflows/platform-v2-gates.yml`) gira su ogni PR e push verso `main` con quattro job —
+`platform-postgres` (l'intera suite Python su un **PostgreSQL reale**, fail-closed se la suite PG è
+saltata invece che eseguita: `--min-total 300 --pg-min 9 --require-pg-module`), `platform-go-contract`,
+`platform-frontend`, `platform-compose` — aggregati dal check `platform-required`. Anche il **Race
+Detector** (`race.yml`, check `Go race detector`) è obbligatorio. `main` è **protetto**: entrambi i
+context (`Go race detector`, `platform-required`, GitHub App 15368) sono **required**, `strict=true`,
+`enforce_admins=true`, force-push e deletion disabilitati. Restano comunque da eseguire
+**localmente**, sempre: lo stato `MERGEABLE`/`CLEAN` di GitHub non dice nulla sulla correttezza, e la
+CI non copre lo smoke Docker né lo smoke cPanel reale.
 
 ```bash
 make api-test      # pytest apps/api
@@ -270,10 +292,29 @@ Eseguiti da un **venv creato fuori dal worktree**, con provenance verificata (`_
 | `npm run build` | **non eseguito** — il web non è toccato da questa PR |
 | Smoke read-only cPanel reale | **NON eseguito** — nessuna credenziale in sessione |
 
-I test di concorrenza girano solo con `TEST_POSTGRES_URL` impostato (compose-smoke), **non** in
-`make api-test` di default — coerente con la convenzione del repo per le proprietà Postgres-only. La
-CI obbligatoria cross-language che li renderebbe automatici è un incremento distinto (roadmap
-Gruppo A #4). Per eseguirli: `make api-test-pg` (o `TEST_POSTGRES_URL=… make api-test`).
+I test di concorrenza girano solo con `TEST_POSTGRES_URL` impostato, **non** in `make api-test` di
+default — coerente con la convenzione del repo per le proprietà Postgres-only. La CI obbligatoria
+(`platform-postgres`) li rende automatici: esegue l'intera `app/tests` su PostgreSQL reale. Per
+eseguirli in locale: `make api-test-pg` (ora ogni modulo `*_pg.py`) o `TEST_POSTGRES_URL=… make api-test`.
+
+## Stato dei gate — host identity persistence (2026-07-15, branch `feat/platform-v2-host-identity-persistence`)
+
+Eseguiti da un **venv creato fuori dal worktree**, provenance verificata (`app`/`domain`/`adapters`/
+`worker` tutti dentro questo worktree).
+
+| Gate | Esito |
+|---|---|
+| `pytest` API (SQLite) | 473 passed, 26 skipped (i 26 = suite Postgres-only) |
+| `pytest` API su **Postgres reale** (l'intera `app/tests`) | **499 passed, 0 skipped** — replica del gate CI `platform-postgres`; `check_pytest_report.py --min-total 300 --pg-min 9 --require-pg-module` → **GATE OK** |
+| di cui suite host-key PG (`*_pg.py`) | 26 passed (9 attempts + 17 host-key): serializzazione lock su `set_ssh_host_key`/`update_endpoint`/`set_ssh_credentials`, nessun pin stale su cambio host/porta (contention deterministica via `pg_stat_activity`), due PUT concorrenti → una sola riga, FK CASCADE, CHECK, unique, introspezione migration, up/down/up |
+| `pytest` adapter host-key (`test_ssh_host_keys.py`) | 17 passed — fingerprint verificata contro `ssh-keygen -lf` (known-answer vector), keyscan-form/chiave privata/multi-linea rifiutati |
+| `pytest` worker (`DRAMATIQ_TESTING=1`) | 15 passed |
+| Alembic up/down/up (SQLite) | OK (0001→0011) |
+| Alembic `0001→0011` su **Postgres reale**, DB pristine | OK (up→down→up; introspezione: tabella, FK CASCADE, unique, 5 CHECK, indice; single head `0011`) |
+| `docker compose config` | OK |
+| `npm run build` | **OK** (gate required; nessun file web toccato) |
+| Import provenance (`ci/check_import_provenance.py`) | OK |
+| Smoke read-only cPanel reale | **NON eseguito** — nessuna credenziale in sessione; non necessario (persistenza + API, nessuna connessione) |
 
 ---
 
@@ -315,23 +356,25 @@ Gruppo A #4). Per eseguirli: `make api-test-pg` (o `TEST_POSTGRES_URL=… make a
 
 ## Prossimo passo
 
-Fatti (Gruppo A della roadmap): **credenziali SSH degli endpoint** (PR #112, migration `0009`) e
-**modello attempts/lease/recovery** (questa PR, migration `0010`, [ADR-002](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md)).
-Il fondamento di ownership e recovery esiste; **la piattaforma non è ancora pronta per un dry-run
-end-to-end.**
+Fatti (Gruppo A della roadmap): **credenziali SSH degli endpoint** (PR #112, migration `0009`),
+**modello attempts/lease/recovery** (PR #114, migration `0010`, [ADR-002](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md)),
+**CI obbligatoria cross-language + Postgres** (PR #115) e **host identity persistence** (questa PR,
+migration `0011`). Il fondamento di ownership, recovery e trust dell'host esiste; **la piattaforma
+non è ancora pronta per un dry-run end-to-end.**
 
-Prossimi incrementi isolati, in ordine:
+Prossimo incremento isolato:
 
-1. **Host identity persistence** — pin dell'host key associato a host+porta, invalidato quando le
-   coordinate endpoint cambiano; nessun runtime. In un container `~/.ssh/known_hosts` è effimero e il
-   TOFU del motore degrada ad "accetta qualunque chiave al primo run".
-2. **SSH runtime resolver + workspace builder** — materializzazione fail-closed di chiave/passphrase/
+1. **SSH runtime resolver + workspace builder** — materializzazione fail-closed di chiave/passphrase/
    password/`known_hosts` con permessi minimi, generazione dell'`host.yaml` senza segreti negli
-   artifact, cleanup deterministico; ancora **nessun subprocess**.
-3. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
+   artifact, cleanup deterministico; ancora **nessun subprocess**. Il pin di host identity (questa PR)
+   è la fonte per il `known_hosts` effimero del container: un `known_hosts` costruito dal pin evita che
+   il TOFU del motore degradi ad "accetta qualunque chiave al primo run". **Regola per il runtime**:
+   prima di fidarsi di un pin deve ri-verificare sia le coordinate (`pin.host == endpoint.host`,
+   `pin.port == endpoint.ssh_port`) sia l'**integrità crittografica** (chiave parsabile/canonica, tipo e
+   fingerprint coerenti) invocando lo stesso validatore condiviso `validate_persisted_host_key`
+   dell'adapter — le CHECK del DB sono solo di formato, non provano che la fingerprint derivi dalla chiave.
+2. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
    allowlist di contratto, avvio rifiutato prima del subprocess se incompatibile.
-4. **CI obbligatoria cross-language + migration** — rende automatici i test di concorrenza Postgres
-   (oggi solo compose-smoke via `TEST_POSTGRES_URL`) e i contratti Go↔Python.
 
 Solo dopo questi si implementano dry-run actor, ingestione eventi/risultato e terminalizzazione dal
 subprocess. Il primo apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH

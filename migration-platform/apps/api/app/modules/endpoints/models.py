@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
     true,
 )
@@ -226,3 +227,70 @@ class Endpoint(Base):
             self.ssh_key_passphrase_enc is not None
             or self.ssh_key_passphrase_ref is not None
         )
+
+
+# Named, database-level guardrails on the host-key pin. The runtime will read
+# this row as an identity to trust, so a bad row from any non-API path (a
+# fixture, a manual INSERT) must not reach it: one pin per endpoint, a valid
+# port, non-blank text, and a fingerprint that carries the SHA256: prefix. The
+# host/port coherence with the endpoint's *current* SSH coordinates is validated
+# fail-closed in the service and re-checked by the runtime — deliberately NOT a
+# composite FK, which would be brittle against the endpoint's mutable coordinates.
+_HOST_KEY_CONSTRAINTS = (
+    UniqueConstraint("endpoint_id", name="uq_endpoint_ssh_host_key_endpoint"),
+    CheckConstraint(
+        "port BETWEEN 1 AND 65535", name="ck_endpoint_ssh_host_key_port_range"
+    ),
+    CheckConstraint("length(host) > 0", name="ck_endpoint_ssh_host_key_host_nonblank"),
+    CheckConstraint(
+        "length(key_type) > 0", name="ck_endpoint_ssh_host_key_key_type_nonblank"
+    ),
+    CheckConstraint(
+        "length(public_key) > 0", name="ck_endpoint_ssh_host_key_public_key_nonblank"
+    ),
+    CheckConstraint(
+        "fingerprint_sha256 LIKE 'SHA256:_%'",
+        name="ck_endpoint_ssh_host_key_fingerprint_format",
+    ),
+)
+
+
+class EndpointSshHostKey(Base):
+    """The pinned SSH host key for one endpoint's current SSH coordinates.
+
+    Persistence only: nothing here connects, runs ssh-keyscan, applies TOFU or
+    writes a known_hosts. ``host`` and ``port`` are a SNAPSHOT of the endpoint's
+    SSH coordinates taken server-side at pin time — never client-supplied — so a
+    later runtime can refuse a pin that no longer matches the endpoint it locked.
+    One active pin per endpoint (unique ``endpoint_id``); it is removed by FK
+    CASCADE with the endpoint, and invalidated by the service when the endpoint's
+    ``host`` or ``ssh_port`` change.
+
+    ``public_key`` is the canonical ``algorithm base64`` form and
+    ``fingerprint_sha256`` the standard OpenSSH ``SHA256:…`` fingerprint, both
+    computed server-side from the submitted key. Host key material is public:
+    there is no secret column here and nothing to redact.
+    """
+
+    __tablename__ = "endpoint_ssh_host_keys"
+    __table_args__ = _HOST_KEY_CONSTRAINTS
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    endpoint_id: Mapped[int] = mapped_column(
+        ForeignKey("endpoints.id", ondelete="CASCADE"), nullable=False
+    )
+    # A snapshot of the endpoint's SSH coordinates at pin time (server-derived).
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    key_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    fingerprint_sha256: Mapped[str] = mapped_column(String(80), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
