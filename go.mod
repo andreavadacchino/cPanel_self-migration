@@ -1,6 +1,6 @@
 module github.com/tis24dev/cPanel_self-migration
 
-go 1.25.11
+go 1.25.12
 
 require (
 	golang.org/x/crypto v0.53.0
