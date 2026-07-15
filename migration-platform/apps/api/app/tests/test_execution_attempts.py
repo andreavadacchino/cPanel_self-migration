@@ -27,9 +27,12 @@ from app.modules.comparison.models import ComparisonReport
 from app.modules.endpoints.models import Endpoint
 from app.modules.executions import attempts as attempt_service
 from app.modules.executions.attempts import (
+    AggregateStateConflict,
     AttemptTerminal,
     ExecutionNotAcquirable,
+    InvalidLeaseDuration,
     InvalidTransition,
+    InvalidWorkerIdentity,
     LeaseExpired,
     OwnershipMismatch,
 )
@@ -102,8 +105,13 @@ def _execution(db: Session, **over) -> MigrationExecution:
 
 
 def _expire(db: Session, attempt: ExecutionAttempt) -> None:
-    """Backdate the lease so the service's own db-clock read sees it expired."""
-    attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    """Backdate the lease so the service's own db-clock read sees it expired.
+
+    Both timestamps move into the past, keeping the acquired < expires interval
+    valid (the DB CHECK forbids expires <= acquired)."""
+    now = datetime.now(timezone.utc)
+    attempt.lease_acquired_at = now - timedelta(seconds=300)
+    attempt.lease_expires_at = now - timedelta(seconds=1)
     db.commit()
 
 
@@ -152,13 +160,14 @@ def test_attempt_number_increments_over_a_prior_terminal_attempt(db_session: Ses
     execution is still acquirable — the shape a future retry policy will create.
     """
     execution = _execution(db_session)
+    now = datetime.now(timezone.utc)
     db_session.add(ExecutionAttempt(
         execution_id=execution.id, attempt_number=1,
         status=AttemptStatus.INTERRUPTED.value, worker_id=W1,
-        lease_acquired_at=datetime.now(timezone.utc),
-        heartbeat_at=datetime.now(timezone.utc),
-        lease_expires_at=datetime.now(timezone.utc),
-        finished_at=datetime.now(timezone.utc),
+        lease_acquired_at=now - timedelta(seconds=300),
+        heartbeat_at=now - timedelta(seconds=300),
+        lease_expires_at=now - timedelta(seconds=1),
+        finished_at=now,
     ))
     db_session.commit()
 
@@ -444,3 +453,77 @@ def test_model_has_no_secret_bearing_columns() -> None:
     cols = {c.name for c in ExecutionAttempt.__table__.columns}
     for banned in ("password", "secret", "token", "key", "credential", "passphrase"):
         assert not any(banned in c for c in cols), f"unexpected secret-shaped column: {banned}"
+
+
+# --- input validation (fail-closed, before any row) -------------------------
+
+
+@pytest.mark.parametrize("bad", [0, -1, -300])
+def test_acquire_rejects_nonpositive_lease(db_session: Session, bad: int) -> None:
+    execution = _execution(db_session)
+    with pytest.raises(InvalidLeaseDuration):
+        attempt_service.acquire_attempt(db_session, execution.id, W1, bad)
+    assert db_session.execute(select(ExecutionAttempt)).scalars().all() == []
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "\t\n"])
+def test_acquire_rejects_blank_worker(db_session: Session, bad: str) -> None:
+    execution = _execution(db_session)
+    with pytest.raises(InvalidWorkerIdentity):
+        attempt_service.acquire_attempt(db_session, execution.id, bad, LEASE)
+    assert db_session.execute(select(ExecutionAttempt)).scalars().all() == []
+
+
+def test_renew_rejects_bad_input(db_session: Session) -> None:
+    execution = _execution(db_session)
+    a = attempt_service.acquire_attempt(db_session, execution.id, W1, LEASE)
+    with pytest.raises(InvalidLeaseDuration):
+        attempt_service.renew_attempt_lease(db_session, a.id, W1, 0)
+    with pytest.raises(InvalidWorkerIdentity):
+        attempt_service.renew_attempt_lease(db_session, a.id, "   ", LEASE)
+
+
+# --- incompatible terminal execution (aggregate invariant) ------------------
+
+
+def test_incompatible_terminal_execution_conflicts(db_session: Session) -> None:
+    """If the execution is already terminal with a state incompatible with the
+    attempt's outcome, terminalization fails loudly and changes nothing."""
+    execution = _execution(db_session)
+    a = attempt_service.acquire_attempt(db_session, execution.id, W1, LEASE)
+    attempt_service.start_attempt(db_session, a.id, W1)
+    attempt_service.mark_writes_started(db_session, a.id, W1)
+    # Force a divergent terminal execution behind the attempt's back.
+    db_session.refresh(execution)
+    execution.status = ExecutionStatus.SUCCEEDED.value
+    execution.finished_at = datetime.now(timezone.utc)
+    db_session.commit()
+    _expire(db_session, a)  # would reconcile to partial ≠ succeeded
+
+    with pytest.raises(AggregateStateConflict):
+        attempt_service.reconcile_expired_attempts(db_session)
+
+    db_session.refresh(a)
+    db_session.refresh(execution)
+    assert a.status == AttemptStatus.RUNNING.value            # attempt unchanged
+    assert a.finished_at is None
+    assert execution.status == ExecutionStatus.SUCCEEDED.value  # execution unchanged
+
+
+def test_terminal_execution_same_target_reconciles_idempotently(db_session: Session) -> None:
+    """An execution already terminal with the *same* state the attempt maps to is
+    not a conflict — the attempt is terminalized to match."""
+    execution = _execution(db_session)
+    a = attempt_service.acquire_attempt(db_session, execution.id, W1, LEASE)
+    attempt_service.start_attempt(db_session, a.id, W1)
+    db_session.refresh(execution)
+    execution.status = ExecutionStatus.INTERRUPTED.value  # same as no-writes target
+    execution.finished_at = datetime.now(timezone.utc)
+    db_session.commit()
+    _expire(db_session, a)  # writes_started False → target interrupted == execution
+
+    reconciled = attempt_service.reconcile_expired_attempts(db_session)
+
+    assert [r.id for r in reconciled] == [a.id]
+    db_session.refresh(a)
+    assert a.status == AttemptStatus.INTERRUPTED.value

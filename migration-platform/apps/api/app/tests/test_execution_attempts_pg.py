@@ -20,10 +20,11 @@ import os
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
@@ -37,7 +38,7 @@ from app.modules.endpoints import models as _endpoints_models  # noqa: F401
 from app.modules.endpoints.models import Endpoint
 from app.modules.executions import attempts as attempt_service
 from app.modules.executions import models as _executions_models  # noqa: F401
-from app.modules.executions.attempts import ExecutionNotAcquirable
+from app.modules.executions.attempts import ExecutionNotAcquirable, LeaseExpired
 from app.modules.executions.models import (
     AttemptStatus,
     ExecutionAttempt,
@@ -164,13 +165,14 @@ def test_unique_partial_index_refuses_a_second_active_attempt(pg_sessionmaker) -
     attempt_service.acquire_attempt(session, execution_id, "w1", 300)
     # Bypass the service and insert a second *active* attempt directly: the
     # database index, not the service, must refuse it.
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
     session.add(ExecutionAttempt(
         execution_id=execution_id, attempt_number=99,
         status=AttemptStatus.RUNNING.value, worker_id="w2",
-        lease_acquired_at=now, heartbeat_at=now, lease_expires_at=now,
+        lease_acquired_at=now, heartbeat_at=now,
+        lease_expires_at=now + timedelta(seconds=300),
     ))
     with pytest.raises(IntegrityError):
         session.commit()
@@ -235,6 +237,146 @@ def test_concurrent_reconcile_terminalizes_once(pg_sessionmaker) -> None:
     a = check.get(ExecutionAttempt, attempt_id)
     assert a.status == AttemptStatus.INTERRUPTED.value
     check.close()
+
+
+# --- lease expiry while blocked on the execution lock (Finding 1) -----------
+
+
+def _lease_expires_during_contention(
+    pg_engine: Engine,
+    pg_sessionmaker,
+    op: Callable[[Session, int, str], object],
+) -> None:
+    """A worker whose lease expires *while it blocks on the execution row lock*
+    must be rejected with LeaseExpired, not mutate with a stale timestamp."""
+    setup = pg_sessionmaker()
+    execution_id = _make_execution(setup)
+    attempt = attempt_service.acquire_attempt(setup, execution_id, "w1", 2)
+    attempt_service.start_attempt(setup, attempt.id, "w1")
+    attempt_id = attempt.id
+    setup.close()
+
+    # T1 holds FOR UPDATE on the execution row so the worker blocks on it.
+    holder = pg_engine.connect()
+    holder.begin()
+    holder.execute(
+        text("SELECT id FROM migration_executions WHERE id = :i FOR UPDATE"),
+        {"i": execution_id},
+    )
+
+    result: dict[str, object] = {}
+
+    def worker() -> None:
+        session = pg_sessionmaker()
+        try:
+            result["outcome"] = op(session, attempt_id, "w1")
+        except Exception as exc:  # noqa: BLE001 - recorded and asserted
+            result["outcome"] = exc
+            # The session must be clean and reusable after the rejection.
+            result["reusable"] = session.execute(text("SELECT 1")).scalar() == 1
+        finally:
+            session.close()
+
+    th = threading.Thread(target=worker)
+    th.start()
+    time.sleep(2.6)  # the 2s lease expires while the worker is blocked on T1
+    holder.rollback()
+    holder.close()
+    th.join(10)
+
+    assert isinstance(result.get("outcome"), LeaseExpired), result
+    assert result.get("reusable") is True
+
+    check = pg_sessionmaker()
+    a = check.get(ExecutionAttempt, attempt_id)
+    e = check.get(MigrationExecution, execution_id)
+    assert a.status == AttemptStatus.RUNNING.value       # attempt unchanged
+    assert a.finished_at is None
+    assert a.writes_started is False
+    assert e.status == ExecutionStatus.RUNNING.value      # execution unchanged
+    assert e.finished_at is None
+    check.close()
+
+
+def test_mark_writes_started_rejected_when_lease_expires_during_lock_wait(
+    pg_engine: Engine, pg_sessionmaker
+) -> None:
+    _lease_expires_during_contention(
+        pg_engine, pg_sessionmaker,
+        lambda s, aid, w: attempt_service.mark_writes_started(s, aid, w),
+    )
+
+
+def test_finish_attempt_rejected_when_lease_expires_during_lock_wait(
+    pg_engine: Engine, pg_sessionmaker
+) -> None:
+    _lease_expires_during_contention(
+        pg_engine, pg_sessionmaker,
+        lambda s, aid, w: attempt_service.finish_attempt(
+            s, aid, w, AttemptStatus.SUCCEEDED.value
+        ),
+    )
+
+
+# --- CHECK constraints + IntegrityError classification (Findings 2,3,5) -----
+
+
+def test_check_constraints_reject_invalid_rows(pg_sessionmaker) -> None:
+    session = pg_sessionmaker()
+    execution_id = _make_execution(session)
+    now = datetime.now(timezone.utc)
+    good = dict(
+        execution_id=execution_id, worker_id="w1",
+        lease_acquired_at=now, heartbeat_at=now,
+        lease_expires_at=now + timedelta(seconds=300),
+    )
+    cases = [
+        dict(good, attempt_number=1, status="bogus"),               # unknown status
+        dict(good, attempt_number=0, status="acquired"),            # non-positive number
+        dict(good, attempt_number=2, status="acquired",
+             lease_expires_at=now),                                  # expires == acquired
+        dict(good, attempt_number=3, status="succeeded",
+             finished_at=None),                                      # terminal, no finished_at
+    ]
+    for kwargs in cases:
+        session.add(ExecutionAttempt(**kwargs))
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+    session.close()
+
+
+def test_check_violation_is_not_classified_as_lease_conflict(pg_sessionmaker) -> None:
+    session = pg_sessionmaker()
+    execution_id = _make_execution(session)
+    now = datetime.now(timezone.utc)
+    # A CHECK violation must NOT be read as an active-attempt (lease) conflict.
+    session.add(ExecutionAttempt(
+        execution_id=execution_id, attempt_number=1, status="bogus", worker_id="w1",
+        lease_acquired_at=now, heartbeat_at=now,
+        lease_expires_at=now + timedelta(seconds=300),
+    ))
+    try:
+        session.commit()
+        pytest.fail("expected IntegrityError")
+    except IntegrityError as exc:
+        assert attempt_service._active_attempt_conflict(exc) is False
+    session.rollback()
+
+    # A genuine active-attempt collision IS classified as a lease conflict.
+    attempt_service.acquire_attempt(session, execution_id, "w1", 300)
+    session.add(ExecutionAttempt(
+        execution_id=execution_id, attempt_number=2, status="running", worker_id="w2",
+        lease_acquired_at=now, heartbeat_at=now,
+        lease_expires_at=now + timedelta(seconds=300),
+    ))
+    try:
+        session.commit()
+        pytest.fail("expected IntegrityError")
+    except IntegrityError as exc:
+        assert attempt_service._active_attempt_conflict(exc) is True
+    session.rollback()
+    session.close()
 
 
 # --- migration up/down/up on a pristine database ----------------------------
