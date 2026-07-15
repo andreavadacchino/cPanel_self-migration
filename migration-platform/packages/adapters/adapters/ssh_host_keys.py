@@ -31,7 +31,14 @@ from dataclasses import dataclass
 
 from cryptography.hazmat.primitives import serialization
 
-__all__ = ["InvalidHostKey", "ParsedHostKey", "MAX_HOST_KEY", "parse_host_key"]
+__all__ = [
+    "InvalidHostKey",
+    "InvalidPersistedHostKey",
+    "ParsedHostKey",
+    "MAX_HOST_KEY",
+    "parse_host_key",
+    "validate_persisted_host_key",
+]
 
 #: Upper bound on the accepted material (bytes). A host key line is small — an
 #: ed25519 key is ~80 chars, an 8192-bit RSA key ~1.4 KB — so a generous 8 KB
@@ -54,6 +61,18 @@ class InvalidHostKey(Exception):
 
     The message names neither the submitted value nor any part of it — there is
     nothing in it a caller could not have sent, and nothing a log should keep.
+    """
+
+
+class InvalidPersistedHostKey(Exception):
+    """A stored host-key row is internally incoherent and must not be trusted.
+
+    Distinct from :class:`InvalidHostKey` (bad *client* input at PUT time, → 422):
+    this is a row already in the database whose ``public_key``/``key_type``/
+    ``fingerprint_sha256`` do not derive from one another, or whose key is not
+    canonical — a state the format-only DB CHECKs cannot rule out (the database
+    cannot prove a fingerprint was really computed from a key). It must never be
+    presented as a trust anchor. The message names no stored value.
     """
 
 
@@ -134,3 +153,45 @@ def parse_host_key(material: str) -> ParsedHostKey:
     return ParsedHostKey(
         key_type=key_type, public_key=canonical, fingerprint_sha256=fingerprint
     )
+
+
+def validate_persisted_host_key(
+    *, public_key: str, key_type: str, fingerprint_sha256: str
+) -> ParsedHostKey:
+    """Prove a persisted host-key row is internally coherent, fail-closed.
+
+    The format-only DB CHECKs (non-blank, ``SHA256:`` prefix) cannot prove the
+    cryptographic relationship between the three stored fields, so a row written
+    outside the API can carry a valid-looking but false identity. This re-derives
+    everything from ``public_key`` through the single canonical authority
+    (:func:`parse_host_key`) and requires an exact match:
+
+      - ``public_key`` parses AND is already in canonical form;
+      - ``key_type`` equals the type derived from the canonical key;
+      - ``fingerprint_sha256`` equals the fingerprint derived from it.
+
+    Returns the :class:`ParsedHostKey` on success. Raises
+    :class:`InvalidPersistedHostKey` — generic, naming no stored value and with no
+    chained cause — otherwise. Pure: no network, no ORM, no ``app`` import, so the
+    future SSH runtime can import it to re-check a pin before building a
+    ``known_hosts`` (after reading endpoint + pin consistently and checking that
+    the coordinates still match — that comparison is the caller's, not this
+    function's).
+    """
+    try:
+        parsed = parse_host_key(public_key)
+    except InvalidHostKey:
+        # `from None`: parse_host_key's own message is already material-free, but
+        # never chain it — the persisted-row verdict is a single generic fact.
+        raise InvalidPersistedHostKey(
+            "stored public key is not a valid OpenSSH public key"
+        ) from None
+    if public_key != parsed.public_key:
+        raise InvalidPersistedHostKey("stored public key is not in canonical form")
+    if key_type != parsed.key_type:
+        raise InvalidPersistedHostKey("stored key_type does not match the stored key")
+    if fingerprint_sha256 != parsed.fingerprint_sha256:
+        raise InvalidPersistedHostKey(
+            "stored fingerprint does not match the stored key"
+        )
+    return parsed

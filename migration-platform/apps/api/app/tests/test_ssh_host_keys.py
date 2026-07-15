@@ -24,8 +24,10 @@ from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 from adapters.ssh_host_keys import (
     MAX_HOST_KEY,
     InvalidHostKey,
+    InvalidPersistedHostKey,
     ParsedHostKey,
     parse_host_key,
+    validate_persisted_host_key,
 )
 
 # A fixed known-answer vector: this exact ed25519 public key line and the SHA-256
@@ -185,3 +187,102 @@ def test_the_error_never_echoes_the_submitted_material() -> None:
         assert sentinel not in str(exc)
     else:  # pragma: no cover - the input is invalid by construction
         pytest.fail("expected InvalidHostKey")
+
+
+# --- validate_persisted_host_key: integrity of a stored row -----------------
+# The DB CHECKs are format-only; this proves the crypto relationship the runtime
+# and the GET both rely on. Reuses parse_host_key — no duplicated fingerprint.
+
+
+def test_validate_persisted_accepts_a_coherent_record() -> None:
+    parsed = validate_persisted_host_key(
+        public_key=_KAT_PUBLIC_KEY,
+        key_type="ssh-ed25519",
+        fingerprint_sha256=_KAT_FINGERPRINT,
+    )
+    assert isinstance(parsed, ParsedHostKey)
+    assert parsed.public_key == _KAT_PUBLIC_KEY
+    assert parsed.fingerprint_sha256 == _KAT_FINGERPRINT
+
+
+def test_validate_persisted_rejects_an_unparsable_key() -> None:
+    with pytest.raises(InvalidPersistedHostKey):
+        validate_persisted_host_key(
+            public_key="ssh-ed25519 not-base64!!!",
+            key_type="ssh-ed25519",
+            fingerprint_sha256=_KAT_FINGERPRINT,
+        )
+
+
+def test_validate_persisted_rejects_a_non_canonical_key() -> None:
+    with pytest.raises(InvalidPersistedHostKey):
+        validate_persisted_host_key(
+            public_key=_KAT_PUBLIC_KEY.replace(" ", "   ", 1),  # extra whitespace
+            key_type="ssh-ed25519",
+            fingerprint_sha256=_KAT_FINGERPRINT,
+        )
+
+
+def test_validate_persisted_rejects_a_mismatched_key_type() -> None:
+    with pytest.raises(InvalidPersistedHostKey):
+        validate_persisted_host_key(
+            public_key=_KAT_PUBLIC_KEY,
+            key_type="ssh-rsa",
+            fingerprint_sha256=_KAT_FINGERPRINT,
+        )
+
+
+def test_validate_persisted_rejects_a_mismatched_fingerprint() -> None:
+    with pytest.raises(InvalidPersistedHostKey):
+        validate_persisted_host_key(
+            public_key=_KAT_PUBLIC_KEY,
+            key_type="ssh-ed25519",
+            fingerprint_sha256="SHA256:" + "Z" * 43,  # well-formed, but false
+        )
+
+
+@pytest.mark.filterwarnings("ignore:.*DSA.*")
+def test_validate_persisted_rejects_a_dsa_record() -> None:
+    from cryptography.hazmat.primitives.asymmetric import dsa
+
+    line = _openssh_public_line(dsa.generate_private_key(key_size=1024))
+    with pytest.raises(InvalidPersistedHostKey):
+        validate_persisted_host_key(
+            public_key=line,
+            key_type="ssh-dss",
+            fingerprint_sha256="SHA256:" + "A" * 43,
+        )
+
+
+def test_validate_persisted_error_names_no_stored_value() -> None:
+    sentinel_type = "ssh-rsa-SENTINEL-8f3a"
+    sentinel_fp = "SHA256:" + "S" * 43
+    try:
+        validate_persisted_host_key(
+            public_key=_KAT_PUBLIC_KEY,
+            key_type=sentinel_type,
+            fingerprint_sha256=sentinel_fp,
+        )
+    except InvalidPersistedHostKey as exc:
+        msg = str(exc)
+        assert sentinel_type not in msg
+        assert sentinel_fp not in msg
+        assert _KAT_PUBLIC_KEY not in msg
+        assert exc.__cause__ is None  # a plain mismatch verdict, no chained cause
+    else:  # pragma: no cover
+        pytest.fail("expected InvalidPersistedHostKey")
+
+
+def test_validate_persisted_unparsable_key_severs_the_cause() -> None:
+    sentinel = "SENTINEL-persisted-b7c2"
+    try:
+        validate_persisted_host_key(
+            public_key=f"ssh-ed25519 {sentinel}!!!not-base64",
+            key_type="ssh-ed25519",
+            fingerprint_sha256=_KAT_FINGERPRINT,
+        )
+    except InvalidPersistedHostKey as exc:
+        assert exc.__cause__ is None  # from None: no cryptography cause chained
+        assert sentinel not in str(exc)
+    else:  # pragma: no cover
+        pytest.fail("expected InvalidPersistedHostKey")

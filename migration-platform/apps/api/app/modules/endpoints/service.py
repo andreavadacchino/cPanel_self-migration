@@ -15,7 +15,13 @@ from adapters.credentials import (
 )
 from adapters.crypto import SecretDecryptError, SecretKeyError, decrypt_secret, encrypt_secret
 from adapters.inventory import build_inventory_source
-from adapters.ssh_host_keys import InvalidHostKey, parse_host_key
+from adapters.ssh_host_keys import (
+    InvalidHostKey,
+    InvalidPersistedHostKey,
+    ParsedHostKey,
+    parse_host_key,
+    validate_persisted_host_key,
+)
 from app.core.errors import ConflictError, NotFoundError, UnprocessableError
 from app.modules.endpoints.models import (
     AuthType,
@@ -359,22 +365,57 @@ def has_both_endpoints(db: Session, migration_id: int) -> bool:
 # --- SSH host key pin (persistence only) ------------------------------------
 
 
-def get_ssh_host_key(db: Session, endpoint_id: int) -> EndpointSshHostKey:
-    """Return the endpoint's host-key pin, fail-closed on a stale one.
+def validate_ssh_host_key_pin(
+    endpoint: Endpoint, pin: EndpointSshHostKey
+) -> ParsedHostKey:
+    """The complete fail-closed check for a persisted pin: coordinates AND
+    cryptographic integrity.
 
-    404 when the endpoint or the pin is missing. A pin whose snapshot no longer
-    matches the endpoint's current SSH coordinates (host or ssh_port) is stale —
-    a coordinate changed without invalidation, or a row was written outside the
-    API — and is treated as no valid identity: it is NOT presented as valid.
+    Raises :class:`InvalidPersistedHostKey` when the pin's snapshot no longer
+    matches the endpoint's SSH coordinates, OR when the stored key/type/
+    fingerprint are not internally coherent (an unparsable or non-canonical key,
+    a mismatched type, a fingerprint that does not derive from the key — states
+    the format-only DB CHECKs allow). Returns the parsed key on success.
+
+    The coordinate comparison is here (it needs the ORM rows); the crypto proof
+    is delegated to the pure adapter, which the future SSH runtime will call the
+    same way — read endpoint + pin consistently, check host/port, run this, and
+    only then materialize a known_hosts.
+    """
+    if pin.host != endpoint.host or pin.port != endpoint.ssh_port:
+        raise InvalidPersistedHostKey(
+            "pinned coordinates no longer match the endpoint"
+        )
+    return validate_persisted_host_key(
+        public_key=pin.public_key,
+        key_type=pin.key_type,
+        fingerprint_sha256=pin.fingerprint_sha256,
+    )
+
+
+def get_ssh_host_key(db: Session, endpoint_id: int) -> EndpointSshHostKey:
+    """Return the endpoint's host-key pin, fail-closed on a stale or corrupt one.
+
+    404 when the endpoint or the pin is missing. A pin is also treated as no valid
+    identity — uniformly 404, not distinguishing absent/stale/corrupt — when its
+    snapshot no longer matches the endpoint's coordinates OR its stored key/type/
+    fingerprint are not internally coherent (verifying host and port alone is not
+    enough: the DB cannot prove a fingerprint was computed from the key). The
+    corrupt row is left untouched — not deleted, rewritten or auto-corrected —
+    so it stays available for administrative diagnosis; no material is logged or
+    returned. This is an ordinary read: it takes no row lock (the runtime, with
+    stronger transactional needs, will lock; see validate_ssh_host_key_pin).
     """
     endpoint = get_endpoint(db, endpoint_id)  # 404 if the endpoint is missing
     pin = _get_host_key_row(db, endpoint_id)
     if pin is None:
         raise NotFoundError("SSH host key", endpoint_id)
-    if pin.host != endpoint.host or pin.port != endpoint.ssh_port:
-        # Fail-closed: never present a pin bound to coordinates the endpoint no
-        # longer has as a trustworthy identity.
-        raise NotFoundError("SSH host key", endpoint_id)
+    try:
+        validate_ssh_host_key_pin(endpoint, pin)
+    except InvalidPersistedHostKey:
+        # `from None`: the fail-closed verdict is uniform 404; never chain a cause
+        # that could carry the stored material into a traceback.
+        raise NotFoundError("SSH host key", endpoint_id) from None
     return pin
 
 
