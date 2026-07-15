@@ -1,4 +1,4 @@
-.PHONY: up down build config logs api-test worker-test web-build
+.PHONY: up down build config logs api-test api-test-pg worker-test web-build
 
 up:
 	docker compose up --build
@@ -17,6 +17,12 @@ logs:
 
 api-test:
 	cd apps/api && python -m pytest -q
+
+# Concurrency/recovery tests that need a real Postgres (single-winner acquire,
+# unique partial index under contention, DB-clock lease expiry, migration
+# up/down/up). Skipped by api-test; point TEST_POSTGRES_URL at a disposable DB.
+api-test-pg:
+	cd apps/api && TEST_POSTGRES_URL="$${TEST_POSTGRES_URL:-postgresql+psycopg://migration:migration@localhost:5432/exec_attempts_test}" python -m pytest -q app/tests/test_execution_attempts_pg.py
 
 worker-test:
 	cd apps/worker && DRAMATIQ_TESTING=1 python -m pytest -q

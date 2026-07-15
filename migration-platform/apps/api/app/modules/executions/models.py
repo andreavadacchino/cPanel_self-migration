@@ -30,12 +30,16 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -191,6 +195,15 @@ class MigrationExecution(Base):
     # Frozen when the first write starts. Shape: execution-spec-v1's `scope`.
     scope: Mapped[dict] = mapped_column(JSON, nullable=False)
 
+    # Monotone aggregate over this execution's attempts: true once any attempt
+    # has begun a potentially-mutating phase. Transitions false->true only, in
+    # the same transaction that flips the attempt (see modules.executions.attempts).
+    # It is the durable indicator §5.5 relies on: a lost owner whose attempt had
+    # writes_started is reconciled to `partial`, never `interrupted`.
+    writes_started: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
     # --- executor identity ---------------------------------------------------
     # run_id correlates this row with the events.jsonl and report.json the
     # executor produces. Nullable until the worker assigns one.
@@ -223,3 +236,189 @@ class MigrationExecution(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+
+class AttemptStatus(str, enum.Enum):
+    """Lifecycle of one worker's ownership of an execution.
+
+    Deliberately narrower than ``ExecutionStatus``: it describes an *owner*, not
+    the whole execution. ``ACQUIRED`` is "lease held, subprocess not yet
+    launched"; ``RUNNING`` is "subprocess launched". The terminal words match
+    ``ExecutionStatus`` so the aggregate mapping below is obvious, but there is
+    no ``pending``/``queued`` (an attempt only exists once a worker has the
+    lease) and no ``cancel_requested`` (that is an execution-level signal — the
+    window before an owner observes it, not a state the owner is in).
+
+    ``INTERRUPTED`` is authored only by the reconciler: it is what a lost owner's
+    attempt becomes, never something a worker reports about itself.
+    """
+
+    ACQUIRED = "acquired"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    PARTIAL = "partial"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
+
+
+#: An attempt still owns the lease in these states.
+ATTEMPT_ACTIVE_STATUSES: frozenset[str] = frozenset(
+    {AttemptStatus.ACQUIRED.value, AttemptStatus.RUNNING.value}
+)
+
+#: An attempt never moves again from these states.
+ATTEMPT_TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {
+        AttemptStatus.SUCCEEDED.value,
+        AttemptStatus.FAILED.value,
+        AttemptStatus.PARTIAL.value,
+        AttemptStatus.CANCELLED.value,
+        AttemptStatus.INTERRUPTED.value,
+    }
+)
+
+#: Legal attempt transitions. Terminal states have no successor (fail-closed).
+LEGAL_ATTEMPT_TRANSITIONS: dict[str, frozenset[str]] = {
+    AttemptStatus.ACQUIRED.value: frozenset(
+        {
+            AttemptStatus.RUNNING.value,
+            AttemptStatus.FAILED.value,
+            AttemptStatus.CANCELLED.value,
+            AttemptStatus.INTERRUPTED.value,
+        }
+    ),
+    AttemptStatus.RUNNING.value: frozenset(
+        {
+            AttemptStatus.SUCCEEDED.value,
+            AttemptStatus.FAILED.value,
+            AttemptStatus.PARTIAL.value,
+            AttemptStatus.CANCELLED.value,
+            AttemptStatus.INTERRUPTED.value,
+        }
+    ),
+}
+
+#: How a terminal attempt terminalizes its execution.
+#:
+#: This is the *current-policy* aggregate, not a structural law: with no retry
+#: policy an execution has exactly one attempt, so a terminal attempt terminalizes
+#: its execution one-to-one. A future retry policy will decouple these — a failed
+#: or interrupted attempt need not terminalize an execution that is still
+#: eligible for another explicit attempt. See the ADR.
+ATTEMPT_TERMINAL_TO_EXECUTION_STATUS: dict[str, str] = {
+    AttemptStatus.SUCCEEDED.value: ExecutionStatus.SUCCEEDED.value,
+    AttemptStatus.FAILED.value: ExecutionStatus.FAILED.value,
+    AttemptStatus.PARTIAL.value: ExecutionStatus.PARTIAL.value,
+    AttemptStatus.CANCELLED.value: ExecutionStatus.CANCELLED.value,
+    AttemptStatus.INTERRUPTED.value: ExecutionStatus.INTERRUPTED.value,
+}
+
+_ATTEMPT_ACTIVE_SQL = ", ".join(f"'{s}'" for s in sorted(ATTEMPT_ACTIVE_STATUSES))
+_ATTEMPT_STATUS_SQL = ", ".join(
+    f"'{s.value}'" for s in AttemptStatus
+)
+
+# One active attempt per execution, enforced by the database.
+#
+# The service takes `SELECT ... FOR UPDATE` on the execution row before it reads
+# "is there an active attempt", but a partial unique index is the backstop that
+# holds even if two inserts somehow interleave: the second active attempt fails.
+_ONE_ACTIVE_ATTEMPT = Index(
+    "uq_execution_one_active_attempt",
+    "execution_id",
+    unique=True,
+    sqlite_where=text(f"status IN ({_ATTEMPT_ACTIVE_SQL})"),
+    postgresql_where=text(f"status IN ({_ATTEMPT_ACTIVE_SQL})"),
+)
+
+
+class ExecutionAttempt(Base):
+    """One worker's owned attempt at running an execution.
+
+    Immutable identity: a new attempt is a new row with the next
+    ``attempt_number``; a prior attempt is never reused or overwritten, so the
+    history stays investigable. Ownership is ``worker_id``; liveness is the
+    lease (``lease_expires_at``), which is written from the database clock, never
+    the worker's. ``writes_started`` is the durable indicator that decides, after
+    the owner is lost, whether the attempt is ``interrupted`` or ``partial``.
+
+    No secret lives here — ``error_summary`` is a synthetic, redacted string, the
+    same discipline the execution row already documents.
+    """
+
+    __tablename__ = "execution_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "execution_id", "attempt_number", name="uq_execution_attempt_number"
+        ),
+        _ONE_ACTIVE_ATTEMPT,
+        # Database-level invariants: a status written outside the service (raw
+        # SQL, a bug) cannot slip a value the partial index would not recognise
+        # as active, nor a non-positive number, nor a non-positive lease window.
+        CheckConstraint(
+            f"status IN ({_ATTEMPT_STATUS_SQL})", name="ck_execution_attempt_status"
+        ),
+        CheckConstraint(
+            "attempt_number > 0", name="ck_execution_attempt_number_positive"
+        ),
+        CheckConstraint(
+            "lease_expires_at > lease_acquired_at",
+            name="ck_execution_attempt_lease_interval",
+        ),
+        # A terminal attempt always carries its finished_at (written together
+        # with the terminal status by the service).
+        CheckConstraint(
+            f"status IN ({_ATTEMPT_ACTIVE_SQL}) OR finished_at IS NOT NULL",
+            name="ck_execution_attempt_finished_when_terminal",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    execution_id: Mapped[int] = mapped_column(
+        ForeignKey("migration_executions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default=AttemptStatus.ACQUIRED.value,
+        server_default=text(f"'{AttemptStatus.ACQUIRED.value}'"),
+    )
+    # The worker that owns this attempt. Every mutation checks it.
+    worker_id: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # --- lease: all three written from the database clock --------------------
+    lease_acquired_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    heartbeat_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    # --- durable liveness / audit -------------------------------------------
+    current_phase: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_event_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Monotone false->true; flipped together with the execution aggregate.
+    writes_started: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)

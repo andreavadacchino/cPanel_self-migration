@@ -1,9 +1,10 @@
 # Current State — Migration Platform V2
 
 > Documento vivo. Descrive **cosa è vero adesso**, non cosa è pianificato.
-> Aggiornato: 2026-07-15 · `fork/main` = `e89a985`
+> Aggiornato: 2026-07-15 · `fork/main` = `b5c9d36` · + branch `feat/platform-v2-execution-attempts`
 
-Per la direzione architetturale vincolante vedi [`../../docs/ADR_V2_GO_EXECUTOR.md`](../../docs/ADR_V2_GO_EXECUTOR.md).
+Per la direzione architetturale vincolante vedi [`../../docs/ADR_V2_GO_EXECUTOR.md`](../../docs/ADR_V2_GO_EXECUTOR.md)
+e [`../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md`](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md).
 
 ---
 
@@ -123,12 +124,12 @@ coverage ma **invisibili** all'item-diff. Regressione da presidiare a ogni PR ch
 
 ## Schema dati
 
-Alembic lineare, single head, `0001 → 0009`. Nove tabelle su Postgres:
+Alembic lineare, single head, `0001 → 0010`. Dieci tabelle su Postgres:
 
 ```
 migrations · jobs · job_events · endpoints
 inventory_snapshots · comparison_reports · migration_plans
-migration_executions · alembic_version
+migration_executions · execution_attempts · alembic_version
 ```
 
 `jobs` non modella l'esecuzione: `JobStatus` = `pending queued running succeeded failed`, e non ha
@@ -151,6 +152,45 @@ persistenza (segreti Fernet o riferimenti opachi, mai in chiaro nell'API). Quatt
 (`ck_endpoints_ssh_*`) presidiano enum, range porta e coerenza `none` — verificate su Postgres reale
 (un INSERT con porta 70000 è rifiutato). **Nessuna tabella di host-key pin** ancora: l'host-identity
 trust è la PR successiva.
+
+`execution_attempts` (migration `0010`) modella ownership, lease e recovery di **un** tentativo di
+*un* worker su un'execution. Vedi [ADR-002](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md). Il
+servizio `app/modules/executions/attempts.py` è l'unica autorità sul lifecycle e sulla
+classificazione degli orfani; **non** avvia subprocess, non apre SSH, non risolve segreti.
+
+- `attempt_number` immutabile e monotono (unique per execution): un nuovo tentativo è una nuova riga,
+  mai un riuso.
+- **Lease su tempo PostgreSQL.** Ogni decisione di scadenza legge un singolo `clock_timestamp()`
+  *dopo* il lock di riga e lo riusa per tutta la transizione (mai `datetime.now()` del processo, mai
+  `now()`/`transaction_timestamp()` che si congelano a inizio transazione). SQLite (test
+  mono-connessione) usa `now()` e **non** prova concorrenza.
+- `writes_started` monotono `false→true` sull'attempt e come aggregato sull'execution, flippati nella
+  stessa transazione; prevale su ogni classificazione ottimistica.
+- Reconciler (`reconcile_expired_attempts`): attempt scaduto senza write → `interrupted`, con write →
+  `partial`, entrambi propagati all'execution; idempotente, **nessun retry automatico**, nessun
+  takeover (niente A2 creato all'acquisizione). Il retry tecnico è policy futura ed esplicita.
+- Fencing = **solo control-plane**: un worker con lease scaduto non aggiorna più PostgreSQL. Non
+  fencia un subprocess Go orfano che scrive da remoto — per questo `partial` non invita mai un retry.
+- **Ordine dei lock uniforme**: `migration_execution` poi `execution_attempt`, sempre. Il clock DB
+  viene letto **dopo** l'ultimo lock, così un lease che scade mentre l'operazione è bloccata sulla
+  riga execution è visto come scaduto (`LeaseExpired`), non mutato con timestamp obsoleto —
+  verificato su Postgres con contention reale (due connessioni) su `mark_writes_started` e
+  `finish_attempt`.
+- **Validazione input fail-closed**: `lease_seconds<=0` → `InvalidLeaseDuration`, `worker_id`
+  vuoto/whitespace → `InvalidWorkerIdentity` (nessun errore riporta il token). `IntegrityError`
+  classificato come lease conflict solo se il constraint è `uq_execution_one_active_attempt`/
+  `uq_execution_attempt_number`; altrimenti propagato.
+
+Vincoli **del database** (non di un servizio):
+
+- `uq_execution_one_active_attempt` — unique parziale su `execution_id WHERE status IN
+  ('acquired','running')`: **un solo attempt attivo per execution**. Due worker che acquisiscono in
+  gara producono un solo vincitore (lock `FOR UPDATE` sulla riga execution + questo indice come
+  backstop) — verificato su Postgres reale con due connessioni/thread.
+- Quattro `CHECK` (difesa in profondità contro scritture fuori dal service): `ck_..._status` (enum
+  valido), `ck_..._number_positive` (`attempt_number>0`), `ck_..._lease_interval`
+  (`lease_expires_at>lease_acquired_at`), `ck_..._finished_when_terminal` (`finished_at` presente se
+  terminale) — presenza verificata via introspezione su Postgres reale.
 
 ## Confine API ↔ worker
 
@@ -211,6 +251,30 @@ un worktree vecchio produce verde falso: è già successo.
 | `npm run build` | **non eseguito** — il web non è toccato da questa PR |
 | Smoke read-only cPanel reale | **NON eseguito** — nessuna credenziale in sessione |
 
+## Stato dei gate — execution attempts/lease/recovery (2026-07-15, branch `feat/platform-v2-execution-attempts`)
+
+Eseguiti da un **venv creato fuori dal worktree**, con provenance verificata (`__file__` di `app`,
+`domain`, `adapters` tutti dentro questo worktree).
+
+| Gate | Esito |
+|---|---|
+| `pytest` API | 428 passed (385 base + 43 nuovi) |
+| `pytest` domain | 147 passed |
+| `pytest` worker (`DRAMATIQ_TESTING=1`) | 15 passed |
+| `pytest` concorrenza **Postgres reale** (`TEST_POSTGRES_URL`) | 9 passed — acquire single-winner (2 thread), unique partial index sotto contention, lease-expiry via `clock_timestamp()`, reconcile concorrente (una volta sola), **lease scade durante l'attesa del lock** (mark + finish, 2 connessioni), CHECK rifiuta righe invalide, `IntegrityError` non-conflict non mascherato, migration up/down/up |
+| Race + contention ripetute | 5 ripetizioni, zero flake |
+| Alembic up/down/up (SQLite) | OK (0001→0010, incl. `drop_column writes_started`) |
+| Alembic `0001→0010` su **Postgres reale**, volume nuovo | OK (+ down→up); introspezione conferma tabella + `writes_started` + 4 `CHECK` + indici |
+| `docker compose config` | OK |
+| Contratto Go / file `contract` | **non toccati** (verificato: zero file Go/contract nel diff) |
+| `npm run build` | **non eseguito** — il web non è toccato da questa PR |
+| Smoke read-only cPanel reale | **NON eseguito** — nessuna credenziale in sessione |
+
+I test di concorrenza girano solo con `TEST_POSTGRES_URL` impostato (compose-smoke), **non** in
+`make api-test` di default — coerente con la convenzione del repo per le proprietà Postgres-only. La
+CI obbligatoria cross-language che li renderebbe automatici è un incremento distinto (roadmap
+Gruppo A #4). Per eseguirli: `make api-test-pg` (o `TEST_POSTGRES_URL=… make api-test`).
+
 ---
 
 ## Debito noto e rischi aperti
@@ -251,16 +315,24 @@ un worktree vecchio produce verde falso: è già successo.
 
 ## Prossimo passo
 
-1. **Credenziali SSH degli endpoint** — prerequisito bloccante: senza, il worker non può generare
-   l'`host.yaml` che il motore richiede a runtime, e il dry-run end-to-end non esiste. Vanno
-   modellate come capability distinta dal token cPanel (ADR: `cpanel_api_access` ≠
-   `ssh_account_access`), cifrate at-rest come il token, con un `known_hosts` deterministico —
-   in un container `~/.ssh/known_hosts` è effimero e il TOFU del motore degrada ad "accetta
-   qualunque chiave al primo run".
-2. **Worker + subprocess**: `pending → queued`, dispatch del solo execution id, workspace privata
-   per run (il bridge **rifiuta** una `--output-dir` già usata, anche su retry), verifica della
-   versione del binario, ingestione incrementale di `execution-event-v1` e del risultato,
-   terminalizzazione atomica, cleanup dei file temporanei.
+Fatti (Gruppo A della roadmap): **credenziali SSH degli endpoint** (PR #112, migration `0009`) e
+**modello attempts/lease/recovery** (questa PR, migration `0010`, [ADR-002](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md)).
+Il fondamento di ownership e recovery esiste; **la piattaforma non è ancora pronta per un dry-run
+end-to-end.**
 
-Il primo apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH su entrambi
-i lati. Finché lo smoke non passa, la capability di apply **non compare nella UI**.
+Prossimi incrementi isolati, in ordine:
+
+1. **Host identity persistence** — pin dell'host key associato a host+porta, invalidato quando le
+   coordinate endpoint cambiano; nessun runtime. In un container `~/.ssh/known_hosts` è effimero e il
+   TOFU del motore degrada ad "accetta qualunque chiave al primo run".
+2. **SSH runtime resolver + workspace builder** — materializzazione fail-closed di chiave/passphrase/
+   password/`known_hosts` con permessi minimi, generazione dell'`host.yaml` senza segreti negli
+   artifact, cleanup deterministico; ancora **nessun subprocess**.
+3. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
+   allowlist di contratto, avvio rifiutato prima del subprocess se incompatibile.
+4. **CI obbligatoria cross-language + migration** — rende automatici i test di concorrenza Postgres
+   (oggi solo compose-smoke via `TEST_POSTGRES_URL`) e i contratti Go↔Python.
+
+Solo dopo questi si implementano dry-run actor, ingestione eventi/risultato e terminalizzazione dal
+subprocess. Il primo apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH
+su entrambi i lati. Finché lo smoke non passa, la capability di apply **non compare nella UI**.
