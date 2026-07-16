@@ -167,23 +167,72 @@ def _validated_host(host: str) -> str:
     return host
 
 
-def known_hosts_line(host: str, port: int, public_key: str) -> str:
-    """One OpenSSH ``known_hosts`` entry, in the engine's own dialect.
+def _known_hosts_address(host: str, port: int) -> str:
+    """The one authority on the address field a ``known_hosts`` record carries.
 
     Mirrors ``golang.org/x/crypto/ssh/knownhosts.Normalize``, which the engine
     applies to what it writes and agrees with on lookup: the port is dropped at
     22 and the host is bracketed otherwise. Getting this wrong does not fail
     loudly — it silently misses the entry and hands the connection back to TOFU.
 
-    ``host`` is validated here, not trusted: it comes from a mutable column with
-    no charset constraint, and a space in it would append a second, attacker-keyed
-    record rather than corrupt the file. ``public_key`` needs no such check — it
-    is the canonical two-token line parse_host_key already proved: the key itself,
-    never the fingerprint, never re-assembled from parts.
+    Every consumer — the emitted line, the collision check, the deduplication —
+    goes through here, so "same address" always means the exact string the file
+    would carry: ``_validated_host`` canonicalizes an IP literal (two textual
+    spellings of one IPv6 address become one literal), and the port keeps two
+    services on one host distinct. No DNS, no aliasing between hostnames.
     """
+    if not 1 <= port <= 65535:
+        raise WorkspaceSecurityError("endpoint port is outside 1-65535")
     bare = _validated_host(host)
-    field_ = bare if port == _STANDARD_SSH_PORT else f"[{bare}]:{port}"
-    return f"{field_} {public_key}"
+    return bare if port == _STANDARD_SSH_PORT else f"[{bare}]:{port}"
+
+
+def known_hosts_line(host: str, port: int, public_key: str) -> str:
+    """One OpenSSH ``known_hosts`` entry, in the engine's own dialect.
+
+    ``host`` is validated (through ``_known_hosts_address``), not trusted: it
+    comes from a mutable column with no charset constraint, and a space in it
+    would append a second, attacker-keyed record rather than corrupt the file.
+    ``public_key`` needs no such check — it is the canonical two-token line
+    parse_host_key already proved: the key itself, never the fingerprint, never
+    re-assembled from parts.
+    """
+    return f"{_known_hosts_address(host, port)} {public_key}"
+
+
+def _planned_known_hosts_entries(
+    source: SshRuntimeSnapshot,
+    destination: SshRuntimeSnapshot | None,
+) -> tuple[str, ...]:
+    """Decide every trust entry before anything exists on disk. Pure.
+
+    At most one trust identity per normalized address: the same address backed
+    by the same canonical key is deduplicated to a single entry; the same
+    address backed by two different keys is refused. Writing both records would
+    not fail — ``knownhosts.checkAddr`` accepts *either* key for the address
+    (proven against the real parser in
+    ``internal/sshx/knownhosts_multikey_test.go``), silently widening one
+    endpoint's allowlist with the other's pin.
+
+    Runs before ``mkdtemp``: an impossible trust configuration must not
+    materialize a private key only to clean it up. The error names the address
+    (administrative), never a key or a fingerprint.
+    """
+    pinned: dict[str, str] = {}
+    entries: list[str] = []
+    snapshots = (source,) if destination is None else (source, destination)
+    for snapshot in snapshots:
+        address = _known_hosts_address(snapshot.host, snapshot.port)
+        key = snapshot.host_key.public_key
+        known = pinned.get(address)
+        if known is None:
+            pinned[address] = key
+            entries.append(f"{address} {key}")
+        elif known != key:
+            raise WorkspaceSecurityError(
+                f"conflicting host keys for the same SSH address: {address}"
+            )
+    return tuple(entries)
 
 
 def _host_block(
@@ -324,6 +373,11 @@ def build_ssh_workspace(
     Builds, and does not start anything. The snapshot's coherence is a fact about
     the moment it was read; the future executor must re-validate before launching.
     """
+    # Plan the trust entries first: pure, and the only step that can prove the
+    # requested trust is impossible (same address, two pins). Failing here means
+    # no directory, no key, no password ever touches the disk.
+    known_hosts_entries = _planned_known_hosts_entries(source, destination)
+
     root_dir = Path(runtime_root) if runtime_root is not None else Path(tempfile.gettempdir())
     _check_runtime_root(root_dir)
 
@@ -351,15 +405,10 @@ def build_ssh_workspace(
         # <root>/.ssh/known_hosts, because the engine derives the path from HOME.
         ssh_dir = root / SSH_DIR_NAME
         ssh_dir.mkdir(mode=0o700)
-        entries = [known_hosts_line(source.host, source.port, source.host_key.public_key)]
-        if destination is not None:
-            entries.append(
-                known_hosts_line(
-                    destination.host, destination.port, destination.host_key.public_key
-                )
-            )
         known_hosts_path = _write_private_file(
-            ssh_dir, KNOWN_HOSTS_NAME, "".join(f"{line}\n" for line in entries)
+            ssh_dir,
+            KNOWN_HOSTS_NAME,
+            "".join(f"{line}\n" for line in known_hosts_entries),
         )
 
         host_config_path = _write_private_file(
