@@ -81,6 +81,38 @@ endpoints = Table(
     Column("last_checked_at", DateTime(timezone=True), nullable=True),
     Column("last_error", Text, nullable=True),
     Column("capabilities", JSON, nullable=True),
+    # SSH runtime columns (Alembic 0009). Read-only here: the worker resolves
+    # them to build a workspace and never writes them back. `ssh_port` is the SSH
+    # port and is distinct from `port` above, which is the cPanel UAPI port.
+    Column("ssh_auth_method", String(16), nullable=False, default="none"),
+    Column("ssh_secret_source", String(8), nullable=True),
+    Column("ssh_username", String(255), nullable=True),
+    Column("ssh_port", Integer, nullable=True),
+    Column("ssh_password_enc", Text, nullable=True),
+    Column("ssh_private_key_enc", Text, nullable=True),
+    Column("ssh_key_passphrase_enc", Text, nullable=True),
+    Column("ssh_password_ref", String(255), nullable=True),
+    Column("ssh_private_key_ref", String(255), nullable=True),
+    Column("ssh_key_passphrase_ref", String(255), nullable=True),
+)
+
+# The host-key pin (Alembic 0011). Read-only: the worker proves a pin, it never
+# writes or repairs one — invalidation belongs to the API, under the same
+# endpoint row lock. Deliberately no composite FK to the endpoint's coordinates
+# (they are mutable); coherence is established by a locked read, not by the
+# schema.
+endpoint_ssh_host_keys = Table(
+    "endpoint_ssh_host_keys",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("endpoint_id", Integer, nullable=False),
+    Column("host", String(255), nullable=False),
+    Column("port", Integer, nullable=False),
+    Column("key_type", String(32), nullable=False),
+    Column("public_key", Text, nullable=False),
+    Column("fingerprint_sha256", String(80), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
 )
 
 inventory_snapshots = Table(
