@@ -60,6 +60,7 @@ __all__ = [
     "SSH_DIR_NAME",
     "SshWorkspace",
     "WorkspaceBuildError",
+    "WorkspaceCleanupError",
     "WorkspaceSecurityError",
     "build_ssh_workspace",
     "known_hosts_line",
@@ -114,6 +115,14 @@ class WorkspaceSecurityError(Exception):
     """
 
 
+class WorkspaceCleanupError(Exception):
+    """The workspace exists but could not be removed: secrets may remain on disk.
+
+    Distinct from "already gone", which is idempotent success. Names the
+    workspace path (administrative) and never any file content.
+    """
+
+
 @dataclass(frozen=True)
 class SshWorkspace:
     """Paths into a built workspace. Carries no secret, by construction.
@@ -134,14 +143,57 @@ class SshWorkspace:
     dest_key_path: Path | None = None
 
     def cleanup(self) -> None:
-        """Remove the whole workspace. Idempotent, and safe to call twice.
+        """Remove the whole workspace. Idempotent when it is already gone.
 
-        ``ignore_errors`` covers the already-gone case (a second call, or a test
-        that removed it). ``shutil.rmtree`` cannot escape the workspace here: the
-        root is a real directory we created ourselves under a verified root, and
-        rmtree does not follow a symlinked *root* (it raises instead).
+        A root that is genuinely absent is success — a second call, or a test
+        that removed it. A root that exists and cannot be removed is
+        :class:`WorkspaceCleanupError`: silence there would strand ``host.yaml``
+        (with a password), a decrypted private key and ``known_hosts`` on disk.
         """
-        shutil.rmtree(self.root, ignore_errors=True)
+        _remove_workspace(self.root)
+
+
+def _remove_workspace(root: Path) -> None:
+    """Remove a workspace root, or say loudly that it is still there.
+
+    Absence — before the call, or discovered mid-removal — is idempotent
+    success, but only when the root is *really* gone at the end. Everything
+    else is :class:`WorkspaceCleanupError`: a root swapped for a symlink is
+    refused without following it (deleting whatever it points at is not
+    cleanup), a filesystem refusal (permissions, a busy mount, I/O) is
+    reported, and an rmtree that returns while the root still exists is a
+    failure, not a success. Never touches the runtime root above.
+
+    Errors carry the administrative path only; ``from None`` cuts the OS
+    exception, whose text ends up in CI's JUnit artifact via pytest.
+    """
+    try:
+        st = os.lstat(root)
+    except FileNotFoundError:
+        return
+    except OSError:
+        raise WorkspaceCleanupError(
+            f"workspace root could not be inspected: {root}"
+        ) from None
+    if stat.S_ISLNK(st.st_mode):
+        raise WorkspaceCleanupError(
+            f"workspace root is now a symlink and was not followed: {root}"
+        )
+    try:
+        shutil.rmtree(root)
+    except FileNotFoundError:
+        # Tolerable only if the root itself is gone (a concurrent removal won
+        # the race). A FileNotFoundError on some inner entry with the root
+        # still present is a real, partial failure.
+        pass
+    except OSError:
+        raise WorkspaceCleanupError(
+            f"workspace could not be removed and may still hold secrets: {root}"
+        ) from None
+    if os.path.lexists(root):
+        raise WorkspaceCleanupError(
+            f"workspace root still exists after removal: {root}"
+        )
 
 
 def _validated_host(host: str) -> str:
@@ -382,7 +434,6 @@ def build_ssh_workspace(
     _check_runtime_root(root_dir)
 
     root = Path(tempfile.mkdtemp(prefix=_WORKSPACE_PREFIX, dir=root_dir))
-    workspace: SshWorkspace | None = None
     try:
         os.chmod(root, 0o700)  # mkdtemp is already 0700; make the invariant explicit
 
@@ -417,7 +468,7 @@ def build_ssh_workspace(
             render_host_config(source, source_key_path, destination, dest_key_path),
         )
 
-        workspace = SshWorkspace(
+        yield SshWorkspace(
             root=root,
             host_config_path=host_config_path,
             known_hosts_path=known_hosts_path,
@@ -428,10 +479,17 @@ def build_ssh_workspace(
             source_key_path=source_key_path,
             dest_key_path=dest_key_path,
         )
-        yield workspace
-    finally:
+    except BaseException as primary:
         # Not "on success": a build that died halfway has already written a key.
-        if workspace is not None:
-            workspace.cleanup()
-        else:
-            shutil.rmtree(root, ignore_errors=True)
+        # The primary error is never replaced — a working cleanup re-raises it
+        # unchanged, and a failing one keeps BOTH observable in a group. Neither
+        # exception carries file content.
+        try:
+            _remove_workspace(root)
+        except WorkspaceCleanupError as cleanup_failure:
+            raise BaseExceptionGroup(
+                "the workspace operation failed and its removal failed too",
+                [primary, cleanup_failure],
+            ) from None
+        raise
+    _remove_workspace(root)
