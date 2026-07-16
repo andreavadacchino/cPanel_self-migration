@@ -379,6 +379,21 @@ Eseguiti da un **venv creato fuori dal worktree**, provenance verificata (`app`/
 | verifiche per mutazione | togliere `.with_for_update()` → i test PG di concorrenza rossi; rimettere il resolve dentro il lock → il test di rilascio rosso |
 | smoke cPanel reale | **non eseguito e non applicabile**: questa PR non apre connessioni |
 
+### Osservazione non bloccante — test concorrente PostgreSQL
+
+- **Test**: `test_endpoints_ssh_host_key_pg.py::test_concurrent_replace_and_delete_never_errors`
+  (introdotto dalla PR #117; **non modificato dalla #118**).
+- **Osservazione** (2026-07-16): una singola failure locale durante un run completo della suite API
+  su Postgres reale.
+- **Ripetizioni isolate**: 5/5 success. **Rerun completo**: success. **CI Linux
+  `platform-postgres`**: success al primo run sullo stesso HEAD.
+- **Ambiente**: locale macOS/Homebrew; il Postgres del progetto (`docker compose`) è esposto sulla
+  **porta 55432**, sulla stessa macchina girano altri servizi Postgres.
+- **Classificazione**: flake locale osservato, non riprodotto in CI; **nessuna modifica speculativa
+  applicata** al test o al codice. Non è dimostrato che il test sia difettoso.
+- **Regola**: se ricorre in CI o diventa riproducibile, aprire un finding dedicato e investigare
+  ordinamento/isolamento/lock **prima** di modificare il test.
+
 ## Prossimo passo
 
 Fatti (Gruppo A della roadmap): **credenziali SSH degli endpoint** (PR #112, migration `0009`),
