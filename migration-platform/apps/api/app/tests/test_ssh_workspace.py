@@ -60,6 +60,7 @@ def _private_key() -> str:
 
 
 _HOST_KEY = _host_key_line()
+_HOST_KEY_2 = _host_key_line()  # a second, distinct pin for collision tests
 _KEY_MATERIAL = _private_key()
 
 
@@ -238,6 +239,118 @@ def test_known_hosts_holds_one_entry_per_configured_host(runtime_root: Path) -> 
         f"server.example.com {_HOST_KEY}",
         f"[dest.example.com]:2222 {_HOST_KEY}",
     ]
+
+
+# --- one trust identity per address -----------------------------------------
+#
+# knownhosts.checkAddr (x/crypto v0.53.0) returns nil on the FIRST line whose
+# address matches and whose key equals the presented one. Two records for the
+# same normalized address with two different keys therefore authorize EITHER
+# key — the file's trust becomes the union of the pins, which silently widens
+# one endpoint's allowlist with the other's key. Proven against the real parser
+# in internal/sshx/knownhosts_multikey_test.go. The builder must refuse that
+# configuration before anything touches the disk.
+
+
+def test_two_pins_for_the_same_address_are_refused(runtime_root: Path) -> None:
+    """source and destination claim the same address with different keys."""
+    dest = _snapshot(endpoint_id=8, host_key=parse_host_key(_HOST_KEY_2))
+
+    with pytest.raises(WorkspaceSecurityError) as excinfo:
+        with build_ssh_workspace(_snapshot(), destination=dest, runtime_root=runtime_root):
+            pass
+
+    assert list(runtime_root.iterdir()) == []
+    # The error names the address (administrative), never key material.
+    text = str(excinfo.value)
+    assert _HOST_KEY.split()[1] not in text
+    assert _HOST_KEY_2.split()[1] not in text
+    assert "SHA256:" not in text
+
+
+def test_the_same_address_with_the_same_key_is_written_once(
+    runtime_root: Path,
+) -> None:
+    """Same coordinates, same canonical key: one deduplicated entry."""
+    dest = _snapshot(endpoint_id=8)
+
+    with build_ssh_workspace(
+        _snapshot(), destination=dest, runtime_root=runtime_root
+    ) as ws:
+        lines = ws.known_hosts_path.read_text().splitlines()
+
+    assert lines == [f"server.example.com {_HOST_KEY}"]
+
+
+def test_the_same_host_on_two_ports_is_two_distinct_addresses(
+    runtime_root: Path,
+) -> None:
+    """The OpenSSH address includes the port: no collision across ports."""
+    dest = _snapshot(endpoint_id=8, port=2222, host_key=parse_host_key(_HOST_KEY_2))
+
+    with build_ssh_workspace(
+        _snapshot(), destination=dest, runtime_root=runtime_root
+    ) as ws:
+        lines = ws.known_hosts_path.read_text().splitlines()
+
+    assert lines == [
+        f"server.example.com {_HOST_KEY}",
+        f"[server.example.com]:2222 {_HOST_KEY_2}",
+    ]
+
+
+def test_equivalent_ipv6_texts_with_different_keys_are_refused(
+    runtime_root: Path,
+) -> None:
+    """_validated_host canonicalizes both forms to the same literal, and the
+    collision check must compare that literal — not the row's original text."""
+    src = _snapshot(host="2001:0db8:0:0:0:0:0:1")
+    dest = _snapshot(
+        endpoint_id=8, host="2001:db8::1", host_key=parse_host_key(_HOST_KEY_2)
+    )
+
+    with pytest.raises(WorkspaceSecurityError):
+        with build_ssh_workspace(src, destination=dest, runtime_root=runtime_root):
+            pass
+
+    assert list(runtime_root.iterdir()) == []
+
+
+def test_equivalent_ipv6_texts_with_the_same_key_dedup(runtime_root: Path) -> None:
+    src = _snapshot(host="2001:0db8:0:0:0:0:0:1")
+    dest = _snapshot(endpoint_id=8, host="2001:db8::1")
+
+    with build_ssh_workspace(src, destination=dest, runtime_root=runtime_root) as ws:
+        lines = ws.known_hosts_path.read_text().splitlines()
+
+    assert lines == [f"2001:db8::1 {_HOST_KEY}"]
+
+
+def test_a_collision_is_detected_before_any_write(
+    runtime_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An impossible trust configuration must not materialize a private key and
+    then clean it up: detection happens before mkdtemp, so nothing is created."""
+    import adapters.ssh_workspace as mod
+
+    calls: list[str] = []
+    real_mkdtemp = mod.tempfile.mkdtemp
+
+    def spy(*args: object, **kwargs: object) -> str:
+        calls.append("mkdtemp")
+        return real_mkdtemp(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(mod.tempfile, "mkdtemp", spy)
+    dest = _snapshot(endpoint_id=8, host_key=parse_host_key(_HOST_KEY_2))
+
+    with pytest.raises(WorkspaceSecurityError):
+        with build_ssh_workspace(
+            _key_snapshot(), destination=dest, runtime_root=runtime_root
+        ):
+            pass
+
+    assert calls == []
+    assert list(runtime_root.iterdir()) == []
 
 
 # --- filesystem: the real bits ---------------------------------------------
