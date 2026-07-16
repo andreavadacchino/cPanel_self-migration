@@ -1,7 +1,7 @@
 # Current State — Migration Platform V2
 
 > Documento vivo. Descrive **cosa è vero adesso**, non cosa è pianificato.
-> Aggiornato: 2026-07-15 · `fork/main` = `db8d0c4` · + branch `feat/platform-v2-host-identity-persistence`
+> Aggiornato: 2026-07-16 · `fork/main` = `dd7bb1d` · + branch `feat/platform-v2-ssh-runtime-workspace`
 
 Per la direzione architetturale vincolante vedi [`../../docs/ADR_V2_GO_EXECUTOR.md`](../../docs/ADR_V2_GO_EXECUTOR.md)
 e [`../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md`](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md).
@@ -164,8 +164,12 @@ inviati dal client). Vincoli DB: FK `ON DELETE CASCADE` verso `endpoints`, **uni
 Postgres reale (introspezione + INSERT invalidi rifiutati). Il pin è **invalidato nella stessa
 transazione** quando cambiano `host` o `ssh_port` dell'endpoint (o l'SSH è azzerato a `none`); ruotare
 segreto/sorgente/username a coordinate invariate lo **preserva** (la host key è l'identità del server,
-indipendente da come ci autentichiamo). La `GET` è **fail-closed**: una riga il cui snapshot non
-coincide più con le coordinate correnti dell'endpoint **non** è presentata come identità valida (404).
+indipendente da come ci autentichiamo). La `GET` è **fail-closed** su **entrambe** le metà: una riga
+il cui snapshot non coincide più con le coordinate correnti dell'endpoint, **oppure** che non è
+internamente coerente (chiave non parsabile o non canonica, `key_type` diverso da quello derivato,
+fingerprint non ricalcolabile dalla chiave — `validate_persisted_host_key`), **non** è presentata come
+identità valida (404). Le CHECK del DB sono solo di formato: non provano che la fingerprint derivi
+dalla chiave. La riga incoerente non viene né corretta né cancellata.
 Dettaglio, threat model e matrice di invalidazione in [SSH_HOST_IDENTITY.md](SSH_HOST_IDENTITY.md).
 
 `execution_attempts` (migration `0010`) modella ownership, lease e recovery di **un** tentativo di
@@ -297,7 +301,7 @@ default — coerente con la convenzione del repo per le proprietà Postgres-only
 (`platform-postgres`) li rende automatici: esegue l'intera `app/tests` su PostgreSQL reale. Per
 eseguirli in locale: `make api-test-pg` (ora ogni modulo `*_pg.py`) o `TEST_POSTGRES_URL=… make api-test`.
 
-## Stato dei gate — host identity persistence (2026-07-15, branch `feat/platform-v2-host-identity-persistence`)
+## Stato dei gate — host identity persistence (PR #117, merged in `dd7bb1d`)
 
 Eseguiti da un **venv creato fuori dal worktree**, provenance verificata (`app`/`domain`/`adapters`/
 `worker` tutti dentro questo worktree).
@@ -354,27 +358,51 @@ Eseguiti da un **venv creato fuori dal worktree**, provenance verificata (`app`/
   sia effettivamente presente — **prima** di decifrare o materializzare qualsiasi cosa, senza
   assumere che il DB lo garantisca.
 
+## Stato dei gate — SSH runtime resolver + workspace builder (branch `feat/platform-v2-ssh-runtime-workspace`, base `dd7bb1d`)
+
+| Gate | Esito |
+|---|---|
+| scope | 15 file: `migration-platform/{packages/adapters,apps/worker,apps/api/app/tests}` + `internal/config/*_test.go` e le sue `testdata/` (**test-only**). Zero `cmd/`, zero `internal/` di produzione, zero `apps/web/`, zero `.github/workflows/`, zero `testdata/execution-contract/` |
+| `pytest` API (SQLite) | 626 passed, 0 skipped |
+| `pytest` API su **Postgres reale** (l'intera `app/tests`) | **626 passed, 0 skipped** — `check_pytest_report.py --min-total 300 --pg-min 9 --require-pg-module` → **GATE OK** |
+| `pytest` worker (con `TEST_POSTGRES_URL`) | **46 passed, 0 skipped** — `--min-total 10` → **GATE OK**; include 5 test PostgreSQL di serializzazione (contesa osservata via `pg_stat_activity`, nessuna sleep) |
+| `pytest` domain | 147 passed, 0 skipped — `--min-total 100` → **GATE OK** |
+| import provenance | OK (`app`/`domain`/`adapters`/`worker` risolti dentro il worktree) |
+| `go test ./internal/config/` | ok — il `host.yaml` generato è accettato da `config.Load`, e ogni campo emesso è provato necessario |
+| `go test ./internal/executioncontract/` | ok (corpus condiviso invariato) |
+| `go build ./...` | ok |
+| `go test ./...` | 4 pacchetti rossi (`dbmig`, `maildir`, `migrate`, `webfiles`) — **identici su `fork/main` pulito**, sono i falsi rossi macOS/BSD (coreutils GNU assenti): zero regressioni introdotte. Il gate reale è Linux/CI |
+| Alembic | `upgrade head` → `heads` = **1** (`0011` invariato) → `downgrade -1` → `upgrade head` OK. **Nessuna migration aggiunta** |
+| `npm run build` | ok (57 moduli) — il web non è toccato |
+| `docker compose config` | ok |
+| verifiche per mutazione | togliere `.with_for_update()` → i test PG di concorrenza rossi; rimettere il resolve dentro il lock → il test di rilascio rosso |
+| smoke cPanel reale | **non eseguito e non applicabile**: questa PR non apre connessioni |
+
 ## Prossimo passo
 
 Fatti (Gruppo A della roadmap): **credenziali SSH degli endpoint** (PR #112, migration `0009`),
 **modello attempts/lease/recovery** (PR #114, migration `0010`, [ADR-002](../../docs/ADR_V2_EXECUTION_OWNERSHIP_RECOVERY.md)),
-**CI obbligatoria cross-language + Postgres** (PR #115) e **host identity persistence** (questa PR,
-migration `0011`). Il fondamento di ownership, recovery e trust dell'host esiste; **la piattaforma
-non è ancora pronta per un dry-run end-to-end.**
+**CI obbligatoria cross-language + Postgres** (PR #115), **host identity persistence** (PR #117,
+migration `0011`) e **SSH runtime resolver + workspace builder** (questa PR, **nessuna migration**).
+Il fondamento di ownership, recovery, trust dell'host e materializzazione esiste; **la piattaforma
+non è ancora pronta per un dry-run end-to-end**: nessun subprocess, nessun actor, nessuna connessione
+SSH è mai stata aperta da questo codice.
+
+Fatto in questa PR (dettaglio in [SSH_RUNTIME_WORKSPACE.md](SSH_RUNTIME_WORKSPACE.md)): lettura
+coerente endpoint+pin sotto lock di riga, validazione fail-closed di ogni riga SSH scritta fuori
+dall'API, riuso di `validate_persisted_host_key` come unica autorità crittografica, risoluzione dei
+segreti in memoria (`direct` via Fernet, `ref` solo `env://` con l'allowlist già in produzione), e un
+workspace effimero `0700`/`0600` con `known_hosts` derivato **solo** dal pin e `host.yaml` provato
+contro il parser Go reale. Ancora **nessun subprocess**.
 
 Prossimo incremento isolato:
 
-1. **SSH runtime resolver + workspace builder** — materializzazione fail-closed di chiave/passphrase/
-   password/`known_hosts` con permessi minimi, generazione dell'`host.yaml` senza segreti negli
-   artifact, cleanup deterministico; ancora **nessun subprocess**. Il pin di host identity (questa PR)
-   è la fonte per il `known_hosts` effimero del container: un `known_hosts` costruito dal pin evita che
-   il TOFU del motore degradi ad "accetta qualunque chiave al primo run". **Regola per il runtime**:
-   prima di fidarsi di un pin deve ri-verificare sia le coordinate (`pin.host == endpoint.host`,
-   `pin.port == endpoint.ssh_port`) sia l'**integrità crittografica** (chiave parsabile/canonica, tipo e
-   fingerprint coerenti) invocando lo stesso validatore condiviso `validate_persisted_host_key`
-   dell'adapter — le CHECK del DB sono solo di formato, non provano che la fingerprint derivi dalla chiave.
-2. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
-   allowlist di contratto, avvio rifiutato prima del subprocess se incompatibile.
+1. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
+   allowlist di contratto, avvio rifiutato prima del subprocess se incompatibile. **Regola per
+   l'avvio**: uno snapshot non autorizza l'esecuzione. Immediatamente prima del subprocess il runtime
+   deve rileggere endpoint e pin, confrontare coordinate e anchor (`host`, `port`,
+   `fingerprint_sha256`), rivalidare il pin con lo stesso `validate_persisted_host_key`, e rifiutare
+   un workspace diventato stale.
 
 Solo dopo questi si implementano dry-run actor, ingestione eventi/risultato e terminalizzazione dal
 subprocess. Il primo apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH
