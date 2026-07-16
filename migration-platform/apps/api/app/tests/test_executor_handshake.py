@@ -220,9 +220,13 @@ def test_the_handshake_environment_is_stripped(
     """A worker env can carry resolvable secrets (env:// refs are real
     ``*_CPANEL_*`` variables). None of it may reach the binary."""
     monkeypatch.setenv("SOURCE_CPANEL_SSH_PASSWORD", "env-sentinel-0xBEEF")
-    doc_with_leak = _VALID_DOC.replace('"1.2.3"', '"${SOURCE_CPANEL_SSH_PASSWORD:-clean}"')
+    prefix, suffix = _VALID_DOC.split("1.2.3")
+    body = (
+        'v="${SOURCE_CPANEL_SSH_PASSWORD:-clean}"\n'
+        f"printf '%s' '{prefix}'\"$v\"'{suffix}'"
+    )
     path = tmp_path / "executor"
-    digest = _write_fake_binary(path, f'printf \'%s\' "{doc_with_leak}"')
+    digest = _write_fake_binary(path, body)
     identity = identify_executor_binary(path, expected_sha256=digest)
 
     caps = run_capabilities_handshake(identity)
