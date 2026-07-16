@@ -373,9 +373,20 @@ Prossimo incremento isolato:
    `pin.port == endpoint.ssh_port`) sia l'**integrità crittografica** (chiave parsabile/canonica, tipo e
    fingerprint coerenti) invocando lo stesso validatore condiviso `validate_persisted_host_key`
    dell'adapter — le CHECK del DB sono solo di formato, non provano che la fingerprint derivi dalla chiave.
-2. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
-   allowlist di contratto, avvio rifiutato prima del subprocess se incompatibile.
+2. **Executor packaging + compatibility handshake** — **FATTO in questa PR** (dettaglio in
+   [EXECUTOR_HANDSHAKE.md](EXECUTOR_HANDSHAKE.md)): quarto documento del contratto cross-language
+   `executor-capabilities-v1` (strict a ogni livello, corpus condiviso + golden dell'emitter Go),
+   subcomando `capabilities` del binario (stampa e termina, zero effetti), e la metà piattaforma
+   `adapters/executor_handshake.py` in tre passi fail-closed: identità (binario **preciso** pinnato
+   per SHA-256 sul contenuto, symlink rifiutato), handshake (unico subprocess: argv puro, stdin
+   chiuso, **ambiente spogliato**, timeout, risposta a dimensione limitata) e decisione tipata
+   (versioni di contratto in ogni lista; `strict_host_config` e `known_hosts_via_home` sempre
+   richiesti; password/private_key/encrypted_private_key richiesti per run). Le capability SSH sono
+   fatti distinti, mai un booleano generico (ADR-001). Nessun lancio di migrazioni, nessun actor,
+   nessun dispatch, nessuna migration.
 
 Solo dopo questi si implementano dry-run actor, ingestione eventi/risultato e terminalizzazione dal
-subprocess. Il primo apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH
-su entrambi i lati. Finché lo smoke non passa, la capability di apply **non compare nella UI**.
+subprocess — con la regola: identify → handshake → fresh snapshot → fresh workspace **nella stessa
+sequenza** immediatamente precedente al subprocess; nulla si promuove da un run precedente. Il primo
+apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH su entrambi i lati.
+Finché lo smoke non passa, la capability di apply **non compare nella UI**.
