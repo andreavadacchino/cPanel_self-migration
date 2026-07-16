@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 
 from adapters.credentials import CredentialError, resolve_credential
 from adapters.crypto import SecretDecryptError, SecretKeyError, decrypt_secret
+from adapters.ssh_host_keys import ParsedHostKey
 from adapters.ssh_keys import InvalidPrivateKey, load_private_key_or_raise
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "SOURCE_REF",
     "SshCredentials",
     "SshRuntimeConfigurationError",
+    "SshRuntimeSnapshot",
     "SshSecretResolutionError",
     "resolve_ssh_credentials",
 ]
@@ -84,6 +86,38 @@ class SshCredentials:
     password: str | None = field(default=None, repr=False)
     private_key: str | None = field(default=None, repr=False)
     passphrase: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class SshRuntimeSnapshot:
+    """One endpoint's SSH runtime identity, coherent at the moment it was read.
+
+    Assembled by the loader inside a single locked read, so ``host``/``port`` and
+    ``host_key`` cannot disagree: a concurrent coordinate change either lands
+    before the read (and the pin is already gone) or after it.
+
+    ``host_key`` is a :class:`~adapters.ssh_host_keys.ParsedHostKey` — the object
+    ``validate_persisted_host_key`` returns. Carrying the *proof* rather than the
+    three raw columns is what makes an unvalidated pin unrepresentable here, so
+    the workspace builder can write a ``known_hosts`` without re-deciding trust.
+
+    Not persisted, and no timestamp anchor: ``host``, ``port`` and the key's
+    fingerprint *are* the anchor. The executor that will one day start a
+    subprocess must re-read endpoint + pin and re-run the same validation
+    immediately before launching, and refuse a snapshot that has drifted. This
+    object records a past truth; it authorizes nothing.
+    """
+
+    endpoint_id: int
+    host: str
+    port: int
+    username: str
+    host_key: ParsedHostKey
+    credentials: SshCredentials
+
+    @property
+    def auth_method(self) -> str:
+        return self.credentials.auth_method
 
 
 def _require_absent(name: str, value: str | None) -> None:
