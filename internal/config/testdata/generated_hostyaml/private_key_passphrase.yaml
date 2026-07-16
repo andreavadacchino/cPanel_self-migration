@@ -1,0 +1,7 @@
+src:
+  ip: 203.0.113.10
+  port: 22
+  ssh_user: srcuser
+  ssh_key_path: /run/migration-ssh-fixture/source_key
+  ssh_key_passphrase: not-a-real-passphrase
+  timeout: 30s

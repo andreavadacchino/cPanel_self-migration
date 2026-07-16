@@ -1,0 +1,6 @@
+src:
+  ip: server.example.com
+  port: 2222
+  ssh_user: srcuser
+  ssh_pass: not-a-real-password
+  timeout: 30s
