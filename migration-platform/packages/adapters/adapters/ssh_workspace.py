@@ -41,11 +41,12 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import os
+import re
 import shutil
 import stat
 import tempfile
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -58,6 +59,7 @@ __all__ = [
     "KNOWN_HOSTS_NAME",
     "SSH_DIR_NAME",
     "SshWorkspace",
+    "WorkspaceBuildError",
     "WorkspaceSecurityError",
     "build_ssh_workspace",
     "known_hosts_line",
@@ -74,12 +76,34 @@ DEST_KEY_NAME = "dest_key"
 
 _WORKSPACE_PREFIX = "migration-ssh-"
 
+# A known_hosts record is whitespace-delimited, and knownhosts.parseLine treats
+# everything after the key blob as a comment. So a host carrying a space does not
+# corrupt the file — it silently appends a SECOND, well-formed record whose key is
+# the attacker's, and the real key degrades into that record's comment. Either
+# record then satisfies the lookup, which inverts the whole point of pinning.
+#
+# The public key earns its safety from parse_host_key; the host has no such
+# authority — the API's _clean_host strips scheme/userinfo/path/port but never
+# constrains the charset, so a hostile host reaches here intact. This grammar is
+# that authority: a hostname label set, or an IP literal, and nothing else.
+_HOSTNAME = re.compile(
+    r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\.?$"
+)
+_MAX_HOST = 255
+
 # internal/config applies NO defaults and rejects timeout <= 0, so the field must
 # always be emitted. The value is the engine's dial timeout, not a policy this PR
 # owns; it is a constant until an operator-facing setting genuinely needs it.
 DEFAULT_TIMEOUT = "30s"
 
 _STANDARD_SSH_PORT = 22
+
+
+class WorkspaceBuildError(Exception):
+    """The workspace could not be assembled from the given inputs.
+
+    Names no file content.
+    """
 
 
 class WorkspaceSecurityError(Exception):
@@ -108,7 +132,6 @@ class SshWorkspace:
     fingerprint_sha256: str
     source_key_path: Path | None = None
     dest_key_path: Path | None = None
-    _removed: list[bool] = field(default_factory=lambda: [False], repr=False, compare=False)
 
     def cleanup(self) -> None:
         """Remove the whole workspace. Idempotent, and safe to call twice.
@@ -118,22 +141,47 @@ class SshWorkspace:
         root is a real directory we created ourselves under a verified root, and
         rmtree does not follow a symlinked *root* (it raises instead).
         """
-        self._removed[0] = True
         shutil.rmtree(self.root, ignore_errors=True)
+
+
+def _validated_host(host: str) -> str:
+    """Prove ``host`` is a bare hostname or IP literal, or refuse.
+
+    Fail-closed and deliberately strict: a known_hosts record is
+    whitespace-delimited, so anything looser is an injection primitive (see
+    _HOSTNAME). An IPv6 literal is returned unbracketed, which is the form both
+    Normalize and this module's host.yaml use.
+    """
+    if not host or len(host) > _MAX_HOST:
+        raise WorkspaceSecurityError("endpoint host is empty or too long")
+    try:
+        # Accepts v4 and v6; rejects anything with a space, a slash or a newline.
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    if not _HOSTNAME.match(host):
+        raise WorkspaceSecurityError(
+            "endpoint host is not a bare hostname or IP literal and cannot be "
+            "pinned safely"
+        )
+    return host
 
 
 def known_hosts_line(host: str, port: int, public_key: str) -> str:
     """One OpenSSH ``known_hosts`` entry, in the engine's own dialect.
 
     Mirrors ``golang.org/x/crypto/ssh/knownhosts.Normalize``, which the engine
-    uses on both the write and the lookup side: the port is dropped at 22 and the
-    host is bracketed otherwise. Getting this wrong does not fail loudly — it
-    silently misses the entry and hands the connection back to TOFU.
+    applies to what it writes and agrees with on lookup: the port is dropped at
+    22 and the host is bracketed otherwise. Getting this wrong does not fail
+    loudly — it silently misses the entry and hands the connection back to TOFU.
 
-    ``public_key`` is the canonical ``algorithm base64`` line from the validated
-    pin: the key itself, never the fingerprint, and never re-assembled from parts.
+    ``host`` is validated here, not trusted: it comes from a mutable column with
+    no charset constraint, and a space in it would append a second, attacker-keyed
+    record rather than corrupt the file. ``public_key`` needs no such check — it
+    is the canonical two-token line parse_host_key already proved: the key itself,
+    never the fingerprint, never re-assembled from parts.
     """
-    bare = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    bare = _validated_host(host)
     field_ = bare if port == _STANDARD_SSH_PORT else f"[{bare}]:{port}"
     return f"{field_} {public_key}"
 
@@ -149,7 +197,10 @@ def _host_block(
     and reject it.
     """
     block: dict[str, object] = {
-        "ip": snapshot.host,
+        # The same validated form known_hosts uses: the engine dials
+        # net.JoinHostPort(ip, port) and looks the result up in that file, so any
+        # divergence between the two is a lookup miss, i.e. a silent TOFU.
+        "ip": _validated_host(snapshot.host),
         "port": snapshot.port,
         "ssh_user": snapshot.username,
     }
@@ -158,7 +209,13 @@ def _host_block(
         # The better transport: the material is in its own 0600 file. Absolute,
         # because a relative path would resolve against host.yaml's directory and
         # the engine does no ~ expansion.
-        assert key_path is not None
+        if key_path is None:
+            # Not an assert: this function is public, and under -O an assert would
+            # vanish and emit `ssh_key_path: None` — which the Go parser accepts
+            # as a literal path, deferring the failure to dial time.
+            raise WorkspaceBuildError(
+                "a private-key config needs the path of the materialized key"
+            )
         block["ssh_key_path"] = str(key_path)
         if creds.passphrase:
             block["ssh_key_passphrase"] = creds.passphrase
@@ -201,12 +258,14 @@ def _check_runtime_root(root: Path) -> None:
     if not stat.S_ISDIR(st.st_mode):
         raise WorkspaceSecurityError(f"runtime root is not a directory: {root}")
     mode = stat.S_IMODE(st.st_mode)
-    # World-writable is only acceptable with the sticky bit: that is /tmp's own
-    # 1777, where another user cannot rename or delete our directory. Without it,
-    # anyone could swap the tree under us between creation and write.
-    if mode & stat.S_IWOTH and not mode & stat.S_ISVTX:
+    # Writable by anyone but the owner is only acceptable with the sticky bit:
+    # that is /tmp's own 1777, where another user cannot rename or delete our
+    # directory. Without it, someone could swap the tree under us between
+    # creation and write — and a root replaced by a symlink is followed, and
+    # defeats cleanup, stranding a private key on disk.
+    if mode & (stat.S_IWOTH | stat.S_IWGRP) and not mode & stat.S_ISVTX:
         raise WorkspaceSecurityError(
-            f"runtime root is world-writable without the sticky bit: {root}"
+            f"runtime root is writable beyond its owner without the sticky bit: {root}"
         )
     if not os.access(root, os.W_OK | os.X_OK):
         raise WorkspaceSecurityError(f"runtime root is not writable: {root}")
@@ -218,20 +277,28 @@ def _write_private_file(root: Path, name: str, content: str) -> Path:
     O_EXCL: the file must not already exist — no overwrite of a planted file.
     O_NOFOLLOW: if the name is a symlink, fail instead of writing through it,
     which is what would otherwise put a private key wherever the link points.
-    The mode is passed to ``open`` and then enforced with ``fchmod``, so a
-    permissive umask cannot widen it (open's mode is masked by the umask;
-    fchmod is not).
+
+    The mode is passed to ``open`` and then re-applied with ``fchmod``. Not
+    against a permissive umask — a umask only ever clears bits, so it cannot
+    widen 0600 — but against a *restrictive* one: under ``umask(0o200)`` the
+    open alone yields 0400, and the engine could not write. fchmod restores
+    exactly 0600 either way.
     """
     path = root / name
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
     try:
         os.fchmod(fd, 0o600)
-        with os.fdopen(fd, "w", closefd=True) as handle:
-            handle.write(content)
+        handle = os.fdopen(fd, "w", closefd=True)
     except BaseException:
-        with contextlib.suppress(OSError):
-            os.close(fd)
+        # Still ours: fdopen never took it, or fchmod failed before it ran.
+        os.close(fd)
         raise
+    # From here the file object owns the descriptor. Closing `fd` again — as an
+    # outer handler would — is not harmless: a sibling thread (dramatiq runs
+    # eight) can be handed the same number in between, and we would close its
+    # socket instead, silently.
+    with handle:
+        handle.write(content)
     return path
 
 

@@ -139,20 +139,24 @@ def test_the_loader_serializes_against_a_coordinate_change(pg_engine) -> None:
     """The reader must never observe a new host beside the old pin.
 
     The writer mirrors the API: it locks the endpoint, changes the host and
-    deletes the pin in the same transaction. Whatever the interleaving, the
-    loader either wins the lock first (and sees the old, coherent pair) or waits
-    and then finds no pin at all.
+    deletes the pin in the same transaction. It takes the lock before the reader
+    is allowed to start, so the reader provably waits and then sees the committed
+    world — no pin at all.
     """
     eid = _seed(pg_engine)
     result: dict[str, object] = {}
-    reader_started = threading.Event()
+    lock_held = threading.Event()
 
     def writer() -> None:
         with pg_engine.begin() as conn:
             conn.execute(
                 text("SELECT id FROM endpoints WHERE id = :i FOR UPDATE"), {"i": eid}
             )
-            reader_started.wait(5)
+            # Signal only once the lock is actually held. Signalling from the
+            # reader instead would only mean "the thread started", leaving it free
+            # to win the lock — the writer would then queue behind it and the test
+            # would fail with a message accusing the loader.
+            lock_held.set()
             result["blocked"] = _wait_until_blocked(pg_engine)
             conn.execute(
                 update(db.endpoints).where(db.endpoints.c.id == eid).values(
@@ -166,7 +170,7 @@ def test_the_loader_serializes_against_a_coordinate_change(pg_engine) -> None:
             )
 
     def reader() -> None:
-        reader_started.set()
+        assert lock_held.wait(10), "the writer never took the lock"
         try:
             snap = load_ssh_runtime_snapshot(pg_engine, eid)
             result["snapshot"] = snap
@@ -195,14 +199,18 @@ def test_a_port_change_can_never_leave_the_snapshot_on_a_stale_pin(
 ) -> None:
     eid = _seed(pg_engine)
     result: dict[str, object] = {}
-    reader_started = threading.Event()
+    lock_held = threading.Event()
 
     def writer() -> None:
         with pg_engine.begin() as conn:
             conn.execute(
                 text("SELECT id FROM endpoints WHERE id = :i FOR UPDATE"), {"i": eid}
             )
-            reader_started.wait(5)
+            # Signal only once the lock is actually held. Signalling from the
+            # reader instead would only mean "the thread started", leaving it free
+            # to win the lock — the writer would then queue behind it and the test
+            # would fail with a message accusing the loader.
+            lock_held.set()
             result["blocked"] = _wait_until_blocked(pg_engine)
             conn.execute(
                 update(db.endpoints).where(db.endpoints.c.id == eid).values(ssh_port=2222)
@@ -214,7 +222,7 @@ def test_a_port_change_can_never_leave_the_snapshot_on_a_stale_pin(
             )
 
     def reader() -> None:
-        reader_started.set()
+        assert lock_held.wait(10), "the writer never took the lock"
         try:
             result["snapshot"] = load_ssh_runtime_snapshot(pg_engine, eid)
         except Exception as exc:  # noqa: BLE001
@@ -248,9 +256,47 @@ def test_a_stale_pin_left_behind_by_a_partial_write_is_refused(pg_engine) -> Non
         load_ssh_runtime_snapshot(pg_engine, eid)
 
 
+def test_the_row_lock_is_released_before_the_credential_is_resolved(
+    pg_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Resolving a private key runs bcrypt_pbkdf, whose cost the operator picks
+    (`ssh-keygen -a 1000` is seconds). Holding the endpoint row across it would
+    block the API's own writers on that row for as long as the KDF takes."""
+    eid = _seed(pg_engine)
+    observed: dict[str, bool] = {}
+
+    import worker.ssh_runtime as mod
+
+    real = mod.resolve_ssh_credentials
+
+    def watching(**kwargs):
+        # If the loader still held the row, NOWAIT would raise here.
+        try:
+            with pg_engine.begin() as conn:
+                conn.execute(
+                    text("SELECT id FROM endpoints WHERE id = :i FOR UPDATE NOWAIT"),
+                    {"i": eid},
+                )
+            observed["lock_free"] = True
+        except Exception:  # noqa: BLE001
+            observed["lock_free"] = False
+        return real(**kwargs)
+
+    monkeypatch.setattr(mod, "resolve_ssh_credentials", watching)
+
+    load_ssh_runtime_snapshot(pg_engine, eid)
+
+    assert observed.get("lock_free") is True, (
+        "the endpoint row was still locked while the credential was being resolved"
+    )
+
+
 def test_the_loader_holds_no_lock_after_it_returns(pg_engine) -> None:
     """The workspace is built after the lock is released; a row lock held across
-    a disk write would block the API for the duration of it."""
+    a disk write would block the API for the duration of it.
+
+    NOWAIT turns "still locked" into an immediate error rather than a hang.
+    """
     eid = _seed(pg_engine)
 
     snap = load_ssh_runtime_snapshot(pg_engine, eid)

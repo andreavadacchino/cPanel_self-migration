@@ -129,8 +129,83 @@ def test_known_hosts_handles_ipv6() -> None:
     )
 
 
-def test_known_hosts_accepts_an_already_bracketed_ipv6_literal() -> None:
-    assert known_hosts_line("[2001:db8::1]", 22, _HOST_KEY) == f"2001:db8::1 {_HOST_KEY}"
+@pytest.mark.parametrize(
+    "host",
+    [
+        # The real attack: a known_hosts record is whitespace-delimited and
+        # everything past the blob is a comment, so this appends a SECOND valid
+        # record keyed by the attacker and demotes the real key to a comment.
+        "victim.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAttackerKey",
+        "victim.example.com\nevil.example.com",
+        "host with spaces",
+        "host\ttab",
+        "*",  # a wildcard record would match every host
+        "!negated",
+        "a,b",  # the comma is knownhosts' own address separator
+        "[2001:db8::1]",  # bracketed: host.yaml would emit [[..]]:22 and never dial
+        "",
+        "-leading-dash.example.com",
+        "x" * 256,
+    ],
+)
+def test_a_host_that_cannot_be_pinned_safely_is_refused(host: str) -> None:
+    with pytest.raises(WorkspaceSecurityError):
+        known_hosts_line(host, 22, _HOST_KEY)
+
+
+def test_a_hostile_host_stops_the_whole_build(runtime_root: Path) -> None:
+    hostile = _snapshot(
+        host="victim.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAttackerKey"
+    )
+
+    with pytest.raises(WorkspaceSecurityError):
+        with build_ssh_workspace(hostile, runtime_root=runtime_root):
+            pass
+
+    assert list(runtime_root.iterdir()) == []
+
+
+def test_a_hostile_destination_cannot_poison_the_source_entry(
+    runtime_root: Path,
+) -> None:
+    """One shared known_hosts: a poisoned dest record would apply to the source,
+    which is dialed first."""
+    dest = _snapshot(
+        endpoint_id=8,
+        host="server.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAttackerKey",
+    )
+
+    with pytest.raises(WorkspaceSecurityError):
+        with build_ssh_workspace(
+            _snapshot(), destination=dest, runtime_root=runtime_root
+        ):
+            pass
+
+    assert list(runtime_root.iterdir()) == []
+
+
+def test_known_hosts_never_gains_a_record_the_pin_did_not_authorize(
+    runtime_root: Path,
+) -> None:
+    with build_ssh_workspace(_snapshot(), runtime_root=runtime_root) as ws:
+        lines = ws.known_hosts_path.read_text().splitlines()
+
+    assert len(lines) == 1
+    # Exactly three whitespace-separated tokens: host, algorithm, blob. A fourth
+    # would mean a second record rode in on one of them.
+    assert len(lines[0].split()) == 3
+
+
+def test_the_two_files_agree_on_the_host(runtime_root: Path) -> None:
+    """The engine dials host.yaml's ip and looks that up in known_hosts; any
+    divergence is a lookup miss, i.e. a silent fallback to TOFU."""
+    import yaml as _yaml
+
+    with build_ssh_workspace(_snapshot(host="203.0.113.10"), runtime_root=runtime_root) as ws:
+        doc = _yaml.safe_load(ws.host_config_path.read_text())
+        kh_host = ws.known_hosts_path.read_text().split(" ", 1)[0]
+
+    assert doc["src"]["ip"] == kh_host
 
 
 def test_known_hosts_carries_the_key_not_the_fingerprint() -> None:
@@ -212,7 +287,9 @@ def test_the_workspace_name_is_unpredictable_and_leaks_nothing(
 def test_file_names_are_constant_and_not_derived_from_the_row(
     runtime_root: Path,
 ) -> None:
-    hostile = _snapshot(host="../../etc/pwn", username="../../root")
+    # The host is now refused outright if it is not a bare hostname, so the
+    # traversal attempt rides on the fields that are NOT constrained.
+    hostile = _snapshot(username="../../root")
 
     with build_ssh_workspace(hostile, runtime_root=runtime_root) as ws:
         assert ws.host_config_path.name == HOST_CONFIG_NAME
@@ -222,7 +299,7 @@ def test_file_names_are_constant_and_not_derived_from_the_row(
 
 
 def test_no_file_is_written_outside_the_workspace(runtime_root: Path) -> None:
-    hostile = _snapshot(host="../../etc/pwn", username="../../root")
+    hostile = _snapshot(username="../../root")
 
     with build_ssh_workspace(hostile, runtime_root=runtime_root) as ws:
         produced = {p for p in runtime_root.rglob("*")}

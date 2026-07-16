@@ -20,10 +20,16 @@ Boundary: worker → adapters. The API's ``validate_ssh_host_key_pin`` performs 
 same two steps but takes ORM objects, and the worker never imports the FastAPI
 app; the semantics are mirrored, the crypto authority is shared.
 
-What happens under the lock is a bounded, local read: decrypting Fernet and
-reading a process env var. No network, no filesystem, no secret manager, no
-subprocess. The workspace is built *after* the lock is released — writing files
-while holding a row lock would block the API for the duration of a disk write.
+Under the lock: two SELECTs, the coordinate comparison and the pin's crypto
+proof. Nothing else — no network, no filesystem, no subprocess, and deliberately
+**not** the credential resolution. Resolving a private key runs bcrypt_pbkdf,
+whose cost is chosen by whoever generated the key (``ssh-keygen -a 1000`` is
+seconds, not milliseconds), and holding the endpoint row for that long would
+block the API's own ``set_ssh_host_key``/``update_endpoint``/
+``set_ssh_credentials`` on the same row. The secret columns are copied out under
+the lock and resolved after it: the values are a snapshot either way, and the
+coherence that matters — host/port against the pin — was established while the
+row was held. The workspace is built later still, for the same reason.
 
 This module authorizes nothing. A snapshot records that the pin was coherent when
 read; the executor that will one day start a subprocess must re-read and
@@ -138,23 +144,27 @@ def load_ssh_runtime_snapshot(
                 "the pinned SSH host key is not internally coherent"
             ) from None
 
-        credentials = resolve_ssh_credentials(
-            auth_method=endpoint.ssh_auth_method,
-            secret_source=endpoint.ssh_secret_source,
-            password_enc=endpoint.ssh_password_enc,
-            password_ref=endpoint.ssh_password_ref,
-            private_key_enc=endpoint.ssh_private_key_enc,
-            private_key_ref=endpoint.ssh_private_key_ref,
-            key_passphrase_enc=endpoint.ssh_key_passphrase_enc,
-            key_passphrase_ref=endpoint.ssh_key_passphrase_ref,
-            environ=environ,
-        )
+        # Copy the row out; resolve after the lock (see the module docstring).
+        secret_columns = {
+            "auth_method": endpoint.ssh_auth_method,
+            "secret_source": endpoint.ssh_secret_source,
+            "password_enc": endpoint.ssh_password_enc,
+            "password_ref": endpoint.ssh_password_ref,
+            "private_key_enc": endpoint.ssh_private_key_enc,
+            "private_key_ref": endpoint.ssh_private_key_ref,
+            "key_passphrase_enc": endpoint.ssh_key_passphrase_enc,
+            "key_passphrase_ref": endpoint.ssh_key_passphrase_ref,
+        }
+        identity = (endpoint.id, endpoint.host, port, endpoint.ssh_username)
 
-        return SshRuntimeSnapshot(
-            endpoint_id=endpoint.id,
-            host=endpoint.host,
-            port=port,
-            username=endpoint.ssh_username,
-            host_key=host_key,
-            credentials=credentials,
-        )
+    credentials = resolve_ssh_credentials(**secret_columns, environ=environ)
+
+    endpoint_id_, host_, port_, username_ = identity
+    return SshRuntimeSnapshot(
+        endpoint_id=endpoint_id_,
+        host=host_,
+        port=port_,
+        username=username_,
+        host_key=host_key,
+        credentials=credentials,
+    )
