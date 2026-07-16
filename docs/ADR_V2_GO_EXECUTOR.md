@@ -1,11 +1,52 @@
 # ADR-001 — Migration Platform V2 è il control plane, il motore Go è l'executor
 
-- **Stato:** Accettata
+- **Stato:** Accettata, con aggiornamento verificato (2026-07-16)
 - **Data:** 2026-07-10
-- **Contesto di codice:** `fork/main` = `5bd60c4`
+- **Contesto originario:** `fork/main` = `5bd60c4`
+- **Stato verificato successivo:** `fork/main` = `dd7bb1d` + PR #108 (SSH key auth, mergiata
+  `8e778b6`), #117 (host identity persistence), #118 (SSH runtime workspace, draft)
 - **Supersede:** nessuna. È il primo ADR del repository.
 - **Vedi anche:** [`../migration-platform/docs/CURRENT_STATE.md`](../migration-platform/docs/CURRENT_STATE.md),
-  [`JSON_EVENTS.md`](JSON_EVENTS.md)
+  [`JSON_EVENTS.md`](JSON_EVENTS.md),
+  [`../migration-platform/docs/SSH_RUNTIME_WORKSPACE.md`](../migration-platform/docs/SSH_RUNTIME_WORKSPACE.md)
+
+---
+
+## Aggiornamento verificato — 2026-07-16
+
+Questo ADR è stato scritto contro `fork/main = 5bd60c4`. Incrementi successivi hanno reso **stale
+la descrizione tecnica dell'autenticazione SSH** qui sotto, verificato leggendo il codice corrente
+(non questo documento, non la memoria):
+
+- **le decisioni architetturali (D1–D5) restano valide** — nulla in questo aggiornamento le tocca;
+- la sezione «L'autenticazione SSH è solo a password» è **storica, superseded**: la PR #108
+  (mergiata, `8e778b6`) ha implementato l'autenticazione a chiave privata esattamente nel modo che
+  la sezione prescriveva. Oggi `internal/config` impone **`ssh_pass` XOR `ssh_key_path`**
+  (`config.go`, `HostConfig.validate`: entrambi presenti = errore, entrambi assenti = errore) con
+  `ssh_key_passphrase` opzionale e valido solo insieme a `ssh_key_path`. `internal/sshx/auth.go`
+  costruisce l'`Authentication` una volta sola (`AuthFromHost` → `PrivateKeyAuth`/`PasswordAuth`,
+  chiave letta e parsata una volta, `ssh.PublicKeys(signer)`), e **un unico builder**
+  (`newClientConfig`) serve sia il dial iniziale (`retry.go`, `dialWithRetry`) sia il
+  redial/self-heal (`client.go`, che riusa la stessa `Authentication` verbatim): il degrado
+  silenzioso a password su reconnect, paventato sotto, è strutturalmente impossibile e coperto dai
+  test di `internal/sshx` (dial, redial, chiave cifrata, passphrase errata);
+- il timore «il worker deve fornire un `known_hosts` deterministico» è stato **risolto** dalle PR
+  #117 + #118: il pin è persistito e validato crittograficamente, e il workspace effimero
+  materializza `<root>/.ssh/known_hosts` dal pin (il motore lo deriva da `os.UserHomeDir()`,
+  `internal/sshx/pool.go` — `host.yaml` non ha e non può avere un campo `known_hosts`: il parser è
+  strict, `KnownFields(true)`). Nessun `ssh-keyscan`, nessun TOFU per acquisire il pin: resta il
+  fallback del motore, non il percorso della piattaforma. **Distinzione dovuta**: la #118 risolve la
+  *materializzazione* del pin, non la *provenienza affidabile* della host key — la procedura
+  out-of-band con cui l'operatore acquisisce il pin resta responsabilità operativa;
+- la sezione «Dove sta il lavoro vero» è aggiornata in coda: il supporto SSH key **non è più lavoro
+  mancante**;
+- **requisito per il prossimo incremento** (Executor packaging + compatibility handshake): il
+  handshake non deve trattare «SSH» come una capability binaria generica. Deve poter distinguere
+  almeno: password authentication, private-key authentication, supporto a chiave
+  cifrata/passphrase, schema strict di `host.yaml`, `known_hosts` via `HOME`. Il formato definitivo
+  delle capability si definisce lì, non qui.
+
+Il testo originale sotto è preservato come contesto storico e non è stato riscritto.
 
 ---
 
@@ -129,7 +170,10 @@ sconosciuta invece di ignorarla, il che è la proprietà giusta per un contratto
 
 ## Vincoli sul motore Go
 
-### L'autenticazione SSH è solo a password, in due punti duplicati
+### L'autenticazione SSH è solo a password, in due punti duplicati — **[storico: superseded, vedi «Aggiornamento verificato — 2026-07-16»]**
+
+> Vero su `5bd60c4`, falso oggi: la PR #108 ha implementato la chiave privata nel modo qui
+> prescritto (entrambi i call site, un solo builder, test sul redial). Il testo resta come contesto.
 
 `ssh.Password` è l'unico `ssh.AuthMethod` costruito, e lo è **due volte, verbatim**:
 
@@ -152,7 +196,8 @@ con `ErrHostKeyChanged` se la chiave cambia. `InsecureIgnoreHostKey` compare sol
 
 Il pinning esplicito resta desiderabile perché **in un worker containerizzato `~/.ssh/known_hosts`
 è effimero**, e il TOFU degrada a "accetta qualunque chiave al primo run". Il worker deve fornire un
-`known_hosts` deterministico.
+`known_hosts` deterministico. *(Aggiornamento 2026-07-16: fatto — pin persistito da #117, workspace
+effimero che lo materializza da #118; vedi la sezione in testa.)*
 
 Side-effect da conoscere: al primo contatto il motore **crea** `~/.ssh/known_hosts` sull'host dove gira.
 
@@ -220,9 +265,24 @@ un'integrazione appena nata. Si parte da una singola mailbox sacrificabile.
 
 ## Dove sta il lavoro vero
 
-Non nella UI. In: contratto cross-language · supporto SSH key nel motore (due call site duplicati
-più la validazione) · lifecycle dei subprocess · segreti temporanei · idempotenza · semantica di
-retry · test su server reali · cleanup e rollback · compatibilità piattaforma ↔ binario.
+Non nella UI. Elenco originale: contratto cross-language · supporto SSH key nel motore · lifecycle
+dei subprocess · segreti temporanei · idempotenza · semantica di retry · test su server reali ·
+cleanup e rollback · compatibilità piattaforma ↔ binario.
+
+**Aggiornamento verificato 2026-07-16** — fatti da allora: supporto SSH key nel motore (#108),
+contratto `host.yaml` provato cross-language e host identity persistita (#117), resolver dei
+segreti + workspace effimero con `known_hosts` dal pin (#118). Il lavoro residuo reale è:
+
+- packaging deterministico del binario e identificazione versione/digest;
+- compatibility handshake (con le capability distinte richieste in testa) e avvio fail-closed;
+- fresh snapshot + fresh secret resolution + **fresh workspace** immediatamente prima del
+  subprocess (mai riuso di un workspace precedente);
+- lifecycle del subprocess, ingestione eventi e report, cleanup, recovery;
+- smoke reale su account sacrificabile (D2 resta bloccante).
+
+Nulla di questo è implementato oggi: nessun subprocess, nessun actor dry-run, nessun handshake,
+nessuna ingestione eventi, nessuna terminalizzazione delle execution, nessun apply, nessuno smoke.
+Il prossimo incremento resta **Executor packaging + compatibility handshake**.
 
 **Il primo apply reale non parte finché questi elementi non sono coperti da test deterministici e
 da uno smoke su account sacrificabile.**

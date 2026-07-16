@@ -164,7 +164,25 @@ SQLite ignora `FOR UPDATE`: le proprietà concorrenti sono provate **solo** su P
 - **I12** nessun errore/log ripete il materiale ricevuto (la host key è comunque pubblica, ma è input
   non fidato).
 
-## Fuori scope (runtime, PR successiva)
+## Fuori scope (di questo modulo)
 
-Costruzione di `known_hosts` dal pin, `host.yaml`, risoluzione dei ref SSH, decrypt dei segreti,
-subprocess del motore Go, TOFU, apply. Nulla di tutto ciò è raggiungibile da questo codice.
+Nulla di tutto ciò è raggiungibile da questo codice: resta la persistenza e la sua API.
+
+Costruzione di `known_hosts` dal pin, `host.yaml`, risoluzione dei ref SSH e decrypt dei segreti sono
+ora implementati **altrove** — nel resolver e nel workspace builder, che riusano
+`validate_persisted_host_key` esattamente come descritto in I11; vedi
+[SSH_RUNTIME_WORKSPACE.md](SSH_RUNTIME_WORKSPACE.md). Restano fuori dalla piattaforma nel suo
+complesso: subprocess del motore Go, TOFU, acquisizione automatica della host key, apply.
+
+Una nota che il runtime ha reso concreta: il `public_key` è provato da `parse_host_key`, ma
+**`endpoint.host` non ha un'autorità equivalente** — `_clean_host` toglie schema/userinfo/path/porta
+e non vincola il charset. Un record `known_hosts` è delimitato da whitespace, quindi chi materializza
+un `known_hosts` deve validare l'host (hostname bare o literal IP) prima di scriverlo, altrimenti un
+host con uno spazio vi aggiunge un secondo record con una chiave arbitraria. Il builder lo fa.
+
+Seconda nota resa concreta dal runtime: `knownhosts.checkAddr` accetta la chiave presentata se
+**una qualsiasi** riga per quell'address la contiene, quindi due pin diversi sulle stesse coordinate
+scritti nello stesso `known_hosts` autorizzerebbero entrambe le chiavi. Chi materializza il file deve
+imporre **una sola trust identity per address normalizzato**: stessa chiave → deduplica, chiave
+diversa → rifiuto fail-closed prima di scrivere. Il builder lo fa (vedi
+[SSH_RUNTIME_WORKSPACE.md](SSH_RUNTIME_WORKSPACE.md)).
