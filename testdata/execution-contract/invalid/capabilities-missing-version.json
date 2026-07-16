@@ -1,0 +1,5 @@
+{
+  "executor_version": "1.0.0",
+  "contract": {"spec": [1], "event": [1], "result": [1]},
+  "ssh": {"password": true, "private_key": true, "encrypted_private_key": true, "strict_host_config": true, "known_hosts_via_home": true}
+}

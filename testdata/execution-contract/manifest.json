@@ -334,6 +334,81 @@
       "kind": "event",
       "expected_valid": false,
       "expected_error_substring": "input is not valid UTF-8"
+    },
+    {
+      "path": "valid/capabilities-emitted.json",
+      "kind": "capabilities",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/capabilities-password-only.json",
+      "kind": "capabilities",
+      "expected_valid": true
+    },
+    {
+      "path": "valid/capabilities-multi-contract.json",
+      "kind": "capabilities",
+      "expected_valid": true
+    },
+    {
+      "path": "invalid/capabilities-missing-version.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "missing field: format_version"
+    },
+    {
+      "path": "invalid/capabilities-future-version.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "unsupported format_version: 2 (supported: 1)"
+    },
+    {
+      "path": "invalid/capabilities-blank-executor-version.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field executor_version: must not be empty"
+    },
+    {
+      "path": "invalid/capabilities-unknown-field.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "unknown field: packaging"
+    },
+    {
+      "path": "invalid/capabilities-unknown-ssh-field.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "unknown field: ssh.agent_forwarding"
+    },
+    {
+      "path": "invalid/capabilities-ssh-string-bool.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field ssh.password: expected a boolean"
+    },
+    {
+      "path": "invalid/capabilities-missing-ssh-capability.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "missing field: ssh.known_hosts_via_home"
+    },
+    {
+      "path": "invalid/capabilities-missing-contract-kind.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "missing field: contract.result"
+    },
+    {
+      "path": "invalid/capabilities-empty-contract-versions.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field contract.spec: must not be empty"
+    },
+    {
+      "path": "invalid/capabilities-zero-contract-version.json",
+      "kind": "capabilities",
+      "expected_valid": false,
+      "expected_error_substring": "invalid field contract.spec[0]: must be a positive integer, got 0"
     }
   ]
 }
