@@ -362,13 +362,14 @@ Eseguiti da un **venv creato fuori dal worktree**, provenance verificata (`app`/
 
 | Gate | Esito |
 |---|---|
-| scope | 15 file: `migration-platform/{packages/adapters,apps/worker,apps/api/app/tests}` + `internal/config/*_test.go` e le sue `testdata/` (**test-only**). Zero `cmd/`, zero `internal/` di produzione, zero `apps/web/`, zero `.github/workflows/`, zero `testdata/execution-contract/` |
-| `pytest` API (SQLite) | 626 passed, 0 skipped |
-| `pytest` API su **Postgres reale** (l'intera `app/tests`) | **626 passed, 0 skipped** — `check_pytest_report.py --min-total 300 --pg-min 9 --require-pg-module` → **GATE OK** |
+| scope | `migration-platform/{packages/adapters,apps/worker,apps/api/app/tests}` + `internal/config/*_test.go` con le sue `testdata/` e `internal/sshx/knownhosts_multikey_test.go` (**test-only**). Zero `cmd/`, zero `internal/` di produzione, zero `apps/web/`, zero `.github/workflows/`, zero `testdata/execution-contract/` |
+| `pytest` API (SQLite) | 640 passed, 0 skipped (Revisione 2: +14 — collisione trust per address e cleanup osservabile) |
+| `pytest` API su **Postgres reale** (l'intera `app/tests`) | **640 passed, 0 skipped** — `check_pytest_report.py --min-total 300 --pg-min 9 --require-pg-module` → **GATE OK** |
 | `pytest` worker (con `TEST_POSTGRES_URL`) | **46 passed, 0 skipped** — `--min-total 10` → **GATE OK**; include 5 test PostgreSQL di serializzazione (contesa osservata via `pg_stat_activity`, nessuna sleep) |
 | `pytest` domain | 147 passed, 0 skipped — `--min-total 100` → **GATE OK** |
 | import provenance | OK (`app`/`domain`/`adapters`/`worker` risolti dentro il worktree) |
 | `go test ./internal/config/` | ok — il `host.yaml` generato è accettato da `config.Load`, e ogni campo emesso è provato necessario |
+| `go test ./internal/sshx/` | ok — caratterizzazione offline di `knownhosts`: due record stesso-address autorizzano entrambe le chiavi (l'unione che il builder ora rifiuta), una entry singola rifiuta una chiave diversa |
 | `go test ./internal/executioncontract/` | ok (corpus condiviso invariato) |
 | `go build ./...` | ok |
 | `go test ./...` | 4 pacchetti rossi (`dbmig`, `maildir`, `migrate`, `webfiles`) — **identici su `fork/main` pulito**, sono i falsi rossi macOS/BSD (coreutils GNU assenti): zero regressioni introdotte. Il gate reale è Linux/CI |
@@ -399,10 +400,14 @@ Prossimo incremento isolato:
 
 1. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
    allowlist di contratto, avvio rifiutato prima del subprocess se incompatibile. **Regola per
-   l'avvio**: uno snapshot non autorizza l'esecuzione. Immediatamente prima del subprocess il runtime
-   deve rileggere endpoint e pin, confrontare coordinate e anchor (`host`, `port`,
-   `fingerprint_sha256`), rivalidare il pin con lo stesso `validate_persisted_host_key`, e rifiutare
-   un workspace diventato stale.
+   l'avvio**: uno snapshot non autorizza l'esecuzione e **un workspace già costruito non è
+   riutilizzabile**. `host`/`port`/`fingerprint_sha256` sono identity anchor, non launch
+   authorization: non coprono credenziali, ref o valori env, che mutano senza toccarli.
+   Immediatamente prima del subprocess l'executor deve ricaricare source e destination con
+   `load_ssh_runtime_snapshot`, risolvere di nuovo i secret, costruire un **workspace nuovo**
+   (`HOME` puntato lì), completare il handshake e avviare senza conservare un workspace precedente,
+   eliminandolo al termine. Un workspace vecchio non si promuove ad autorizzato confrontando solo
+   gli anchor.
 
 Solo dopo questi si implementano dry-run actor, ingestione eventi/risultato e terminalizzazione dal
 subprocess. Il primo apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH

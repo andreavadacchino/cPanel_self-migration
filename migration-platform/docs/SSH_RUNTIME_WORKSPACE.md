@@ -159,6 +159,34 @@ divergenza non fallisce, **manca la entry e ricade nel TOFU**):
 Una riga per host configurato, newline finale, nessun commento, nessuna seconda
 chiave, nessun hashing del nome host (il motore non lo richiede).
 
+### Una sola trust identity per address normalizzato
+
+`knownhosts.checkAddr` accetta la chiave presentata se **una qualsiasi** riga
+con quell'address la contiene: due record per lo stesso address con due chiavi
+diverse autorizzano **entrambe** le chiavi — il trust del file diventa l'unione
+dei pin, allargando in silenzio l'allowlist di uno dei due endpoint con la
+chiave dell'altro. Provato sul parser reale in
+`internal/sshx/knownhosts_multikey_test.go` (offline, nessuna rete).
+
+Il builder quindi pianifica le entry **prima di qualsiasi scrittura**
+(`_planned_known_hosts_entries`, pura: niente `mkdtemp`, niente file) e applica:
+
+| Configurazione | Esito |
+|---|---|
+| stesso address + stessa chiave canonica | **deduplica**: una sola entry |
+| stesso address + chiave differente | **`WorkspaceSecurityError`**, fail-closed, nessun workspace creato |
+| address differenti (host o porta diversi) | entry distinte |
+
+L'identità confrontata è **esattamente** l'address che finirebbe nel file:
+`_known_hosts_address` è l'unica autorità (la stessa di `known_hosts_line`),
+usa `_validated_host` e la normalizzazione della porta di `Normalize`. Un IPv6
+in due forme testuali equivalenti è **lo stesso address** (canonicalizzato via
+`ipaddress`). Nessun lookup DNS, nessuna risoluzione hostname→IP, nessun
+aliasing: due hostname differenti restano trust identity differenti anche se
+puntassero alla stessa macchina. Una configurazione di trust impossibile non
+materializza segreti per poi ripulirli: viene rifiutata a runtime root ancora
+vuoto.
+
 ### L'host è validato, non creduto
 
 **Un record `known_hosts` è delimitato da whitespace, e `knownhosts.parseLine`
@@ -243,12 +271,34 @@ with build_ssh_workspace(source, destination, runtime_root=…) as ws:
 
 Context manager di proposito: il workspace contiene una chiave privata decifrata
 e una password in chiaro, quindi «mi sono dimenticato il cleanup» non deve essere
-raggiungibile dall'uso ordinario. Il `finally` copre **ogni** uscita: ritorno,
-eccezione del chiamante, fallimento a metà build (che ha **già** scritto una
-chiave). `cleanup()` è idempotente, sopravvive a un workspace già rimosso, e non
-tocca il runtime root. `rmtree` non può uscire dal workspace: la root è una
-directory reale creata da noi sotto un root verificato, e `rmtree` non segue una
-root symlinkata.
+raggiungibile dall'uso ordinario. Ogni uscita — ritorno, eccezione del chiamante,
+fallimento a metà build (che ha **già** scritto una chiave) — passa dallo stesso
+helper di rimozione (`_remove_workspace`), che non tocca mai il runtime root.
+
+«Già assente» e «presente ma non rimovibile» sono **fatti diversi**, e il
+contratto li distingue invece di prometterne la copertura indistinta:
+
+| Stato al cleanup | Esito |
+|---|---|
+| root già assente (seconda chiamata, rimozione concorrente) | successo idempotente |
+| root rimossa integralmente | successo |
+| root diventata un **symlink** | `WorkspaceCleanupError`; il link **non viene seguito**, il target resta intatto |
+| `PermissionError` / mount / I/O | `WorkspaceCleanupError` |
+| `rmtree` termina ma la root esiste ancora | `WorkspaceCleanupError` |
+
+Un fallimento reale della rimozione lascia sul disco `host.yaml` (con la
+password), la chiave privata e `known_hosts`: **non è mai silenzioso**. La
+semantica degli errori del context manager:
+
+- uscita normale + cleanup fallito → `WorkspaceCleanupError`;
+- errore nel body + cleanup riuscito → **l'errore originale, invariato**;
+- errore nel body (o nella build) + cleanup fallito → **entrambi osservabili**
+  in un `ExceptionGroup` (baseline Python ≥ 3.11), mai l'uno al posto
+  dell'altro, mai un successo.
+
+Gli errori nominano solo il path amministrativo del workspace, mai un
+contenuto; la causa OS è tagliata con `from None` (il testo delle eccezioni
+finisce nell'artifact JUnit della CI).
 
 ## Limiti di zeroization
 
@@ -276,12 +326,22 @@ lease o heartbeat. Nessun apply. Nessuna UI. Nessuna migration Alembic (le
 colonne `ssh_*` e la tabella del pin esistono già da `0009`/`0011`: era la
 metadata del worker a esserne cieca).
 
-**Lo snapshot non autorizza l'avvio.** Registra che il pin era coerente *quando è
-stato letto*. L'executor che un giorno avvierà il subprocess dovrà, immediatamente
-prima del lancio: rileggere endpoint e pin, confrontare le coordinate e gli anchor
-(`host`, `port`, `fingerprint_sha256` — già nel DTO; non serve un timestamp),
-rivalidare il pin con lo stesso `validate_persisted_host_key`, e **rifiutare uno
-snapshot diventato stale**. Quella fase non è implementata qui.
+**Lo snapshot non autorizza l'avvio, e un workspace già costruito non è
+riutilizzabile per un lancio futuro.** `host`, `port` e `fingerprint_sha256`
+sono *identity anchor* — la prova di ciò che era vero quando la riga è stata
+letta — non una *launch authorization*: non coprono username, metodo di
+autenticazione, ciphertext, ref, valore env, chiave privata o passphrase, che
+possono tutti cambiare senza toccare gli anchor. Quindi «rileggi endpoint e
+pin, confronta host/porta/fingerprint, riusa il workspace» **non è
+sufficiente**. Il futuro executor dovrà, nella stessa sequenza immediatamente
+precedente al subprocess: (1) ricaricare source e destination con
+`load_ssh_runtime_snapshot`; (2) risolvere di nuovo i secret; (3) costruire un
+**workspace nuovo**; (4) puntare `HOME` al nuovo workspace; (5) completare il
+compatibility handshake; (6) avviare il subprocess senza conservare un
+workspace precedente; (7) eliminare il workspace al termine. Un workspace
+precedente non può essere promosso ad autorizzato attraverso il solo confronto
+delle identity anchor. Quella fase non è implementata qui: nessun subprocess,
+nessuna rete, nessun actor.
 
 ## Prossimo passo
 

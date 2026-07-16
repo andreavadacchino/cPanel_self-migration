@@ -179,3 +179,10 @@ Una nota che il runtime ha reso concreta: il `public_key` è provato da `parse_h
 e non vincola il charset. Un record `known_hosts` è delimitato da whitespace, quindi chi materializza
 un `known_hosts` deve validare l'host (hostname bare o literal IP) prima di scriverlo, altrimenti un
 host con uno spazio vi aggiunge un secondo record con una chiave arbitraria. Il builder lo fa.
+
+Seconda nota resa concreta dal runtime: `knownhosts.checkAddr` accetta la chiave presentata se
+**una qualsiasi** riga per quell'address la contiene, quindi due pin diversi sulle stesse coordinate
+scritti nello stesso `known_hosts` autorizzerebbero entrambe le chiavi. Chi materializza il file deve
+imporre **una sola trust identity per address normalizzato**: stessa chiave → deduplica, chiave
+diversa → rifiuto fail-closed prima di scrivere. Il builder lo fa (vedi
+[SSH_RUNTIME_WORKSPACE.md](SSH_RUNTIME_WORKSPACE.md)).

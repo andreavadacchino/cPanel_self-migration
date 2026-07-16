@@ -101,11 +101,14 @@ class SshRuntimeSnapshot:
     three raw columns is what makes an unvalidated pin unrepresentable here, so
     the workspace builder can write a ``known_hosts`` without re-deciding trust.
 
-    Not persisted, and no timestamp anchor: ``host``, ``port`` and the key's
-    fingerprint *are* the anchor. The executor that will one day start a
-    subprocess must re-read endpoint + pin and re-run the same validation
-    immediately before launching, and refuse a snapshot that has drifted. This
-    object records a past truth; it authorizes nothing.
+    Not persisted. ``host``, ``port`` and the key's fingerprint are *identity
+    anchors* — evidence of what was read — never a launch authorization: they
+    say nothing about username, auth method, ciphertext, ref, env value,
+    private key or passphrase, all of which can change without touching them.
+    The executor that will one day start a subprocess must load fresh
+    snapshots and build a fresh workspace immediately before launching; an
+    older workspace cannot be promoted to authorized by comparing these
+    anchors. This object records a past truth; it authorizes nothing.
     """
 
     endpoint_id: int
