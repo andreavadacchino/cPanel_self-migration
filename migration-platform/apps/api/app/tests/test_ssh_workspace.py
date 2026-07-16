@@ -565,6 +565,153 @@ def test_a_failure_while_building_leaves_nothing_behind(
     assert list(runtime_root.iterdir()) == []
 
 
+# --- cleanup failures are observable ----------------------------------------
+#
+# "Workspace already gone" and "workspace present but not removable" are two
+# different facts: the first is idempotent success, the second leaves host.yaml
+# (with a password), a private key and known_hosts stranded on disk and must be
+# WorkspaceCleanupError — never silence. When the body failed AND the cleanup
+# failed, both errors stay observable (ExceptionGroup, Python >= 3.11 baseline).
+
+
+def test_cleanup_is_idempotent_three_times(runtime_root: Path) -> None:
+    with build_ssh_workspace(_snapshot(), runtime_root=runtime_root) as ws:
+        pass
+
+    ws.cleanup()
+    ws.cleanup()
+    ws.cleanup()
+
+    assert not ws.root.exists()
+
+
+def test_a_real_removal_failure_is_loud_and_names_no_secret(
+    runtime_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import adapters.ssh_workspace as mod
+
+    def denied(path: object, *args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied", str(path))
+
+    snap = _key_snapshot(passphrase=_PASSPHRASE)
+    with build_ssh_workspace(snap, runtime_root=runtime_root) as ws:
+        with monkeypatch.context() as patched:
+            patched.setattr(mod.shutil, "rmtree", denied)
+            with pytest.raises(mod.WorkspaceCleanupError) as excinfo:
+                ws.cleanup()
+
+    text = str(excinfo.value)
+    assert _PASSWORD not in text
+    assert _PASSPHRASE not in text
+    assert _KEY_MATERIAL not in text
+
+
+def test_a_cleanup_failure_on_a_normal_exit_is_raised(
+    runtime_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import adapters.ssh_workspace as mod
+
+    def denied(path: object, *args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied", str(path))
+
+    from adapters.ssh_workspace import WorkspaceCleanupError
+
+    with pytest.raises(WorkspaceCleanupError):
+        with build_ssh_workspace(_snapshot(), runtime_root=runtime_root):
+            monkeypatch.setattr(mod.shutil, "rmtree", denied)
+
+    monkeypatch.undo()
+
+
+def test_a_body_error_with_a_working_cleanup_stays_unchanged(
+    runtime_root: Path,
+) -> None:
+    """The primary error must never be replaced when the cleanup succeeds."""
+    with pytest.raises(RuntimeError, match="boom"):
+        with build_ssh_workspace(_snapshot(), runtime_root=runtime_root):
+            raise RuntimeError("boom")
+
+    assert list(runtime_root.iterdir()) == []
+
+
+def test_a_body_error_and_a_cleanup_failure_are_both_observable(
+    runtime_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import adapters.ssh_workspace as mod
+
+    def denied(path: object, *args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied", str(path))
+
+    with pytest.raises(ExceptionGroup) as excinfo:
+        with build_ssh_workspace(_snapshot(), runtime_root=runtime_root):
+            monkeypatch.setattr(mod.shutil, "rmtree", denied)
+            raise RuntimeError("boom")
+
+    monkeypatch.undo()
+    assert excinfo.group_contains(RuntimeError, match="boom")
+    assert excinfo.group_contains(mod.WorkspaceCleanupError)
+    assert _PASSWORD not in str(excinfo.value)
+
+
+def test_a_build_failure_and_a_cleanup_failure_are_both_observable(
+    runtime_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The write blew up AND the unwind blew up: neither error may vanish."""
+    import adapters.ssh_workspace as mod
+
+    def explode(root: Path, name: str, content: str) -> Path:
+        raise OSError("disk full")
+
+    def denied(path: object, *args: object, **kwargs: object) -> None:
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(mod, "_write_private_file", explode)
+    monkeypatch.setattr(mod.shutil, "rmtree", denied)
+
+    with pytest.raises(ExceptionGroup) as excinfo:
+        with build_ssh_workspace(_key_snapshot(), runtime_root=runtime_root):
+            pass
+
+    monkeypatch.undo()
+    assert excinfo.group_contains(OSError, match="disk full")
+    assert excinfo.group_contains(mod.WorkspaceCleanupError)
+    assert _KEY_MATERIAL not in str(excinfo.value)
+
+
+def test_a_root_replaced_by_a_symlink_is_refused_and_not_followed(
+    runtime_root: Path, tmp_path: Path
+) -> None:
+    """cleanup must not become 'delete whatever the link points at'."""
+    import shutil as _shutil
+
+    from adapters.ssh_workspace import WorkspaceCleanupError
+
+    target = tmp_path / "victim"
+    target.mkdir()
+    canary = target / "canary"
+    canary.write_text("intact")
+
+    with pytest.raises(WorkspaceCleanupError):
+        with build_ssh_workspace(_snapshot(), runtime_root=runtime_root) as ws:
+            _shutil.rmtree(ws.root)
+            os.symlink(target, ws.root)
+
+    assert canary.read_text() == "intact"
+    assert ws.root.is_symlink()  # refused, not deleted: the evidence stays
+
+
+def test_a_removal_that_claims_success_but_leaves_the_root_is_an_error(
+    runtime_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import adapters.ssh_workspace as mod
+
+    with build_ssh_workspace(_snapshot(), runtime_root=runtime_root) as ws:
+        with monkeypatch.context() as patched:
+            patched.setattr(mod.shutil, "rmtree", lambda *a, **k: None)
+            with pytest.raises(mod.WorkspaceCleanupError):
+                ws.cleanup()
+
+
 # --- host.yaml: pinned bytes, Go-parseable shape ---------------------------
 
 
