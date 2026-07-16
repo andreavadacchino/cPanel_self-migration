@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **ID** | `B4e-iii-c-iii-b` |
-| **Status** | `[~]` |
+| **Status** | `[x]` |
 | **Priority** | High |
 | **Size** | M |
 | **Dependencies** | B4e-iii-c-iii-a |
@@ -423,3 +423,21 @@ decides to enable the gated-off recovery sweep; the RAM-only compensation loss i
 closed.** Residual: the automatic recovery sweep is gated OFF (no scheduler wired);
 enabling it and the per-category email live-probe/apply-retry real wiring is the
 remaining operational step before C3 execution.
+
+## R2-c4 Closure Record (2026-07-16)
+
+**R2-c4 (live `add_forwarder` characterization) CLOSED BY DECISION, not by execution.**
+
+- Live harness fully wired at commit `24d0b6c` (LabConnectionGateReceipt, read/write
+  gateway split, operation+pair-specific one-shot contexts, lab_wiring orchestrator;
+  live test skipped by default; 106 live-suite tests green).
+- Disposable lab provisioned on Hetzner Cloud (isolated LAB project, cx23/AlmaLinux 9.7,
+  SMTP egress 25/465/587 blocked and functionally verified, cPanel v136 installed) —
+  **fatal blocker: no cPanel license available** (trial requires a cPanel Store account
+  binding the server IP; operator has none). Lab fully destroyed 2026-07-16; token-files
+  removed; cost ≈ cents.
+- **Decision:** `email_forwarders` stays **`manual_only` permanently**. The capability
+  policy is unchanged and fail-closed. The characterization is resumable in ~30 min if a
+  licensed disposable cPanel ever becomes available.
+- C3 unblocking is therefore NOT gated on R2-c4 anymore: the recovery track is closed in
+  its fail-closed form (R2-c1..c3 done, forwarders manual_only by decision).

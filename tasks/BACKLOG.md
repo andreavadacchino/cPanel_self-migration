@@ -63,8 +63,8 @@
 | `[x]` | `B4e-iii-c-ii` | [Destination gateways and durable backup bindings](B4e-iii-c-ii-email-gateways-backups.md) | High | M | B4e-iii-c-i, B4e-iii-a |
 | `[/]` | `B4e-iii-c-iii` | [Worker email dispatch and terminal semantics](B4e-iii-c-iii-email-worker-dispatch.md) (split → iii-a/iii-b) | High | M | B4e-iii-c-ii |
 | `[x]` | `B4e-iii-c-iii-a` | [Email worker coordinator](B4e-iii-c-iii-a-email-worker-coordinator.md) | High | M | B4e-iii-c-ii |
-| `[~]` | `B4e-iii-c-iii-b` | [Dispatch wiring and atomic terminalization](B4e-iii-c-iii-b-dispatch-wiring-terminalization.md) | High | M | B4e-iii-c-iii-a |
-| `[~]` | `B4e-iii-c-iii-b-R2-c` | EMAIL_COMPENSATION_IS_RAM_ONLY: durable email journal (blocks C3). R2-c1 done (durable tracking); R2-c2 (recovery) + R2-c3 (gating) open — see B4e-iii-c-iii-b doc | High | M | B4e-iii-c-iii-b |
+| `[x]` | `B4e-iii-c-iii-b` | [Dispatch wiring and atomic terminalization](B4e-iii-c-iii-b-dispatch-wiring-terminalization.md) | High | M | B4e-iii-c-iii-a |
+| `[x]` | `B4e-iii-c-iii-b-R2-c` | EMAIL_COMPENSATION_IS_RAM_ONLY closed: R2-c1 (durable journal) + R2-c2 (conservative recovery) + R2-c3 (completion gating) done; R2-c4 live forwarder characterization CLOSED BY DECISION (no cPanel license available; lab provisioned+destroyed 2026-07-16) → `email_forwarders` stays `manual_only` permanently; live harness wired at `24d0b6c`, resumable only with a licensed disposable cPanel | High | M | B4e-iii-c-iii-b |
 | `[ ]` | `B5` | [Real cron FTP list writers](B5-cron-ftp-list-writers.md) | High | L | B1, B2a, B3c-ii |
 | `[ ]` | `B6` | [Real MySQL resource writers](B6-mysql-resource-writers.md) | High | L | B1, B3c-ii |
 | `[ ]` | `B7` | [Additive real DNS writer](B7-additive-dns-writer.md) | High | L | B1, B3c-ii |
