@@ -7,7 +7,9 @@ non scoperta a metà run"), in three deliberately separate steps:
    *precise* binary, pinned by SHA-256 over its content, never "whatever is in
    PATH". The path must be a plain regular executable file: a symlink is
    refused, because the digest pins content but the *path* is what gets
-   executed, and a path someone can re-point is not a pinned binary.
+   executed, and a path someone can re-point is not a pinned binary. The
+   refusal and the hashing share one descriptor (``O_NOFOLLOW``), so the file
+   that is described is the file that is hashed.
 2. **Handshake** (:func:`run_capabilities_handshake`) — the one subprocess this
    module runs: ``<binary> capabilities``, which prints the
    executor-capabilities-v1 self-description and exits. Bounded on every side:
@@ -24,8 +26,11 @@ non scoperta a metà run"), in three deliberately separate steps:
    is no degraded mode.
 
 This module opens no network connection and reads no database. Errors name the
-administrative path, an exit code or a capability — never file content, never
-stderr text (attacker-influenced), never a digest.
+administrative path, an exit code, a capability or a *field* — never a field's
+value, never file content, never the child's stdout/stderr, never a digest.
+(One precise exception, shared with the Go validator: an *unknown* field is
+reported by name, and that name comes from the document. It is a field name,
+not a value, and the document comes from a digest-pinned binary.)
 
 The identity is a statement about the moment it was computed. The future
 executor increment must identify and handshake in the same sequence that
@@ -66,8 +71,17 @@ __all__ = [
 #: The executor's handshake subcommand (cmd/cpanel-self-migration/capabilities_cmd.go).
 HANDSHAKE_ARGUMENT = "capabilities"
 
-#: Upper bound on the handshake answer. The real document is ~400 bytes; the
-#: cap exists so a wrong binary cannot make the worker buffer arbitrary output.
+#: Upper bound on the handshake answer (the real document is ~400 bytes).
+#:
+#: Honest about what it is: a POST-HOC sanity check, not a memory bound.
+#: ``subprocess.run`` buffers the child's stdout to EOF or to the timeout, so a
+#: binary that loops printing would exhaust memory before this fires. What
+#: actually bounds the output is the digest pin — the child is a binary whose
+#: bytes we verified, not arbitrary input. Rolling a bounded read by hand means
+#: re-implementing the timeout, kill and reaping that ``subprocess.run`` already
+#: gets right, which trades a real risk for a likelier one. See
+#: docs/EXECUTOR_HANDSHAKE.md: closing the gap belongs with the increment that
+#: wires this to a dispatch path, if it is worth closing at all.
 MAX_CAPABILITIES_BYTES = 64 * 1024
 
 _HEX_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -122,32 +136,51 @@ def identify_executor_binary(
     expected = expected_sha256.lower()
 
     binary = Path(path)
+    # ONE atomic open answers every question, and the answers all come from the
+    # SAME descriptor. An lstat() that proves "not a symlink" followed by a
+    # separate open() is not a check: between the two syscalls the verified file
+    # can be swapped for a symlink, and the open follows it — defeating exactly
+    # the guarantee the lstat appeared to give. O_NOFOLLOW makes the kernel
+    # refuse the link, and fstat/read then describe and hash the very bytes the
+    # descriptor is pinned to, not whatever the path resolves to a moment later.
     try:
-        st = os.lstat(binary)
+        fd = os.open(binary, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
+        # Deliberately one verdict: distinguishing "absent" from "symlink" would
+        # need a second lookup of the same path, which is the race we just
+        # removed. The operator has the path; the file system has the answer.
         raise ExecutorIdentityError(
-            f"executor binary does not exist or cannot be inspected: {binary}"
+            f"executor binary does not exist, is a symlink, or cannot be opened: {binary}"
         ) from None
-    if stat.S_ISLNK(st.st_mode):
-        raise ExecutorIdentityError(
-            f"executor binary path is a symlink and cannot be pinned: {binary}"
-        )
-    if not stat.S_ISREG(st.st_mode):
-        raise ExecutorIdentityError(
-            f"executor binary path is not a regular file: {binary}"
-        )
-    if not os.access(binary, os.X_OK):
-        raise ExecutorIdentityError(f"executor binary is not executable: {binary}")
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            # A directory opens fine with O_RDONLY; only the mode says so.
+            raise ExecutorIdentityError(
+                f"executor binary path is not a regular file: {binary}"
+            )
+        # The mode from this descriptor, not os.access on the path: an access()
+        # check would re-open the race and describe a file we might not be the
+        # ones about to hash. A file carrying the bits but not for this user
+        # still fails closed — at exec, as ExecutorHandshakeError.
+        if not st.st_mode & 0o111:
+            raise ExecutorIdentityError(f"executor binary is not executable: {binary}")
+        handle = os.fdopen(fd, "rb")
+    except BaseException:
+        # Still ours: fdopen never took the descriptor, or a check refused first.
+        os.close(fd)
+        raise
 
     digest = hashlib.sha256()
-    try:
-        with open(binary, "rb") as handle:
+    # From here the file object owns the descriptor.
+    with handle:
+        try:
             while chunk := handle.read(_HASH_CHUNK):
                 digest.update(chunk)
-    except OSError:
-        raise ExecutorIdentityError(
-            f"executor binary could not be read: {binary}"
-        ) from None
+        except OSError:
+            raise ExecutorIdentityError(
+                f"executor binary could not be read: {binary}"
+            ) from None
 
     actual = digest.hexdigest()
     if not hmac.compare_digest(actual, expected):

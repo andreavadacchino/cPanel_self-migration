@@ -74,12 +74,37 @@ rifiutato anche con digest corretto: il digest pinna il *contenuto*, ma è il
 *path* a essere eseguito, e un path che qualcuno può ri-puntare non è un
 binario pinnato.
 
+Rifiuto e hashing condividono **un solo descrittore** (`os.open` con
+`O_NOFOLLOW`, poi `fstat` e `read` sullo stesso fd). Un `lstat()` che prova
+«non è un symlink» seguito da un `open()` separato non è un controllo: fra le
+due syscall il file appena verificato può essere sostituito da un symlink, e
+l'`open` lo segue — annullando esattamente la garanzia che l'`lstat` sembrava
+dare. Provato per mutazione: togliendo `O_NOFOLLOW` il test del symlink
+diventa rosso.
+
 Il subprocess del handshake è delimitato su ogni lato: argv puro (mai shell),
 stdin chiuso, **ambiente spogliato** (`env={}` — l'ambiente del worker porta
 legittimamente segreti `*_CPANEL_*` per i ref `env://`, e nulla di ciò deve
 raggiungere il figlio), timeout, tetto sulla dimensione della risposta. Gli
-errori nominano il path, un exit code o il campo del contratto violato — mai
-stdout/stderr (testo influenzabile dal binario), mai un digest, mai un valore.
+errori nominano il path, un exit code, una capability o un **campo** — mai il
+*valore* di un campo, mai stdout/stderr del figlio (testo prodotto dal
+binario), mai un digest. Un'unica precisazione, condivisa col validatore Go: un
+campo **sconosciuto** viene riportato per nome, e quel nome viene dal documento
+— è un nome di campo, non un valore, e il documento arriva da un binario
+digest-pinnato.
+
+### Limite dichiarato: il cap non è un limite di memoria
+
+`MAX_CAPABILITIES_BYTES` (64 KiB) è un **sanity check post-hoc**, non un bound
+sulla memoria: `subprocess.run` bufferizza lo stdout del figlio fino a EOF o al
+timeout, quindi un binario che stampasse in loop esaurirebbe la memoria prima
+che il controllo scatti. **Ciò che davvero limita l'output è il pin del
+digest**: il figlio è un binario di cui abbiamo verificato i byte, non input
+arbitrario. Scrivere a mano una lettura limitata significherebbe
+re-implementare timeout, kill e reaping che `subprocess.run` già fa
+correttamente — barattare un rischio reale con uno più probabile. La finestra
+si chiude, se ha senso chiuderla, nell'incremento che collega l'handshake a un
+dispatch reale.
 
 `strict_host_config` e `known_hosts_via_home` sono **sempre** richiesti: il
 workspace scrive `host.yaml` contando sul fatto che un campo sconosciuto sia un
