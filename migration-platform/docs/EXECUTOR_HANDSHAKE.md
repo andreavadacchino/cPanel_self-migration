@@ -5,10 +5,22 @@ prima di lanciarlo (ADR-001: «la compatibilità dell'executor è verificata pri
 dell'avvio, non scoperta a metà run»; aggiornamento verificato 2026-07-16: le
 capability SSH sono fatti distinti, mai un booleano generico).
 
-**Questo incremento non lancia alcuna migrazione.** Nessun actor, nessun
-dispatch, nessuna connessione SSH, nessuna migration Alembic. L'unico
-subprocess che esiste è il handshake stesso: `<binario> capabilities`, che
-stampa un documento e termina.
+La catena di questo incremento, e dove si ferma:
+
+```
+source binary (non fidato)
+→ copia privata verificata
+→ artifact immutabile
+→ bounded capabilities runner
+→ compatibility decision
+→ cleanup
+→ STOP
+```
+
+**Nessun lancio di migrazioni.** Nessun actor, nessun dispatch, nessun comando
+`execute`, nessuna execution/attempt, nessuna ingestione di eventi, nessuna
+connessione SSH, nessuna migration Alembic. L'unico subprocess è l'handshake:
+`<artifact> capabilities`, che stampa un documento e termina.
 
 ## Il documento: `executor-capabilities-v1`
 
@@ -47,89 +59,158 @@ XOR `ssh_pass`/`ssh_key_path` di `internal/config` e da `internal/sshx/auth.go`;
 `pool.go` che deriva il path da `os.UserHomeDir()`. `MarshalCapabilities`
 ri-valida il proprio output: un documento invalido è inemettibile per
 costruzione, e i byte emessi per una versione fissa sono la golden fixture del
-corpus (pattern `generated_hostyaml`) — il validatore Python prova di accettare
-esattamente ciò che il produttore Go emette.
+corpus.
 
 ## Il subcomando: `cpanel-self-migration capabilities`
 
 Stampa il documento su stdout ed esce. Nessun config letto, nessuna scrittura,
 nessuna rete: la piattaforma lo esegue **prima** di aver deciso che il binario
-è lanciabile, quindi il comando non deve avere alcun effetto. Argomenti extra
-= exit 2 (un errore d'uso non deve mai sembrare un handshake riuscito).
-Output deterministico byte-per-byte.
+è lanciabile. Argomenti extra = exit 2. Output deterministico byte-per-byte.
 
-## La metà piattaforma: `adapters/executor_handshake.py`
+## Il deployment path è input, non identità
 
-Tre passi deliberatamente separati, ognuno fail-closed:
+**Il difetto che questo design rimuove.** Hashare un file e poi passare il suo
+*path* a `subprocess` fa **rivalutare il path al kernel**: fra il verdetto e
+l'exec, la directory di deploy può restituire un file diverso. I byte
+verificati e i byte eseguiti diventano due domande diverse. Rifiutare un
+symlink al momento della verifica non tocca il problema: la sostituzione
+avviene *dopo*. Provato per esecuzione, non per argomento — sul codice
+precedente:
 
-| Passo | Funzione | Rifiuta |
-|---|---|---|
-| **Identità** | `identify_executor_binary(path, expected_sha256=…)` | pin non esadecimale, file assente, **symlink**, non-regular, non eseguibile, digest diverso |
-| **Handshake** | `run_capabilities_handshake(identity)` | timeout, exit ≠ 0, risposta > 64 KiB, documento invalido, exec fallita |
-| **Decisione** | `ensure_compatible(caps, require_…)` | versione contratto assente da una lista, `strict_host_config`/`known_hosts_via_home` mancanti, capability SSH richiesta assente |
+```
+assert 'replaced-B' == 'trusted-A'   ← os.replace dopo l'identificazione
+assert 'edited-B'  == 'trusted-A'    ← riscrittura in-place dopo l'identificazione
+```
 
-Il pin è **obbligatorio**: senza `expected_sha256` non esiste «binario
-preciso», solo un lookup in PATH con più passaggi (ADR-001 D1). Un symlink è
-rifiutato anche con digest corretto: il digest pinna il *contenuto*, ma è il
-*path* a essere eseguito, e un path che qualcuno può ri-puntare non è un
-binario pinnato.
+Quindi il source viene trattato come **input**: aperto una volta, copiato in una
+directory privata mentre viene hashato, e solo quella copia viene mai eseguita.
 
-Rifiuto e hashing condividono **un solo descrittore** (`os.open` con
-`O_NOFOLLOW`, poi `fstat` e `read` sullo stesso fd). Un `lstat()` che prova
-«non è un symlink» seguito da un `open()` separato non è un controllo: fra le
-due syscall il file appena verificato può essere sostituito da un symlink, e
-l'`open` lo segue — annullando esattamente la garanzia che l'`lstat` sembrava
-dare. Provato per mutazione: togliendo `O_NOFOLLOW` il test del symlink
-diventa rosso.
+| | |
+|---|---|
+| `ExecutorDeployment` | i tre input espliciti: `source_path`, `expected_sha256`, `runtime_root`. Dati puri: nessuna lettura di variabili d'ambiente qui |
+| `VerifiedExecutorArtifact` | `root`, `executable_path`, `source_path` (solo audit), `sha256`. **Nulla esegue `source_path`** |
+| `prepare_verified_executor(deployment)` | context manager: stage, yield, cleanup su ogni uscita |
 
-Il subprocess del handshake è delimitato su ogni lato: argv puro (mai shell),
-stdin chiuso, **ambiente spogliato** (`env={}` — l'ambiente del worker porta
-legittimamente segreti `*_CPANEL_*` per i ref `env://`, e nulla di ciò deve
-raggiungere il figlio), timeout, tetto sulla dimensione della risposta. Gli
-errori nominano il path, un exit code, una capability o un **campo** — mai il
-*valore* di un campo, mai stdout/stderr del figlio (testo prodotto dal
-binario), mai un digest. Un'unica precisazione, condivisa col validatore Go: un
-campo **sconosciuto** viene riportato per nome, e quel nome viene dal documento
-— è un nome di campo, non un valore, e il documento arriva da un binario
-digest-pinnato.
+### Perché una copia e non l'exec-by-descriptor
 
-### Limite dichiarato: il cap non è un limite di memoria
+`fexecve` / `/proc/self/fd` è **solo Linux** (qui si sviluppa anche su macOS),
+non funziona con lo shebang di uno script, e spingerebbe il lifetime del
+descriptor dentro ogni chiamante futuro (`pass_fds` nell'actor). Una copia
+privata è portabile, e l'artifact è un path reale che l'executor futuro può
+ricevere come qualsiasi altro. Verificato: una copia privata `0500` del binario
+reale **esegue**.
 
-`MAX_CAPABILITIES_BYTES` (64 KiB) è un **sanity check post-hoc**, non un bound
-sulla memoria: `subprocess.run` bufferizza lo stdout del figlio fino a EOF o al
-timeout, quindi un binario che stampasse in loop esaurirebbe la memoria prima
-che il controllo scatti. **Ciò che davvero limita l'output è il pin del
-digest**: il figlio è un binario di cui abbiamo verificato i byte, non input
-arbitrario. Scrivere a mano una lettura limitata significherebbe
-re-implementare timeout, kill e reaping che `subprocess.run` già fa
-correttamente — barattare un rischio reale con uno più probabile. La finestra
-si chiude, se ha senso chiuderla, nell'incremento che collega l'handshake a un
-dispatch reale.
+### Copia e hash in un solo passaggio
 
-`strict_host_config` e `known_hosts_via_home` sono **sempre** richiesti: il
-workspace scrive `host.yaml` contando sul fatto che un campo sconosciuto sia un
-errore duro, e il trust pinnato esiste solo perché il motore legge
-`HOME/.ssh/known_hosts`. Le tre capability di autenticazione sono richieste
-**per run**: è il chiamante a dichiarare cosa servono le credenziali risolte.
+| Passo | Come |
+|---|---|
+| apertura source | `os.open(O_RDONLY \| O_NOFOLLOW)` — una sola volta, mai riaperto |
+| controlli | `fstat` **sullo stesso descriptor** (regular file, bit eseguibili). Mai `os.access` sul path: ri-risolverebbe il path e descriverebbe un file che non stiamo copiando |
+| root | `mkdtemp(prefix="executor-")` in un `runtime_root` verificato, `0700`. Nome dal sistema: non contiene digest, source, versione né altro |
+| destination | `os.open(O_CREAT \| O_EXCL \| O_WRONLY \| O_NOFOLLOW, 0600)` |
+| copia | a chunk, con `sha256.update(chunk)` **e** `write_all(chunk)` nello stesso passaggio |
+| write parziali | `os.write` può scrivere meno di quanto chiesto: un write corto lascerebbe un artifact troncato sotto il digest del contenuto intero. Il loop scrive **ogni** byte |
+| finale | `fsync` → confronto digest constant-time → `fchmod 0500` → chiusura |
 
-## Cosa questo incremento NON fa
+Il source **può cambiare durante la copia**, e non è un problema: il digest
+descrive esattamente i byte finiti nell'artifact, che sono esattamente i byte
+che verranno eseguiti. Mismatch → artifact eliminato, runtime root vuoto.
+Nessuna fiducia in `mtime`.
 
-Niente lancio di migrazioni, niente actor Dramatiq, niente dispatch delle
-execution `pending`, niente ingestione eventi, niente packaging pipeline
-(GoReleaser/ldflags restano com'erano: un build locale riporta `0.0.0-dev`),
-niente wiring di env/setting del worker (il path e il pin del binario entrano
-nella configurazione del worker nell'incremento che lancia il subprocess),
-niente rete, niente migration.
+L'artifact finale è `0500` in una root `0700`: **un artifact scrivibile è un
+artifact che può smettere di essere ciò che è stato verificato**.
 
-**Una verifica è una dichiarazione sul momento in cui è girata.** Il futuro
-executor dovrà identificare il binario, completare il handshake, caricare
-snapshot freschi e costruire un workspace nuovo **nella stessa sequenza**
-immediatamente precedente al subprocess. Né l'identità del binario né il
-workspace si «promuovono» da un run precedente.
+### Cleanup
+
+Semantica **replicata** da quella del workspace #118, non importata: la #118 non
+è ancora canonica su `main`, e copiarne il codice specularmente sarebbe
+speculativo.
+
+| Stato | Esito |
+|---|---|
+| root già assente | successo idempotente |
+| root rimossa | successo |
+| root diventata symlink | `ExecutorArtifactCleanupError`, link **non seguito** |
+| `PermissionError` / I/O / mount | `ExecutorArtifactCleanupError` |
+| `rmtree` termina ma la root esiste | `ExecutorArtifactCleanupError` |
+| errore nel body + cleanup fallito | **entrambi** in un `ExceptionGroup` |
+
+Mai `ignore_errors=True`. Gli errori nominano il path amministrativo, mai un
+digest, mai il contenuto.
+
+## Il bounded runner
+
+`subprocess.run(capture_output=True)` legge fino a EOF e *poi* si può giudicare
+la dimensione: un verdetto su un buffer che esiste già, non un limite di
+memoria. `adapters/bounded_process.py` legge invece **incrementalmente** e
+ferma il figlio nel momento in cui supera il limite.
+
+| Requisito | Come |
+|---|---|
+| lettura incrementale | `Popen` + `selectors` + `os.read`, deadline monotona |
+| buffer massimo | `max_stdout_bytes + 1`: ogni read chiede esattamente quanto è ancora consentito **più un byte**, quello che prova l'overflow (e non viene mai restituito) |
+| overflow / timeout | il processo viene **fermato**, non solo giudicato |
+| process group | `start_new_session=True`, poi SIGTERM → grace → SIGKILL sul **gruppo**: un helper generato dal figlio non può sopravvivere tenendo la pipe |
+| reaping | il figlio è sempre `wait`-ato **prima** che un errore lasci il modulo: un'eccezione con uno zombie dietro è un leak, non un fallimento |
+| stderr | `DEVNULL`. Una pipe non letta bloccherebbe il figlio una volta pieno il buffer del kernel, rendendo il timeout l'unica uscita |
+| env | default vuoto: chi vuole l'ambiente del parent deve dirlo — il verso giusto per un worker che porta segreti |
+| shell / PATH | `shell=False`, e `argv[0]` **deve essere assoluto**: nessun lookup |
+
+Errori tipizzati (`ProcessStartError`, `ProcessTimeoutError`,
+`ProcessOutputLimitError`, `ProcessTerminationError`), programmabili per tipo,
+mai per parsing di stringhe, e **senza output del figlio**.
+
+Provato per mutazione: togliendo il clamp, il flood infinito (`yes`) diventa
+`ProcessTimeoutError` invece di `ProcessOutputLimitError` — il test non è
+basato sul tempo, è basato sul fatto che `yes` non finisce mai.
+
+## L'invariante che l'executor futuro eredita
+
+**L'artifact che supera l'handshake è l'artifact che `execute` deve eseguire.**
+
+```python
+with prepare_verified_executor(deployment) as artifact:
+    capabilities = run_capabilities_handshake(artifact)
+    ensure_compatible(capabilities, ...)
+    # fresh snapshot
+    # fresh SSH workspace
+    # futuro:
+    # run_execute(artifact, ...)   ← lo STESSO artifact, mai il source
+```
+
+Sono **vietati** entrambi questi schemi, e il type boundary è ciò che li rende
+difficili: `run_capabilities_handshake` accetta un `VerifiedExecutorArtifact` e
+nient'altro — niente `Path | str`.
+
+```
+hash del source → handshake sull'artifact → execute del SOURCE PATH   ✗
+handshake sull'artifact A → ricopia → execute dell'artifact B         ✗
+```
+
+Questa PR fornisce l'API e **si ferma prima** di `run_execute`.
+
+## Stato onesto del packaging
+
+| Implementato | Ancora mancante |
+|---|---|
+| capabilities contract (4° documento, corpus 70/70) | build/release pipeline (GoReleaser) |
+| emitter Go + parser Python | versione di release affidabile |
+| immutable verified artifact | digest pubblicato |
+| bounded handshake runner | configurazione worker (path + pin) |
+| compatibility decision | distribuzione nel container |
+| | dry-run dispatch / actor |
+
+**Il packaging operativo NON è completo.** Un build locale dichiara ancora
+`0.0.0-dev` e questo non viene mascherato: nessun ldflag nuovo, nessuna
+release, nessun download automatico. `ExecutorDeployment` rende espliciti i tre
+input, ma **non** legge variabili d'ambiente: i setting del worker arriveranno
+con l'incremento che ha un consumatore reale, cioè quello che lancia il
+subprocess.
 
 ## Prossimo passo
 
 Dry-run actor + lifecycle del subprocess: dispatch di una execution `pending`,
-sequenza identify → handshake → fresh snapshot → fresh workspace → `execute
---spec` → ingestione `events.jsonl`/`report.json` → terminalizzazione →
-cleanup, con recovery provato.
+sequenza `prepare_verified_executor` → handshake → fresh snapshot → fresh
+workspace → `execute --spec` sullo **stesso artifact** → ingestione
+`events.jsonl`/`report.json` → terminalizzazione → cleanup, con recovery
+provato.
