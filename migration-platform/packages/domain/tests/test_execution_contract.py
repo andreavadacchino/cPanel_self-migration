@@ -36,7 +36,9 @@ from domain.execution_contract import (
     _RESULT_REQUIRED,
     _SPEC_SCOPE_KEYS,
     _SPEC_TOP_KEYS,
+    parse_capabilities,
     parse_spec,
+    validate_capabilities_json,
     validate_event_json,
     validate_result_json,
     validate_spec_json,
@@ -56,6 +58,7 @@ VALIDATORS = {
     "spec": validate_spec_json,
     "event": validate_event_json,
     "result": validate_result_json,
+    "capabilities": validate_capabilities_json,
 }
 
 
@@ -116,7 +119,25 @@ def test_fixture_corpus_is_not_trivial() -> None:
     invalid = [f for f in fixtures if not f["expected_valid"]]
     assert len(valid) >= 5
     assert len(invalid) >= 20
-    assert {f["kind"] for f in fixtures} == {"spec", "event", "result"}
+    assert {f["kind"] for f in fixtures} == {"spec", "event", "result", "capabilities"}
+
+
+def test_parse_capabilities_decodes_the_emitter_golden() -> None:
+    """The golden is the exact output of the Go emitter (MarshalCapabilities);
+    parsing it here proves the platform reads what the binary actually says."""
+    raw = (FIXTURE_ROOT / "valid" / "capabilities-emitted.json").read_bytes()
+
+    caps = parse_capabilities(raw)
+
+    assert caps.executor_version == "0.0.0-dev"
+    assert caps.contract.spec == (CURRENT_FORMAT_VERSION,)
+    assert caps.contract.event == (CURRENT_FORMAT_VERSION,)
+    assert caps.contract.result == (CURRENT_FORMAT_VERSION,)
+    assert caps.ssh.password is True
+    assert caps.ssh.private_key is True
+    assert caps.ssh.encrypted_private_key is True
+    assert caps.ssh.strict_host_config is True
+    assert caps.ssh.known_hosts_via_home is True
 
 
 # --- drift guards -----------------------------------------------------------

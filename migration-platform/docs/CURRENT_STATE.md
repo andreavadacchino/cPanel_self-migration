@@ -373,9 +373,26 @@ Prossimo incremento isolato:
    `pin.port == endpoint.ssh_port`) sia l'**integrità crittografica** (chiave parsabile/canonica, tipo e
    fingerprint coerenti) invocando lo stesso validatore condiviso `validate_persisted_host_key`
    dell'adapter — le CHECK del DB sono solo di formato, non provano che la fingerprint derivi dalla chiave.
-2. **Executor packaging + compatibility handshake** — binario Go identificato per digest/versione,
-   allowlist di contratto, avvio rifiutato prima del subprocess se incompatibile.
+2. **Compatibility handshake + verified artifact** — **FATTO in questa PR** (dettaglio in
+   [EXECUTOR_HANDSHAKE.md](EXECUTOR_HANDSHAKE.md)): quarto documento del contratto cross-language
+   `executor-capabilities-v1` (strict a ogni livello, corpus condiviso + golden dell'emitter Go),
+   subcomando `capabilities` del binario (stampa e termina, zero effetti), e la metà piattaforma:
+   `adapters/executor_artifact.py` (il deployment path è **input, non identità** — source aperto una
+   volta `O_NOFOLLOW`, copiato in una root privata `0700` **mentre viene hashato**, artifact `0500`;
+   sostituire, riscrivere o cancellare il source dopo lo staging non cambia ciò che gira),
+   `adapters/bounded_process.py` (stdout limitato **durante la lettura**, process-group kill,
+   reaping garantito) e `adapters/executor_handshake.py` (decisione tipata: versioni di contratto in
+   ogni lista; `strict_host_config` e `known_hosts_via_home` sempre richiesti;
+   password/private_key/encrypted_private_key per run). Le capability SSH sono fatti distinti, mai
+   un booleano generico (ADR-001). **Invariante per il futuro**: l'artifact che supera l'handshake è
+   quello che `execute` dovrà eseguire — mai il source, mai una seconda copia.
+   **Il packaging operativo NON è fatto**: mancano build/release pipeline, versione di release
+   affidabile, digest pubblicato, configurazione worker (path + pin) e distribuzione nel container.
+   Un build locale dichiara `0.0.0-dev`. Nessun lancio di migrazioni, nessun actor, nessun dispatch,
+   nessun `execute`, nessuna migration.
 
 Solo dopo questi si implementano dry-run actor, ingestione eventi/risultato e terminalizzazione dal
-subprocess. Il primo apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH
-su entrambi i lati. Finché lo smoke non passa, la capability di apply **non compare nella UI**.
+subprocess — con la regola: identify → handshake → fresh snapshot → fresh workspace **nella stessa
+sequenza** immediatamente precedente al subprocess; nulla si promuove da un run precedente. Il primo
+apply reale resta **bloccato**: manca un account sacrificabile con accesso SSH su entrambi i lati.
+Finché lo smoke non passa, la capability di apply **non compare nella UI**.

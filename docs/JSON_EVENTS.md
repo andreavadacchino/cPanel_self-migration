@@ -79,6 +79,17 @@ JSON Schema, draft 2020-12, in `schemas/`:
 | input spec | `schemas/execution-spec-v1.json` | platform → executor |
 | `events.jsonl` line | `schemas/execution-event-v1.json` | executor → platform |
 | `report.json` | `schemas/execution-result-v1.json` | executor → platform |
+| capabilities | `schemas/executor-capabilities-v1.json` | executor → platform |
+
+`executor-capabilities-v1` is the compatibility handshake's subject: the output
+of `cpanel-self-migration capabilities`, read by the platform **before** it
+decides the binary may be launched at all (see
+[`../migration-platform/docs/EXECUTOR_HANDSHAKE.md`](../migration-platform/docs/EXECUTOR_HANDSHAKE.md)).
+Unlike the other executor → platform documents it is **strict at every level**:
+its field names legitimately contain sensitive substrings (`password`,
+`private_key`), so the recursive redaction walk cannot apply to it — a closed,
+fully-typed vocabulary is what guarantees no extra field can carry a secret.
+Extending it therefore requires a new `format_version`, never an added key.
 
 The schemas describe **structure**. Cross-field rules — scope coherence, version
 policy, recursive redaction, `finished_at >= started_at`, artifact confinement —

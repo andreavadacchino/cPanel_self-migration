@@ -117,6 +117,12 @@ func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "execute" {
 		os.Exit(runExecuteCmd(os.Args[2:]))
 	}
+	// The `capabilities` command is the executor's half of the compatibility
+	// handshake: print the executor-capabilities-v1 self-description and exit.
+	// Fully offline; never falls through to the flag-driven migration flow.
+	if len(os.Args) >= 2 && os.Args[1] == "capabilities" {
+		os.Exit(runCapabilitiesCmd(os.Args[2:], os.Stdout))
+	}
 
 	var (
 		apply            = flag.Bool("apply", false, "create missing domains + migrate the selected data (default: dry-run)")

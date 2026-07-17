@@ -52,6 +52,8 @@ func validate(kind string, raw []byte) error {
 		return ValidateEventJSON(raw)
 	case "result":
 		return ValidateResultJSON(raw)
+	case "capabilities":
+		return ValidateCapabilitiesJSON(raw)
 	}
 	return nil
 }
@@ -66,7 +68,7 @@ func TestManifestFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read fixture: %v", err)
 			}
-			if f.Kind != "spec" && f.Kind != "event" && f.Kind != "result" {
+			if f.Kind != "spec" && f.Kind != "event" && f.Kind != "result" && f.Kind != "capabilities" {
 				t.Fatalf("unknown fixture kind %q", f.Kind)
 			}
 			err = validate(f.Kind, raw)

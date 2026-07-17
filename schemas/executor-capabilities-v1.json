@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cpanel-self-migration:schema:executor-capabilities:v1",
+  "title": "executor-capabilities-v1",
+  "description": "The executor's self-description, executor -> platform, consumed by the compatibility handshake before any launch (ADR-001, verified update of 2026-07-16). It answers two questions the platform must not guess: which contract document versions this binary speaks, and which SSH capabilities it has — as distinct facts, never one boolean. Unlike execution-event-v1 and execution-result-v1 this document is STRICT at every level: its field names legitimately contain sensitive substrings ('password', 'private_key'), so the recursive redaction walk cannot apply; a closed, fully-typed vocabulary is what guarantees no extra field can carry a secret. Evolving it means a new format_version, never a silently-added key. Semantic validators: internal/executioncontract/capabilities.go and domain/execution_contract.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "executor_version", "contract", "ssh"],
+  "properties": {
+    "format_version": {
+      "description": "Document format version. Absent, zero, and future versions are rejected; there is no silent downgrade.",
+      "type": "integer",
+      "const": 1
+    },
+    "executor_version": {
+      "description": "The binary's build version (internal/version.String()). Never the document format version. Must not be blank.",
+      "type": "string",
+      "minLength": 1
+    },
+    "contract": {
+      "description": "Per document kind, every format_version this binary can produce or consume. The platform launches only when the version it needs appears in every list.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spec", "event", "result"],
+      "properties": {
+        "spec": { "$ref": "#/$defs/versionList" },
+        "event": { "$ref": "#/$defs/versionList" },
+        "result": { "$ref": "#/$defs/versionList" }
+      }
+    },
+    "ssh": {
+      "description": "Distinct authentication and trust facts. A capability is a statement about the engine's code (config.go XOR validation, sshx/auth.go, KnownFields-strict host.yaml, known_hosts derived from HOME), never a value set by hand to unblock a launch.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "password",
+        "private_key",
+        "encrypted_private_key",
+        "strict_host_config",
+        "known_hosts_via_home"
+      ],
+      "properties": {
+        "password": { "type": "boolean" },
+        "private_key": { "type": "boolean" },
+        "encrypted_private_key": { "type": "boolean" },
+        "strict_host_config": { "type": "boolean" },
+        "known_hosts_via_home": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "versionList": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "integer", "minimum": 1 }
+    }
+  }
+}

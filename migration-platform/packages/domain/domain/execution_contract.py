@@ -42,9 +42,14 @@ __all__ = [
     "SENSITIVE_SUBSTRINGS",
     "REDACTED_PLACEHOLDER",
     "ContractError",
+    "ContractVersions",
     "ExecutionSpec",
+    "ExecutorCapabilities",
     "SpecScope",
+    "SshCapabilities",
+    "parse_capabilities",
     "parse_spec",
+    "validate_capabilities_json",
     "validate_spec_json",
     "validate_event_json",
     "validate_result_json",
@@ -214,7 +219,109 @@ class ExecutionSpec(BaseModel):
     scope: SpecScope
 
 
+_CAPABILITIES_TOP_KEYS: Final = frozenset(
+    {"format_version", "executor_version", "contract", "ssh"}
+)
+_CONTRACT_KINDS: Final = ("spec", "event", "result")
+_SSH_CAPABILITY_KEYS: Final = (
+    "password",
+    "private_key",
+    "encrypted_private_key",
+    "strict_host_config",
+    "known_hosts_via_home",
+)
+
+
+class ContractVersions(BaseModel):
+    """Per document kind, every format_version the binary can produce/consume."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    spec: tuple[int, ...]
+    event: tuple[int, ...]
+    result: tuple[int, ...]
+
+
+class SshCapabilities(BaseModel):
+    """The distinct SSH facts the handshake must never collapse into one boolean."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    password: bool
+    private_key: bool
+    encrypted_private_key: bool
+    strict_host_config: bool
+    known_hosts_via_home: bool
+
+
+class ExecutorCapabilities(BaseModel):
+    """The executor's self-description (executor-capabilities-v1).
+
+    STRICT at every level, unlike the other executor -> platform documents: the
+    field names legitimately contain sensitive substrings ("password",
+    "private_key"), so the recursive redaction walk cannot apply here — a
+    closed, fully-typed vocabulary is what guarantees no extra field can carry
+    a secret. Evolving the document means a new ``format_version``.
+
+    ``executor_version`` is the binary's build version. Never the document
+    format version.
+    """
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    format_version: int
+    executor_version: str
+    contract: ContractVersions
+    ssh: SshCapabilities
+
+
 # --- entry points -----------------------------------------------------------
+
+
+def validate_capabilities_json(raw: str | bytes) -> None:
+    """Raise :class:`ContractError` unless *raw* is a valid executor-capabilities-v1."""
+    parse_capabilities(raw)
+
+
+def parse_capabilities(raw: str | bytes) -> ExecutorCapabilities:
+    """Validate and decode an executor-capabilities-v1 document.
+
+    Mirrors ``ParseCapabilities`` in ``internal/executioncontract``; the shared
+    corpus asserts the two emit the same error substrings.
+    """
+    doc = _decode_single_object(raw)
+    _reject_unknown(doc, _CAPABILITIES_TOP_KEYS, "")
+    _check_format_version(doc)
+
+    executor_version = _require_str(doc, "executor_version")
+    if executor_version.strip() == "":
+        raise ContractError("invalid field executor_version: must not be empty")
+
+    if "contract" not in doc:
+        raise ContractError("missing field: contract")
+    contract = doc["contract"]
+    if not isinstance(contract, dict):
+        raise ContractError("invalid field contract: expected an object")
+    _reject_unknown(contract, frozenset(_CONTRACT_KINDS), "contract.")
+    versions = {
+        kind: _require_version_list(contract, f"contract.{kind}", kind)
+        for kind in _CONTRACT_KINDS
+    }
+
+    if "ssh" not in doc:
+        raise ContractError("missing field: ssh")
+    ssh = doc["ssh"]
+    if not isinstance(ssh, dict):
+        raise ContractError("invalid field ssh: expected an object")
+    _reject_unknown(ssh, frozenset(_SSH_CAPABILITY_KEYS), "ssh.")
+    flags = {key: _require_bool(ssh, f"ssh.{key}", key) for key in _SSH_CAPABILITY_KEYS}
+
+    return ExecutorCapabilities(
+        format_version=CURRENT_FORMAT_VERSION,
+        executor_version=executor_version,
+        contract=ContractVersions(**versions),
+        ssh=SshCapabilities(**flags),
+    )
 
 
 def validate_spec_json(raw: str | bytes) -> None:
@@ -531,6 +638,33 @@ def _require_positive_int(doc: dict[str, Any], key: str) -> int:
     if value <= 0:
         raise ContractError(f"invalid field {key}: must be a positive integer, got {value}")
     return value
+
+
+def _require_version_list(doc: dict[str, Any], label: str, key: str) -> tuple[int, ...]:
+    """A non-empty array of positive int64 document versions.
+
+    The same integer discipline as :func:`_require_positive_int`: no bools, no
+    fractions, int64 bounds — Go decodes these into ``[]int64``.
+    """
+    if key not in doc:
+        raise ContractError(f"missing field: {label}")
+    value = doc[key]
+    if not isinstance(value, list):
+        raise ContractError(f"invalid field {label}: expected an array")
+    if not value:
+        raise ContractError(f"invalid field {label}: must not be empty")
+    out: list[int] = []
+    for i, item in enumerate(value):
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise ContractError(f"invalid field {label}[{i}]: expected an integer")
+        if not _INT64_MIN <= item <= _INT64_MAX:
+            raise ContractError(f"invalid field {label}[{i}]: expected an integer")
+        if item <= 0:
+            raise ContractError(
+                f"invalid field {label}[{i}]: must be a positive integer, got {item}"
+            )
+        out.append(item)
+    return tuple(out)
 
 
 def _validate_run_id(run_id: str) -> None:
