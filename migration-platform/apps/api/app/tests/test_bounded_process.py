@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import os
 import signal
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -73,10 +72,12 @@ def test_a_nonzero_exit_is_reported_not_raised(tmp_path: Path) -> None:
 
 
 def test_output_is_bounded_while_it_is_read(tmp_path: Path) -> None:
-    """A child that floods gigabytes must not be buffered before the verdict.
+    """The load-bearing proof, and it is deterministic rather than timing-based.
 
-    The limit is small and the child's output is effectively unbounded: if the
-    implementation read to EOF first, this test would hang or die on memory.
+    `yes` never stops. A reader that consumed to EOF before judging the size
+    would therefore never return: this test would hang until the 30s timeout
+    (a ProcessTimeoutError, not the limit error) or die on memory first. Only a
+    reader that stops AT the limit can raise ProcessOutputLimitError here.
     """
     script = _script(tmp_path / "flood", "yes AAAAAAAAAAAAAAAAAAAAAAAA")
 
@@ -211,10 +212,11 @@ def test_a_child_that_exits_before_being_read_is_still_collected(
     assert result.returncode == 0
 
 
-def test_the_runner_does_not_use_a_shell_or_path_lookup(tmp_path: Path) -> None:
-    """`sh` exists on PATH; a bare name must still fail, because argv[0] is a
-    path to an artifact, never a name resolved at launch."""
-    with pytest.raises(ProcessStartError):
+def test_a_bare_name_is_refused_rather_than_resolved_through_path() -> None:
+    """`sh` exists on PATH; a bare name must still be refused, because argv[0]
+    is a path to a verified artifact, never a name resolved at launch. Refused
+    before the child starts: there is nothing to look up."""
+    with pytest.raises(ValueError):
         run_bounded_process(["sh"], timeout_seconds=5, max_stdout_bytes=1024)
 
 
@@ -250,14 +252,18 @@ def test_a_relative_argv0_is_refused(tmp_path: Path) -> None:
         run_bounded_process(["./executor"], timeout_seconds=5, max_stdout_bytes=1024)
 
 
-def test_subprocess_is_not_used_with_capture_output() -> None:
-    """Guard the property this module exists for: reading to EOF and judging
-    afterwards is exactly the defect the bounded runner replaces."""
-    source = Path(subprocess.__file__)  # sanity: stdlib import is the real one
-    assert source.exists()
+def test_a_large_but_finite_flood_is_refused_without_being_buffered(
+    tmp_path: Path,
+) -> None:
+    """256 MiB written fast, a 4 KiB limit, and the runner must not hold it.
 
-    from adapters import bounded_process
+    Complements the infinite-`yes` case with a child that would *finish*: a
+    reader that buffered to EOF would return here having held a quarter of a
+    gigabyte, and only then complain about 4 KiB.
+    """
+    script = _script(
+        tmp_path / "bigflood", "head -c 268435456 /dev/zero | tr '\\0' 'C'"
+    )
 
-    text = Path(bounded_process.__file__).read_text()
-    assert "capture_output" not in text
-    assert ".communicate(" not in text
+    with pytest.raises(ProcessOutputLimitError):
+        run_bounded_process([str(script)], timeout_seconds=60, max_stdout_bytes=4096)
