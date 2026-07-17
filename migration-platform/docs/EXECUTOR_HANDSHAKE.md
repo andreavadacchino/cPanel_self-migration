@@ -200,12 +200,34 @@ Questa PR fornisce l'API e **si ferma prima** di `run_execute`.
 | compatibility decision | distribuzione nel container |
 | | dry-run dispatch / actor |
 
-**Il packaging operativo NON è completo.** Un build locale dichiara ancora
-`0.0.0-dev` e questo non viene mascherato: nessun ldflag nuovo, nessuna
+**Il packaging operativo NON è completo.** Nessun ldflag nuovo, nessuna
 release, nessun download automatico. `ExecutorDeployment` rende espliciti i tre
 input, ma **non** legge variabili d'ambiente: i setting del worker arriveranno
 con l'incremento che ha un consumatore reale, cioè quello che lancia il
 subprocess.
+
+### `executor_version` non è ancora affidabile — misurato, non supposto
+
+Senza ldflag, `version.String()` (`internal/version/version.go`) ricade su
+`debug.ReadBuildInfo()`, e il risultato **dipende dall'ambiente di build**:
+
+| Ambiente | `executor_version` |
+|---|---|
+| build locale (`Main.Version` = `(devel)`) | `0.0.0-dev` |
+| CI (Go risolve una pseudo-version di modulo) | `0.0.0-20260717110738-21779e0d3d27` |
+
+Osservato davvero: un test che confrontava l'output del binario byte-per-byte
+con la golden passava in locale e **falliva in CI** proprio su questo campo.
+Non è rumore da aggirare: è la dimostrazione che **manca una versione di
+release affidabile**, ed è il primo motivo per cui il packaging resta lavoro
+residuo. Finché non c'è una pipeline che stampiglia la versione,
+`executor_version` è un fatto di build, non un'identità.
+
+Conseguenza per i test: il confronto **byte-per-byte** con la golden vive dove
+la versione è un input controllato — `TestMarshalCapabilitiesMatchesTheSharedGolden`
+(Go) la fissa a `0.0.0-dev`. Il test sul binario reale confronta il documento
+**a meno di `executor_version`**, che è l'unico campo che oggi non può essere
+pinnato.
 
 ## Prossimo passo
 

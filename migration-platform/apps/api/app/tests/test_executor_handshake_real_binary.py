@@ -13,10 +13,10 @@ Go skips rather than lying. It opens no network and runs no migration.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -125,20 +125,28 @@ def test_the_real_binary_answers_from_the_artifact_after_the_source_is_deleted(
     assert capabilities.executor_version  # a real build version, whatever it is
 
 
-def test_the_artifact_emits_exactly_the_shared_golden(
+def test_the_artifact_emits_the_golden_document_apart_from_its_build_version(
     real_binary: tuple[Path, str], runtime_root: Path
 ) -> None:
-    """A local build reports 0.0.0-dev, which is what the golden fixture pins.
+    """Everything the golden pins, except the one field that cannot be pinned.
 
-    This is the cross-language chain closed at the byte level: the corpus
-    golden is not a hand-written guess, it is what this binary prints — and the
-    Python validator accepts it because the Go emitter produced it.
+    ``executor_version`` is **not reproducible across build environments**: with
+    no ldflags, ``version.String()`` falls back to ``debug.ReadBuildInfo()``,
+    which yields ``0.0.0-dev`` from a plain local build but a pseudo-version
+    (``0.0.0-<timestamp>-<commit>``) when Go can read VCS metadata, as it can in
+    CI. That is a real fact about the missing packaging pipeline, not noise to
+    paper over — see EXECUTOR_HANDSHAKE.md.
+
+    So the byte-for-byte golden check belongs where the version is a controlled
+    input: ``TestMarshalCapabilitiesMatchesTheSharedGolden`` (Go) pins the exact
+    bytes for a fixed version string. Here we prove the rest — that the real
+    engine, run from the verified artifact, emits that same document.
     """
     binary, digest = real_binary
     deployment = ExecutorDeployment(
         source_path=binary, expected_sha256=digest, runtime_root=runtime_root
     )
-    golden = (
+    golden_path = (
         _repo_root() / "testdata" / "execution-contract" / "valid" / "capabilities-emitted.json"
     )
 
@@ -151,8 +159,14 @@ def test_the_artifact_emits_exactly_the_shared_golden(
             env={},
         ).stdout
 
-    assert emitted == golden.read_bytes(), (
-        "the engine's capabilities output drifted from the shared corpus golden"
+    produced = json.loads(emitted)
+    golden = json.loads(golden_path.read_text())
+
+    assert produced["executor_version"], "the build version must never be empty"
+    produced.pop("executor_version")
+    golden.pop("executor_version")
+    assert produced == golden, (
+        "the engine's capabilities document drifted from the shared corpus golden"
     )
 
 
