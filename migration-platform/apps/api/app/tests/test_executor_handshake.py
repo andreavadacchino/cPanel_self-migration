@@ -143,6 +143,68 @@ def test_a_malformed_expected_digest_is_refused(tmp_path: Path, bad: str) -> Non
         identify_executor_binary(path, expected_sha256=bad)
 
 
+# --- descriptor-to-exec: what is hashed must be what runs --------------------
+#
+# Hashing a descriptor and then handing the PATH to subprocess makes the kernel
+# resolve that path a SECOND time. Between the two, the deployment directory can
+# hand back a different file — so the bytes that were verified and the bytes that
+# run are not the same artifact. Refusing a symlink at identify time does not
+# touch this: the swap happens after the verdict.
+
+
+def _doc(version: str) -> str:
+    return _VALID_DOC.replace('"1.2.3"', f'"{version}"')
+
+
+def test_replacing_the_source_after_identity_must_not_change_what_runs(
+    tmp_path: Path,
+) -> None:
+    """The whole point of the pin: A was verified, so B must never answer."""
+    source = tmp_path / "executor"
+    digest_a = _write_fake_binary(source, f"printf '%s' '{_doc('trusted-A')}'")
+    replacement = tmp_path / "replacement"
+    _write_fake_binary(replacement, f"printf '%s' '{_doc('replaced-B')}'")
+
+    identity = identify_executor_binary(source, expected_sha256=digest_a)
+    os.replace(replacement, source)  # atomic: same path, different inode
+
+    caps = run_capabilities_handshake(identity)
+
+    assert caps.executor_version == "trusted-A", (
+        "the handshake ran the file the path points at NOW, not the artifact "
+        "whose bytes produced the verified digest"
+    )
+
+
+def test_editing_the_source_in_place_after_identity_must_not_change_what_runs(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "executor"
+    digest_a = _write_fake_binary(source, f"printf '%s' '{_doc('trusted-A')}'")
+
+    identity = identify_executor_binary(source, expected_sha256=digest_a)
+    _write_fake_binary(source, f"printf '%s' '{_doc('edited-B')}'")
+
+    caps = run_capabilities_handshake(identity)
+
+    assert caps.executor_version == "trusted-A"
+
+
+def test_deleting_the_source_after_identity_does_not_break_the_handshake(
+    tmp_path: Path,
+) -> None:
+    """The verified artifact is ours; the deployment path is only input."""
+    source = tmp_path / "executor"
+    digest_a = _write_fake_binary(source, f"printf '%s' '{_doc('trusted-A')}'")
+
+    identity = identify_executor_binary(source, expected_sha256=digest_a)
+    source.unlink()
+
+    caps = run_capabilities_handshake(identity)
+
+    assert caps.executor_version == "trusted-A"
+
+
 # --- handshake: bounded subprocess, stripped environment ---------------------
 
 
