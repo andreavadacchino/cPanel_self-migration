@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.core.errors import register_error_handlers
+from app.core.error_handlers import register_error_handlers
 from app.modules.comparison.router import router as comparison_router
 from app.modules.endpoints.router import (
     endpoints_router,
