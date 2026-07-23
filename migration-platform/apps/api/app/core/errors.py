@@ -1,10 +1,16 @@
-"""Domain-level errors and their HTTP translation."""
+"""Domain-level error types — no web framework, so any caller can use them.
+
+These exceptions describe *what went wrong* in the domain (not found, state
+conflict, unprocessable), independently of how a response is shaped. Keeping them
+free of any ``fastapi`` import means a non-web caller — the Dramatiq worker, a
+script, a test — can raise and catch them without pulling the web stack in.
+
+Their HTTP translation lives in :mod:`app.core.error_handlers`, which the FastAPI
+app wires up at startup. The split is deliberate: importing this module must
+never import ``fastapi``.
+"""
 
 from __future__ import annotations
-
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
 
 
 class NotFoundError(Exception):
@@ -37,29 +43,3 @@ class UnprocessableError(Exception):
     def __init__(self, message: str) -> None:
         self.message = message
         super().__init__(message)
-
-
-def register_error_handlers(app: FastAPI) -> None:
-    @app.exception_handler(RequestValidationError)
-    async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
-        # SECURITY: FastAPI's default handler echoes each error's ``input`` —
-        # for a body-level validator that is the *whole* payload, which could
-        # reflect a plaintext token (auth_type=token) straight back in the
-        # response. Return only type/loc/msg, never the submitted input.
-        safe = [
-            {"type": e.get("type"), "loc": e.get("loc"), "msg": e.get("msg")}
-            for e in exc.errors()
-        ]
-        return JSONResponse(status_code=422, content={"detail": safe})
-
-    @app.exception_handler(NotFoundError)
-    async def _not_found(_: Request, exc: NotFoundError) -> JSONResponse:
-        return JSONResponse(status_code=404, content={"detail": str(exc)})
-
-    @app.exception_handler(ConflictError)
-    async def _conflict(_: Request, exc: ConflictError) -> JSONResponse:
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
-
-    @app.exception_handler(UnprocessableError)
-    async def _unprocessable(_: Request, exc: UnprocessableError) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
